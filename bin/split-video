@@ -1,0 +1,58 @@
+#!/bin/bash
+
+set -o pipefail
+set -e
+
+input_file="$1"
+segments_file="$2"
+output_file="$3"
+start_segment="$4"
+end_segment="$5"
+
+if [[ -z "${input_file}" || -z "${segments_file}" || -z "${output_file}" ]]; then
+    echo "Usage: split-video <input-file> <segments_file> <output-file> <start-segment> <end-segment>" >&2
+    exit 1
+fi
+
+if [[ ! -f "${input_file}" ]]; then
+    echo "File not found: ${input_file}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${segments_file}" ]]; then
+    echo "File not found: ${segments_file}" >&2
+    exit 1
+fi
+
+if [[ "$start_segment" == "-" ]]; then
+    start_time="-"
+else
+    cnt="$(grep "out_${start_segment}" "$segments_file" | wc -l | xargs echo)"
+    if [[ "$cnt" != "1" ]]; then
+        echo "Start segment $start_segment matches $cnt entries" 1>&2
+        exit 2
+    fi
+    start_time="$(grep "out_${start_segment}" "$segments_file" | cut -d ',' -f 2)"
+fi
+
+if [[ "$end_segment" == "-" ]]; then
+    end_time="-"
+else
+    cnt="$(grep "out_${end_segment}" "$segments_file" | wc -l | xargs echo)"
+    if [[ "$cnt" != "1" ]]; then
+        echo "End segment $end_segment matches $cnt entries" 1>&2
+        exit 2
+    fi
+    end_time="$(grep "out_${end_segment}" "$segments_file" | cut -d ',' -f 3)"
+fi
+
+if [[ "${start_time}" == "-" && "${end_time}" == "-" ]]; then
+    echo "Nothing to do"
+    cp "$input_file" "$output_file"
+elif [[ "${end_time}" == "-" ]]; then
+    ffmpeg -ss "${start_time}" -i "${input_file}" -map 0 -c copy "${output_file}"
+elif [[ "${start_time}" == "-" ]]; then
+    ffmpeg -to "${end_time}" -i "${input_file}" -map 0 -c copy "${output_file}"
+else
+    ffmpeg -ss "${start_time}" -to "${end_time}" -i "${input_file}" -map 0 -c copy "${output_file}"
+fi

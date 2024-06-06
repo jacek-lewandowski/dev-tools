@@ -1,0 +1,25 @@
+#!/bin/bash
+
+set -xe
+
+pushd $HOME/dev/apache/cassandra
+
+git fetch jacek-lewandowski
+git fetch apache
+
+update_my_branch() {
+  local branch=$1
+  git checkout $branch
+  git reset --hard apache/$branch
+  git clean -fxd
+  git push -f jacek-lewandowski $branch
+}
+
+update_my_branch trunk
+update_my_branch cassandra-5.0
+update_my_branch cassandra-4.1
+update_my_branch cassandra-4.0
+update_my_branch cassandra-3.11
+update_my_branch cassandra-3.0
+
+popd
