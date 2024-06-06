@@ -1,0 +1,19 @@
+#!/bin/bash
+
+cases_time="$(grep '<testcase ' build/test/output/* | perl -pe 's/.*classname="([^"]+)" name="([^"]+)" time="([^"]+)".*/\3/g' | perl -nle '$sum += $_ } END {print $sum')"
+test_classes="$(ls -1 build/test/output | wc -l | xargs echo)"
+test_cases="$(grep '<testcase ' build/test/output/* | wc -l | xargs echo)"
+failures="$(grep '<failure ' build/test/output/* | wc -l | xargs echo)"
+errors="$(grep '<error ' build/test/output/* | wc -l | xargs echo)"
+logs_size="$(du -hs build/test/logs | cut -f 1)"
+output_size="$(du -hs build/test/output | cut -f 1)"
+
+echo " Test summary"
+echo "---------------------------------"
+echo " Test classes : $test_classes"
+echo " Test cases : $test_cases"
+echo " Failures : $failures"
+echo " Errors : $errors"
+echo " Logs size : $logs_size"
+echo " Output size : $output_size"
+echo " Test cases time  : $cases_time  "

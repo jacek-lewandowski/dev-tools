@@ -1,0 +1,23 @@
+#!/bin/bash
+
+set -x
+set -e
+set -o pipefail
+
+[[ -d .circleci ]]
+
+git remote -v | grep '/cassandra.git'
+
+set +e
+git status --porcelain | grep '.circleci/config.yml'
+status="$?"
+set -e
+
+if [ "$status" == "1" ]; then
+  .circleci/generate.sh "$@"
+elif [ "$status" != "0" ]; then
+  exit 1
+fi
+
+git add .circleci/config.yml
+git commit -m "DO NOT MERGE - CircleCI config"

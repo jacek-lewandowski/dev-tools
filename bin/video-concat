@@ -1,0 +1,29 @@
+#!/bin/bash
+
+set -o pipefail
+set -e
+
+input_files=()
+for ((i=1; i<$#; i++)); do
+    input_files+=("${!i}")
+done
+
+output_file="${!#}"
+
+if [ ${#input_files[@]} -eq 0 ] || [ "${output_file}" == "" ]; then
+    echo "Usage: video-concat <input_file> [<input_file> ...] <output_file>" >&2
+    exit 1
+fi
+
+ts_files=()
+for input_file in "${input_files[@]}"; do
+    ffmpeg -i "${input_file}" -movflags use_metadata_tags -c copy "${input_file}.ts"
+    ts_files+=("${input_file}.ts")
+done
+
+concatenated="$(echo "${ts_files[@]}" | sed 's/ /|/g')"
+ffmpeg -i "concat:${concatenated}" -c copy -movflags use_metadata_tags "${output_file}"
+
+for ts_file in "${ts_files[@]}"; do
+    rm "${ts_file}"
+done

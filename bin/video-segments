@@ -1,0 +1,18 @@
+#!/bin/bash
+
+set -e
+
+input="$1"
+output_dir="${2:-split}"
+
+if [[ -z "$input" || -z "$output_dir" || ! -d "$output_dir" ]]; then
+	echo "Syntax: $0 <input file> [<output_dir>]" 1>&2
+	exit 1
+fi
+
+if [[ "$(ls -1 "$output_dir" | wc -l | xargs echo)" != "0" ]]; then
+	echo "Output dir $output_dir must be empty" 1>&2
+	exit 2
+fi
+
+ffmpeg -i "${input}" -map 0 -codec copy -f segment -segment_list "${output_dir}/segments.csv" "${output_dir}/out_%04d.mp4"

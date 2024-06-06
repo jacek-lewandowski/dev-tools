@@ -1,0 +1,82 @@
+#!/bin/bash
+
+if [ $# -lt 4 ]; then
+  echo "Usage: setup-worktrees <feature_repo> <ticket> <base_repo> <base_branch> [<base_branch> ...]" >&2
+  exit 1
+fi  
+
+set +x
+set +e
+git status > /dev/null
+set -e
+
+if [ $? != 0 ]; then
+	echo "Not a git repository" >&2
+	exit 1;
+fi
+
+set -e
+feature_repo="$1"
+shift
+ticket="$1"
+shift
+base_repo="$1"
+shift
+
+# array of the remaining arguments
+base_branches=("$@")
+
+feature_branches=()
+for branch in "${base_branches[@]}"; do
+  if [ "${branch}" == "trunk" ]; then
+    feature_branches+=("${ticket}")
+  else
+    # extract number dot number suffix from the branch name
+    suffix=$(echo $branch | sed 's/.*\([0-9]\+\.[0-9]\+\)$/\1/')
+    feature_branches+=("${ticket[@]}-${suffix[@]}")
+  fi
+done
+
+if [ "${feature_repo}" == "" ] || [ "${ticket}" == "" ] || [ "${base_repo}" == "" ] || [ ${#feature_branches[@]} == 0 ];  then
+  echo "Usage: setup-worktrees <feature_repo> <ticket> <base_repo> <base_branch> [<base_branch> ...]" >&2
+  exit 1
+fi
+
+existing_worktree="$(git worktree list | grep "${ticket}" | cut -f 1 -d ' ')"
+if [ -n "${existing_worktree}" ]; then
+  echo "Worktrees for ${ticket} already exist:
+${existing_worktree}" >&2
+  exit 1
+fi
+
+echo "Creating worktrees for ${feature_repo}/${feature_branches[@]} basing on ${base_repo}/${base_branches[@]}"
+
+# ask if confirmation and exit if refused
+read -p "Continue? [y/N] " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  exit 1
+fi
+
+# create worktrees
+for i in $(seq 0 $((${#feature_branches[@]} - 1)))
+do
+  feature_branch="${feature_branches[$i]}"
+  base_branch="${base_branches[$i]}"
+  
+  remote_branch="$(git ls-remote --heads ${feature_repo} refs/heads/${feature_branch})"
+  if [ -n "$remote_branch" ]; then
+    git worktree add "../${feature_branch}" -B "${feature_branch}" --track "${feature_repo}/${feature_branch}" --force
+  else
+    git worktree add "../${feature_branch}" -B "${feature_branch}" --force
+  fi
+  pushd "../${feature_branch}"
+  remote_branch="$(git ls-remote "${feature_repo}" "refs/heads/${feature_branch}")"
+  if [ -n "${remote_branch}" ]; then
+    git reset --hard "${feature_repo}/${feature_branch}"
+  else
+    git reset --hard "${base_repo}/${base_branch}"
+  fi
+  ant generate-idea-files
+  popd
+done
