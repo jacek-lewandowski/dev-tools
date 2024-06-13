@@ -8,7 +8,7 @@ os="$(uname | tr '[:upper:]' '[:lower:]')"
 if [[ "$os" == "darwin" ]]; then
 	existing="$(diskutil list | grep CassandraBuildTmp || true)"
 	if [[ -n "$existing" ]]; then
-		diskname="$(hdiutil | grep CassandraBuildTmp | cut -f 1)"
+		diskname="$(diskutil info CassandraBuildTmp | grep "Identifier" | awk '{print $NF}')"
 		diskutil unmount CassandraBuildTmp
 		hdiutil detach "$diskname"
 	fi
@@ -16,7 +16,7 @@ if [[ "$os" == "darwin" ]]; then
 	rm -rf build/test/cassandra
 	mkdir -p build/test/cassandra
 
-	diskutil erasevolume HFS+ CassandraBuildTmp "$(hdiutil attach -nomount ram://2097152)"
+	diskutil erasevolume HFS+ CassandraBuildTmp $(hdiutil attach -nomount ram://2097152)
 	diskutil mount -mountPoint "$(pwd)/build/test/cassandra" CassandraBuildTmp
 elif [[ "$os" == "linux" ]]; then
 	mount | grep tmpfs | grep /build/test/cassandra | cut -f 3 -d ' ' | while read -r line;
