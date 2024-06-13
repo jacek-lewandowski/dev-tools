@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -e   `2`3
 
 input="$1"
 output_dir="${2:-split}"

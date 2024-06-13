@@ -1,0 +1,24 @@
+#!/bin/bash
+
+if [[ "$1" =~ ^[0-9]+$ ]]; then
+  open "https://issues.apache.org/jira/browse/CASSANDRA-$1" &
+  exit 0
+elif [[ "$1" =~ ^CASSANDRA-[0-9]+$ ]]; then
+  open "https://issues.apache.org/jira/browse/$1" &
+  exit 0
+elif [[ "$1" =~ ^CNDB-[0-9]+$ ]]; then
+  id="$(echo "$1" | cut -f 2 -d '-')"
+  open "https://github.com/riptano/cndb/issues/$id" &
+  exit 0
+elif [[ "$1" == "" ]]; then
+  branch="$(git branch --show-current)"
+  if [[ "$branch" =~ ^[a-zA-Z]+-[0-9]+ ]]; then
+    id="$(echo "$branch" | cut -f 1 -d '-')-$(echo "$branch" | cut -f 2 -d '-')"
+    issue "$id"
+    exit 0
+  fi
+fi
+
+echo "Unkonwn issue $1" 1>&2
+exit 1
+
