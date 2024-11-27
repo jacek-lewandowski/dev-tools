@@ -10,6 +10,7 @@ on:
       - 'pr_target.txt'
     types:
       - ready_for_review
+      - synchronize
 
   pull_request:
     branches:
@@ -18,6 +19,7 @@ on:
       - 'pr.txt'
     types:
       - ready_for_review
+      - synchronize
 
   push:
     paths:
