@@ -1,0 +1,40 @@
+name: My workflow
+
+on:
+  workflow_dispatch:
+
+  pull_request_target:
+    branches:
+      - main
+    paths:
+      - 'pr_target.txt'
+    types:
+      - ready_for_review
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'pr.txt'
+    types:
+      - ready_for_review
+
+  push:
+    paths:
+      - 'push.txt'
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Step 1
+        run:
+          echo "github.event.pull_request.head.sha = ${{ github.event.pull_request.head.sha }}"
+          echo "github.event.pull_request.base.sha = ${{ github.event.pull_request.base.sha }}"
+          echo "github.event_name = ${{ github.event_name }}"
+          echo "${{ github.event }}"
+          echo "Script version 1"
+
