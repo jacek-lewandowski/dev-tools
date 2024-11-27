@@ -1,0 +1,4 @@
+#!/bin/bash
+
+CONTAINER_PID="$(docker inspect -f '{{ .State.Pid }}' "$1")"
+cat /proc/$CONTAINER_PID/net/dev

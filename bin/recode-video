@@ -19,8 +19,8 @@ if [ ! -f "${input_file}" ]; then
     exit 1
 fi
 
-ffmpeg -y -i "${input_file}" -c:v libx264 -b:v "${video_bitrate}" -pass 1 -c:a copy -vf mpdecimate -vsync vfr -f null /dev/null && \
-ffmpeg -i "${input_file}" -movflags use_metadata_tags -c:v libx264 -b:v "${video_bitrate}" -pass 2 -acodec aac -b:a "${audio_bitrate}" -vf mpdecimate -vsync vfr "${output_file}" | tee "${output_file}.log"
+ffmpeg -y -hide_banner -loglevel error -i "${input_file}" -c:v libx264 -b:v "${video_bitrate}" -pass 1 -c:a copy -vf mpdecimate -vsync vfr -f null /dev/null < /dev/null && \
+ffmpeg -y -hide_banner -loglevel error -i "${input_file}" -movflags use_metadata_tags -c:v libx264 -b:v "${video_bitrate}" -pass 2 -acodec aac -b:a "${audio_bitrate}" -vf mpdecimate -vsync vfr "${output_file}" < /dev/null | tee "${output_file}.log"
 
 res=$?
 

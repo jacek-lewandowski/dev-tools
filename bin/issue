@@ -3,10 +3,10 @@
 if [[ "$1" =~ ^[0-9]+$ ]]; then
   open "https://issues.apache.org/jira/browse/CASSANDRA-$1" &
   exit 0
-elif [[ "$1" =~ ^CASSANDRA-[0-9]+$ ]]; then
+elif [[ "$1" =~ ^[Cc][Aa][Ss][Ss][Aa][Nn][Dd][Rr][Aa]-[0-9]+$ ]]; then
   open "https://issues.apache.org/jira/browse/$1" &
   exit 0
-elif [[ "$1" =~ ^CNDB-[0-9]+$ ]]; then
+elif [[ "$1" =~ ^[Cc][Nn][Dd][Bb]-[0-9]+$ ]]; then
   id="$(echo "$1" | cut -f 2 -d '-')"
   open "https://github.com/riptano/cndb/issues/$id" &
   exit 0

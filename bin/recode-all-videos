@@ -1,0 +1,63 @@
+#!/bin/bash
+
+set +e
+
+script_dir="$(dirname "$0")"
+
+function get_prop() {
+  ffprobe -v error -select_streams v:0 -show_entries stream="$2" -of default=noprint_wrappers=1:nokey=1 "$1" < /dev/null
+}
+
+# read lines from input stream
+while read -r line
+do
+  bit_rate="$(get_prop "$line" bit_rate)"
+  if [ $? -ne 0 ]; then
+    echo "Error processing $line" 1>&2
+    continue
+  fi
+  width="$(get_prop "$line" width)"
+  height="$(get_prop "$line" height)"
+  size=$(stat -c %s "$line")
+  size_mb=$(echo "scale=2; $size / 1024 / 1024" | bc)
+
+  echo "$line bit_rate=$bit_rate width=$width height=$height, size=$size_mb MB"
+
+  filename=$(basename "$line")
+  dirname=$(dirname "$line")
+  extension="${filename##*.}"
+  name="${filename%.*}"
+
+  tmp_file="$dirname/$name-recoded.$extension"
+
+  if [ "$width" -lt 2000 ] && [ "$bit_rate" -gt 7000000 ]; then
+    echo "Recoding $line"
+    VIDEO_BITRATE=5000000 AUDIO_BITRATE=128000 "$script_dir/recode-video" "$line" "$tmp_file" 1>&2
+  elif [ "$width" -gt 2000 ] && [ "$bit_rate" -gt 12000000 ]; then
+    echo "Recoding $line"
+    VIDEO_BITRATE=10000000 AUDIO_BITRATE=128000 "$script_dir/recode-video" "$line" "$tmp_file" 1>&2
+  else
+    echo "Skipping $line"
+    continue
+  fi
+
+  if [ -f "$tmp_file" ]; then
+    new_bit_rate="$(get_prop "$tmp_file" bit_rate)"
+    new_width="$(get_prop "$tmp_file" width)"
+    new_height="$(get_prop "$tmp_file" height)"
+
+    new_size=$(stat -c %s "$tmp_file")
+    saved_megabytes=$(echo "scale=2; ($size - $new_size) / 1024 / 1024" | bc)
+
+    if [ "$new_bit_rate" -lt "$bit_rate" ]; then
+      echo "Replacing $line with $tmp_file, saved $saved_megabytes MB"
+      mv -f "$tmp_file" "$line"
+    else
+      echo "Recoding failed: bit_rate=$new_bit_rate width=$new_width height=$new_height" 1>&2
+      rm -f "$tmp_file"
+    fi
+  else
+    echo "Recoding failed" 1>&2
+  fi
+
+done
