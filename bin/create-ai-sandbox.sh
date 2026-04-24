@@ -232,7 +232,7 @@ cat << EOF > "docker-compose.yml"
 # Docker Compose configuration for the Antigravity developer environment
 
 services:
-  dev-agent:
+  ${PROJECT_NAME}-agent:
     build:
       context: .
       dockerfile: .env-config/Dockerfile
@@ -303,6 +303,16 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if ! grep -q "^.env-config/$" .gitignore && ! grep -q "^.env-config$" .gitignore; then
         echo ".env-config/" >> .gitignore
     fi
+
+    # Append .agentrules if it's not already in the file
+    if ! grep -q "^.agentrules$" .gitignore; then
+        echo ".agentrules" >> .gitignore
+    fi
+
+    # append docker-compose.yml if it's not already in the file
+    if ! grep -q "^docker-compose.*$" .gitignore; then
+        echo "docker-compose.*" >> .gitignore
+    fi
 fi
 
 # Automatically start the container in the background
@@ -315,4 +325,4 @@ echo "------------------------------------------------"
 echo "Środowisko zostało pomyślnie wygenerowane i uruchomione!"
 echo "Klucze dostępowe zostały zapisane w izolowanym katalogu .env-config/gcloud-isolated"
 echo "Sekrety powiązane ze środowiskiem dodano do .gitignore"
-echo "Możesz teraz wejść do środowiska wpisując: docker compose exec dev-agent bash"
+echo "Możesz teraz wejść do środowiska wpisując: docker compose exec ${PROJECT_NAME}-agent bash"
