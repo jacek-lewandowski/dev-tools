@@ -63,12 +63,37 @@ FROM ubuntu:22.04
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install core dependencies (excluding nodejs/npm to install them globally later via NodeSource)
+# Install base prerequisites for adding custom repositories
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     gnupg \
     ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add all custom GPG keys and repositories
+RUN mkdir -p /etc/apt/keyrings /usr/share/keyrings && \
+    # Google Antigravity
+    curl -fsSL https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg | gpg --dearmor -o /etc/apt/keyrings/antigravity-repo-key.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" > /etc/apt/sources.list.d/antigravity.list && \
+    # Google Cloud CLI
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    # Cloudflare daemon
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null && \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main" > /etc/apt/sources.list.d/cloudflared.list && \
+    # GitHub CLI
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && \
+    # Node.js (NodeSource)
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+
+# Perform a single apt-get update and install all required packages
+RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    # Core dependencies
     git \
     sudo \
     python3 \
@@ -86,61 +111,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdg-utils \
     dbus-x11 \
     xauth \
-    && rm -rf /var/lib/apt/lists/*
-
-# Add GPG keys and official APT repository for Google Antigravity
-RUN mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg | gpg --dearmor -o /etc/apt/keyrings/antigravity-repo-key.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" | tee /etc/apt/sources.list.d/antigravity.list > /dev/null && \
-    apt-get update && apt-get install -y --no-install-recommends antigravity && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Google Cloud CLI securely
-RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee /etc/apt/sources.list.d/google-cloud-sdk.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-cloud-cli \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Cloudflare daemon (cloudflared) for secure tunnels
-RUN mkdir -p --mode=0755 /usr/share/keyrings && \
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null && \
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main" | tee /etc/apt/sources.list.d/cloudflared.list && \
-    apt-get update && apt-get install -y --no-install-recommends cloudflared && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install GitHub CLI securely and clean up
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js natively using NodeSource (replaces nvm for better Docker compatibility)
-RUN mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Firebase CLI and Gemini CLI via NPM, then clean NPM cache
-RUN npm install -g firebase-tools @google/gemini-cli && npm cache clean --force
-
-# Install multimedia tools for the agent (requires apt-get update first)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Custom repository packages
+    antigravity \
+    google-cloud-cli \
+    cloudflared \
+    gh \
+    nodejs \
+    # Multimedia tools
     ffmpeg \
     imagemagick \
     sox \
     libsox-fmt-all \
-    && rm -rf /var/lib/apt/lists/*
+    # Chrome dependencies and Chrome itself
+    fonts-liberation \
+    /tmp/chrome.deb \
+    # Cleanup
+    && rm -rf /tmp/chrome.deb /var/lib/apt/lists/* \
+    && dbus-uuidgen > /etc/machine-id
+
+# Install Firebase CLI and Gemini CLI via NPM, then clean NPM cache
+RUN npm install -g firebase-tools @google/gemini-cli && npm cache clean --force
 
 # Relax ImageMagick security policy to allow the agent to freely manipulate all document/image types
 RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' /etc/ImageMagick-6/policy.xml
-
-# Download and install Google Chrome Stable for agent web testing, and generate machine-id
-RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-    apt-get update && apt-get install -y --no-install-recommends /tmp/chrome.deb fonts-liberation && \
-    rm -rf /tmp/chrome.deb /var/lib/apt/lists/* && \
-    dbus-uuidgen > /etc/machine-id
 
 # Create a wrapper for Google Chrome to always run with --no-sandbox in the Docker environment.
 # Using --disable-dev-shm-usage as a fallback for shared memory optimization.
