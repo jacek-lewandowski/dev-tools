@@ -142,14 +142,21 @@ RUN mv /usr/bin/google-chrome /usr/bin/google-chrome-original && \
     echo 'exec /usr/bin/google-chrome-original --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"' >> /usr/bin/google-chrome && \
     chmod +x /usr/bin/google-chrome
 
-# Override xdg-open so the agent can open URLs without needing a
-# desktop session bus. Chrome is already installed, so we just call it directly.
+# Override xdg-open to intercept URLs (like login links) and print them to all active pseudo-terminals.
+# This bypasses Electron's TTY detachment by broadcasting directly to the active session.
 RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original && \
     echo '#!/bin/bash' > /usr/bin/xdg-open && \
-    echo 'echo "Opening URL: $@"' >> /usr/bin/xdg-open && \
-    echo 'exec google-chrome "$@"' >> /usr/bin/xdg-open && \
+    echo 'for term in /dev/pts/*; do' >> /usr/bin/xdg-open && \
+    echo '  if [ -w "$term" ]; then' >> /usr/bin/xdg-open && \
+    echo '    echo -e "\n============================================================" > "$term"' >> /usr/bin/xdg-open && \
+    echo '    echo -e "🔗 ACTION REQUIRED: Please open this link in your host browser:" > "$term"' >> /usr/bin/xdg-open && \
+    echo '    echo -e "$1" > "$term"' >> /usr/bin/xdg-open && \
+    echo '    echo -e "============================================================\n" > "$term"' >> /usr/bin/xdg-open && \
+    echo '  fi' >> /usr/bin/xdg-open && \
+    echo 'done' >> /usr/bin/xdg-open && \
+    echo 'exit 0' >> /usr/bin/xdg-open && \
     chmod +x /usr/bin/xdg-open
-
+    
 # Write a startup script that initializes an isolated DBus session,
 # then keeps the container alive. This replaces the need to mount
 # the host's session bus socket.
