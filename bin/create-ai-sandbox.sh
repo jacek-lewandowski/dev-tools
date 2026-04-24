@@ -146,6 +146,7 @@ RUN mv /usr/bin/google-chrome /usr/bin/google-chrome-original && \
 # desktop session bus. Chrome is already installed, so we just call it directly.
 RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original && \
     echo '#!/bin/bash' > /usr/bin/xdg-open && \
+    echo 'echo "Opening URL: $@"' >> /usr/bin/xdg-open && \
     echo 'exec google-chrome "$@"' >> /usr/bin/xdg-open && \
     chmod +x /usr/bin/xdg-open
 
