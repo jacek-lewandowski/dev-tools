@@ -194,9 +194,11 @@ RUN groupadd -g ${GROUP_ID} ${USER_NAME} && \
 WORKDIR /home/${USER_NAME}/workspace
 USER ${USER_NAME}
 
-# Add aliases and source DBus environment for interactive shell sessions
+# Add aliases, source DBus environment for interactive shell sessions, and configure git
 RUN echo 'alias antigravity="antigravity --no-sandbox --disable-gpu --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
-    echo 'source /run/user/$(id -u)/dbus-env.sh 2>/dev/null' >> /home/${USER_NAME}/.bashrc
+    echo 'source /run/user/$(id -u)/dbus-env.sh 2>/dev/null' >> /home/${USER_NAME}/.bashrc && \
+    echo '[ -n "$HOST_GIT_NAME" ] && git config --global user.name "$HOST_GIT_NAME"' >> /home/${USER_NAME}/.bashrc && \
+    echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 EOF
@@ -212,15 +214,23 @@ XAUTH_FILE="/tmp/.docker.xauth"
 touch $XAUTH_FILE
 xauth nlist $DISPLAY | sed -e 's/^..../ffff/' | xauth -f $XAUTH_FILE nmerge -
 
+# Get host git configuration
+HOST_GIT_NAME=$(git config user.name 2>/dev/null || echo "")
+HOST_GIT_EMAIL=$(git config user.email 2>/dev/null || echo "")
+
 # Clean up any existing host variable entries and append the current ones
 sed -i '/^HOST_UID=/d' "$ENV_DIR/.env"
 sed -i '/^HOST_GID=/d' "$ENV_DIR/.env"
 sed -i '/^HOST_USER=/d' "$ENV_DIR/.env"
 sed -i '/^XAUTHORITY=/d' "$ENV_DIR/.env"
+sed -i '/^HOST_GIT_NAME=/d' "$ENV_DIR/.env"
+sed -i '/^HOST_GIT_EMAIL=/d' "$ENV_DIR/.env"
 echo "HOST_UID=${HOST_UID}" >> "$ENV_DIR/.env"
 echo "HOST_GID=${HOST_GID}" >> "$ENV_DIR/.env"
 echo "HOST_USER=${HOST_USER}" >> "$ENV_DIR/.env"
 echo "XAUTHORITY=${XAUTH_FILE}" >> "$ENV_DIR/.env"
+if [ -n "$HOST_GIT_NAME" ]; then echo "HOST_GIT_NAME=${HOST_GIT_NAME}" >> "$ENV_DIR/.env"; fi
+if [ -n "$HOST_GIT_EMAIL" ]; then echo "HOST_GIT_EMAIL=${HOST_GIT_EMAIL}" >> "$ENV_DIR/.env"; fi
 
 # Dynamically configure Wayland mounts if the variable exists
 WAYLAND_ENV_CONF=""
