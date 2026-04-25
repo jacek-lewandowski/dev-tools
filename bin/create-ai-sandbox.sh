@@ -336,10 +336,49 @@ fi
 echo "------------------------------------------------"
 echo "Starting Docker Compose for project: $PROJECT_NAME..."
 # Adding --build to force recreation of the image with the new configuration
-docker compose up -d --build
+docker compose --env-file "$ENV_DIR/.env" up -d --build
 
 echo "------------------------------------------------"
 echo "Środowisko zostało pomyślnie wygenerowane i uruchomione!"
 echo "Klucze dostępowe zostały zapisane w izolowanym katalogu .env-config/gcloud-isolated"
 echo "Sekrety powiązane ze środowiskiem dodano do .gitignore"
-echo "Możesz teraz wejść do środowiska wpisując: docker compose exec ${PROJECT_NAME}-agent bash"
+
+# Install helper function to ~/.bashrc if it doesn't exist
+BASHRC_FILE="$HOME/.bashrc"
+if [ -f "$BASHRC_FILE" ] && ! grep -q "function ai-sandbox()" "$BASHRC_FILE"; then
+    echo "Dodawanie funkcji pomocniczych 'ai-sandbox' oraz 'ai-sandbox-stop' do pliku ~/.bashrc..."
+    cat << 'EOF' >> "$BASHRC_FILE"
+
+# Antigravity Sandbox Helper
+function ai-sandbox() {
+    local env_dir=".env-config"
+    local project_name
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        project_name=$(basename "$(git rev-parse --show-toplevel)")
+    else
+        project_name=$(basename "$PWD")
+    fi
+    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+
+    if [ -f "$env_dir/.env" ]; then
+        docker compose --env-file "$env_dir/.env" exec "${project_name}-agent" bash "$@"
+    else
+        echo "Błąd: Brak pliku $env_dir/.env w bieżącym katalogu."
+        return 1
+    fi
+}
+
+function ai-sandbox-stop() {
+    local env_dir=".env-config"
+    if [ -f "$env_dir/.env" ]; then
+        docker compose --env-file "$env_dir/.env" stop
+    else
+        echo "Błąd: Brak pliku $env_dir/.env w bieżącym katalogu."
+        return 1
+    fi
+}
+EOF
+    echo "Zainstalowano polecenia. Aby użyć w obecnym oknie, wpisz: source ~/.bashrc"
+fi
+
+echo "Możesz teraz wejść do środowiska wpisując: ai-sandbox (lub ręcznie: docker compose --env-file $ENV_DIR/.env exec ${PROJECT_NAME}-agent bash)"
