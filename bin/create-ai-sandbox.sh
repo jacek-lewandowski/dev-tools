@@ -202,9 +202,9 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 EOF
 
 # Ensure the .env file exists and populate it with required variables
-if [ ! -f ".env" ]; then
-    echo "# Environment variables for your sandbox" > .env
-    echo "# GEMINI_API_KEY=your_api_key_here" >> .env
+if [ ! -f "$ENV_DIR/.env" ]; then
+    echo "# Environment variables for your sandbox" > "$ENV_DIR/.env"
+    echo "# GEMINI_API_KEY=your_api_key_here" >> "$ENV_DIR/.env"
 fi
 
 # Generate secure X11 authentication cookie
@@ -213,14 +213,14 @@ touch $XAUTH_FILE
 xauth nlist $DISPLAY | sed -e 's/^..../ffff/' | xauth -f $XAUTH_FILE nmerge -
 
 # Clean up any existing host variable entries and append the current ones
-sed -i '/^HOST_UID=/d' .env
-sed -i '/^HOST_GID=/d' .env
-sed -i '/^HOST_USER=/d' .env
-sed -i '/^XAUTHORITY=/d' .env
-echo "HOST_UID=${HOST_UID}" >> .env
-echo "HOST_GID=${HOST_GID}" >> .env
-echo "HOST_USER=${HOST_USER}" >> .env
-echo "XAUTHORITY=${XAUTH_FILE}" >> .env
+sed -i '/^HOST_UID=/d' "$ENV_DIR/.env"
+sed -i '/^HOST_GID=/d' "$ENV_DIR/.env"
+sed -i '/^HOST_USER=/d' "$ENV_DIR/.env"
+sed -i '/^XAUTHORITY=/d' "$ENV_DIR/.env"
+echo "HOST_UID=${HOST_UID}" >> "$ENV_DIR/.env"
+echo "HOST_GID=${HOST_GID}" >> "$ENV_DIR/.env"
+echo "HOST_USER=${HOST_USER}" >> "$ENV_DIR/.env"
+echo "XAUTHORITY=${XAUTH_FILE}" >> "$ENV_DIR/.env"
 
 # Dynamically configure Wayland mounts if the variable exists
 WAYLAND_ENV_CONF=""
@@ -262,7 +262,7 @@ services:
       ${WAYLAND_ENV_CONF}
     env_file:
       # Load API keys and other secrets from the .env file
-      - .env
+      - .env-config/.env
     volumes:
       # Mount X11 socket (works for Xorg and XWayland)
       - /tmp/.X11-unix:/tmp/.X11-unix
@@ -301,9 +301,9 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         echo "# Ignore sandbox environment variables" > .gitignore
     fi
     
-    # Append .env if it's not already in the file
-    if ! grep -q "^.env$" .gitignore; then
-        echo ".env" >> .gitignore
+    # Append .env-config/.env if it's not already in the file
+    if ! grep -q "^.env-config/\.env$" .gitignore; then
+        echo ".env-config/.env" >> .gitignore
     fi
     
     # Append .env-config/ if it's not already in the file
