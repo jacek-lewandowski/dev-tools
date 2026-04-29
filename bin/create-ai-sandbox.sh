@@ -361,6 +361,10 @@ function ai-sandbox() {
     project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
 
     if [ -f "$env_dir/.env" ]; then
+        if [ "$(docker container inspect -f '{{.State.Running}}' "${project_name}-agent" 2>/dev/null)" != "true" ]; then
+            echo "Uruchamianie kontenera ${project_name}-agent..."
+            docker compose --env-file "$env_dir/.env" up -d
+        fi
         docker compose --env-file "$env_dir/.env" exec "${project_name}-agent" bash "$@"
     else
         echo "Błąd: Brak pliku $env_dir/.env w bieżącym katalogu."
