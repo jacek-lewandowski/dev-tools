@@ -180,7 +180,7 @@ ARG USER_NAME=developer
 # While typical for dev sandboxes to allow package installation, a compromised
 # or rogue agent could cause damage. For stricter environments, limit sudo capabilities.
 RUN groupadd -g ${GROUP_ID} ${USER_NAME} && \
-    useradd -l -u ${USER_ID} -g ${USER_NAME} -m ${USER_NAME} && \
+    useradd -s /bin/bash -l -u ${USER_ID} -g ${USER_NAME} -m ${USER_NAME} && \
     usermod -aG sudo ${USER_NAME} && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     # Create necessary configuration and runtime directories
