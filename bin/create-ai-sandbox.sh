@@ -181,7 +181,7 @@ ARG USER_NAME=developer
 # or rogue agent could cause damage. For stricter environments, limit sudo capabilities.
 RUN groupadd -g ${GROUP_ID} ${USER_NAME} && \
     useradd -s /bin/bash -l -u ${USER_ID} -g ${USER_NAME} -m ${USER_NAME} && \
-    usermod -aG sudo ${USER_NAME} && \
+    usermod -aG sudo,dialout,plugdev ${USER_NAME} && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     # Create necessary configuration and runtime directories
     mkdir -p /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /run/user/${USER_ID} && \
@@ -263,7 +263,13 @@ services:
     network_mode: host
     restart: "no"
     init: true
-    shm_size: '2gb'
+    shm_size: '4gb'
+    # Allow access to all USB/serial ports (ACM, USB, etc.) without privileged mode
+    device_cgroup_rules:
+      - 'c 188:* rmw' # USB serial (ttyUSB)
+      - 'c 166:* rmw' # ACM serial (ttyACM)
+      - 'c 189:* rmw' # USB bus devices
+      - 'c 4:* rmw'   # Standard serial (ttyS)
     environment:
       # Inject necessary display variables
       - DISPLAY=\${DISPLAY}
@@ -279,6 +285,8 @@ services:
       # Secure X11 authentication cookie
       - \${XAUTHORITY}:\${XAUTHORITY}:ro
       ${WAYLAND_VOL_CONF}
+      # Mount /dev to access all serial/USB devices without specifying them individually
+      - /dev:/dev
       # Mount the current project into the workspace directory
       - .:/home/${HOST_USER}/workspace
       # Mount ONLY the isolated gcloud configuration for this specific sandbox
