@@ -60,8 +60,9 @@ cat << 'EOF' > "$ENV_DIR/Dockerfile"
 # Use a minimal Ubuntu 22.04 base image
 FROM ubuntu:22.04
 
-# Prevent interactive prompts during package installation
-ENV DEBIAN_FRONTEND=noninteractive
+# Prevent interactive prompts during package installation and set terminal type
+ENV DEBIAN_FRONTEND=noninteractive \
+    TERM=xterm-256color
 
 # Install base prerequisites for adding custom repositories
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -275,6 +276,7 @@ services:
       - DISPLAY=\${DISPLAY}
       - XAUTHORITY=\${XAUTHORITY}
       - XDG_RUNTIME_DIR=/run/user/\${HOST_UID}
+      - TERM=xterm-256color
       ${WAYLAND_ENV_CONF}
     env_file:
       # Load API keys and other secrets from the .env file
