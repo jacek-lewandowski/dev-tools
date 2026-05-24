@@ -213,7 +213,11 @@ RUN echo 'alias antigravity="antigravity --no-sandbox --disable-gpu --ozone-plat
     echo 'alias antigravity2-ide="antigravity2-ide --no-sandbox --disable-gpu --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
     echo 'source /run/user/$(id -u)/dbus-env.sh 2>/dev/null' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_NAME" ] && git config --global user.name "$HOST_GIT_NAME"' >> /home/${USER_NAME}/.bashrc && \
-    echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc
+    echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc && \
+    echo 'parse_git_branch() {' >> /home/${USER_NAME}/.bashrc && \
+    echo '  git branch 2>/dev/null | sed -e "/^[^*]/d" -e "s/* \(.*\)/ (\1)/"' >> /home/${USER_NAME}/.bashrc && \
+    echo '}' >> /home/${USER_NAME}/.bashrc && \
+    echo 'export PS1="\[\033[01;33m\][📦 sandbox]\[\033[00m\] \[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[01;35m\]\$(parse_git_branch)\[\033[00m\]\$ "' >> /home/${USER_NAME}/.bashrc
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 EOF
