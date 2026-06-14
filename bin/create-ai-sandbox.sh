@@ -135,15 +135,17 @@ RUN npm install -g firebase-tools @google/gemini-cli && npm cache clean --force
 
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
 
-RUN wget -q https://storage.googleapis.com/antigravity-public/antigravity-hub/2.0.1-6566078776737792/linux-x64/Antigravity.tar.gz && \
+RUN HUB_URL='https://storage.googleapis.com/antigravity-public/antigravity-hub/2.1.4-6481382726303744/linux-x64/Antigravity.tar.gz' && \
+    wget -q "$HUB_URL" -O Antigravity.tar.gz && \
     tar -xzf Antigravity.tar.gz -C /usr/local/ && \
     ln -s /usr/local/Antigravity-x64/antigravity /usr/local/bin/antigravity2 && \
     rm -rf Antigravity.tar.gz
 
-RUN wget -q https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.0.1-4861014005645312/linux-x64/Antigravity%20IDE.tar.gz && \
-    tar -xzf Antigravity\ IDE.tar.gz -C /usr/local/ && \
+RUN IDE_URL='https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.0.4-6381998290370560/linux-x64/Antigravity%20IDE.tar.gz' && \
+    wget -q "$IDE_URL" -O Antigravity_IDE.tar.gz && \
+    tar -xzf Antigravity_IDE.tar.gz -C /usr/local/ && \
     ln -s /usr/local/Antigravity\ IDE/bin/antigravity-ide /usr/local/bin/antigravity2-ide && \
-    rm -rf Antigravity\ IDE.tar.gz
+    rm -rf Antigravity_IDE.tar.gz
 
 # Relax ImageMagick security policy to allow the agent to freely manipulate all document/image types
 RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' /etc/ImageMagick-6/policy.xml
