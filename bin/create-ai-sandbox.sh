@@ -4,20 +4,6 @@
 PROJECT_DIR=${1:-.}
 cd "$PROJECT_DIR" || exit 1
 
-ENV_DIR=".env-config"
-ISOLATED_GCLOUD_DIR="$ENV_DIR/gcloud-isolated"
-ANTIGRAVITY_DATA_DIR="$ENV_DIR/antigravity-data"
-
-# Ensure host variables are available immediately for text replacement
-export HOST_UID=$(id -u)
-export HOST_GID=$(id -g)
-export HOST_USER="$USER"
-
-# Create necessary directories
-mkdir -p "$ENV_DIR"
-mkdir -p "$ISOLATED_GCLOUD_DIR"
-mkdir -p "$ANTIGRAVITY_DATA_DIR"
-
 # Determine project name from git (handles worktrees seamlessly) or fallback to current directory name
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     PROJECT_NAME=$(basename "$(git rev-parse --show-toplevel)")
@@ -27,6 +13,48 @@ fi
 
 # Sanitize project name for Docker compatibility (lowercase, alphanumeric, dashes)
 PROJECT_NAME=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+CONTAINER_NAME="${PROJECT_NAME}-agent"
+
+SANDBOX_DIR="$HOME/.ai-sandbox/${CONTAINER_NAME}"
+ENV_DIR="$SANDBOX_DIR"
+ISOLATED_GCLOUD_DIR="$ENV_DIR/gcloud-isolated"
+ANTIGRAVITY_DATA_DIR="$ENV_DIR/antigravity-data"
+PROJECT_ABS_DIR=$(pwd)
+
+# Ensure host variables are available immediately for text replacement
+export HOST_UID=$(id -u)
+export HOST_GID=$(id -g)
+export HOST_USER="$USER"
+
+# Create necessary directories
+mkdir -p "$SANDBOX_DIR"
+mkdir -p "$ISOLATED_GCLOUD_DIR"
+mkdir -p "$ANTIGRAVITY_DATA_DIR"
+
+# Copy Antigravity login and configuration data from host
+if [ -d "$HOME/.gemini" ]; then
+    echo "Copying Antigravity configuration from host ~/.gemini..."
+    mkdir -p "$SANDBOX_DIR/.gemini"
+    rsync -a \
+        --exclude="*Cache*" \
+        --exclude="*cache*" \
+        --exclude="BrowserMetrics*" \
+        --exclude="brain" \
+        --exclude="conversations" \
+        --exclude="browser_recordings" \
+        --exclude="html_artifacts" \
+        --exclude="history" \
+        --exclude="History*" \
+        --exclude="tmp" \
+        --exclude="IndexedDB" \
+        --exclude="Service Worker" \
+        "$HOME/.gemini/" "$SANDBOX_DIR/.gemini/" 2>/dev/null || cp -rn "$HOME/.gemini/"* "$SANDBOX_DIR/.gemini/" 2>/dev/null || true
+fi
+if [ -d "$HOME/.antigravity" ]; then
+    echo "Copying Antigravity IDE settings/extensions from host ~/.antigravity..."
+    mkdir -p "$SANDBOX_DIR/.antigravity"
+    rsync -a --exclude="*Cache*" --exclude="*cache*" "$HOME/.antigravity/" "$SANDBOX_DIR/.antigravity/" 2>/dev/null || cp -rn "$HOME/.antigravity/"* "$SANDBOX_DIR/.antigravity/" 2>/dev/null || true
+fi
 
 # Fetch available Google Cloud accounts from the host system
 echo "Fetching available Google Cloud accounts..."
@@ -141,7 +169,7 @@ RUN HUB_URL='https://storage.googleapis.com/antigravity-public/antigravity-hub/2
     ln -s /usr/local/Antigravity-x64/antigravity /usr/local/bin/antigravity2 && \
     rm -rf Antigravity.tar.gz
 
-RUN IDE_URL='https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.0.4-6381998290370560/linux-x64/Antigravity%20IDE.tar.gz' && \
+RUN IDE_URL='https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.1.1-6123990880747520/linux-x64/Antigravity%20IDE.tar.gz' && \
     wget -q "$IDE_URL" -O Antigravity_IDE.tar.gz && \
     tar -xzf Antigravity_IDE.tar.gz -C /usr/local/ && \
     ln -s /usr/local/Antigravity\ IDE/bin/antigravity-ide /usr/local/bin/antigravity2-ide && \
@@ -199,9 +227,9 @@ RUN groupadd -g ${GROUP_ID} ${USER_NAME} && \
     usermod -aG sudo,dialout,plugdev ${USER_NAME} && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     # Create necessary configuration and runtime directories
-    mkdir -p /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /run/user/${USER_ID} && \
+    mkdir -p /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /run/user/${USER_ID} && \
     # Change ownership to the user
-    chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /run/user/${USER_ID} && \
+    chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /run/user/${USER_ID} && \
     # Set strict permissions for the XDG_RUNTIME_DIR as required by Linux security standards
     chmod 700 /run/user/${USER_ID}
 
@@ -216,6 +244,7 @@ RUN echo 'alias antigravity="antigravity --no-sandbox --disable-gpu --ozone-plat
     echo 'source /run/user/$(id -u)/dbus-env.sh 2>/dev/null' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_NAME" ] && git config --global user.name "$HOST_GIT_NAME"' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc && \
+    echo 'git config --global core.excludesfile "/home/${USER_NAME}/.gitignore"' >> /home/${USER_NAME}/.bashrc && \
     echo 'parse_git_branch() {' >> /home/${USER_NAME}/.bashrc && \
     echo '  git branch 2>/dev/null | sed -e "/^[^*]/d" -e "s/* \(.*\)/ (\1)/"' >> /home/${USER_NAME}/.bashrc && \
     echo '}' >> /home/${USER_NAME}/.bashrc && \
@@ -229,6 +258,11 @@ if [ ! -f "$ENV_DIR/.env" ]; then
     echo "# Environment variables for your sandbox" > "$ENV_DIR/.env"
     echo "# GEMINI_API_KEY=your_api_key_here" >> "$ENV_DIR/.env"
 fi
+
+# Ensure the global gitignore, gemini and antigravity folders exist on the host
+touch "$HOME/.gitignore"
+mkdir -p "$HOME/.gemini"
+mkdir -p "$HOME/.antigravity"
 
 # Generate secure X11 authentication cookie
 XAUTH_FILE="/tmp/.docker.xauth"
@@ -266,21 +300,21 @@ else
 fi
 
 # Generate docker-compose.yml
-cat << EOF > "docker-compose.yml"
+cat << EOF > "$SANDBOX_DIR/docker-compose.yml"
 # Docker Compose configuration for the Antigravity developer environment
 
 services:
-  ${PROJECT_NAME}-agent:
+  ${CONTAINER_NAME}:
     build:
-      context: .
-      dockerfile: .env-config/Dockerfile
+      context: $SANDBOX_DIR
+      dockerfile: Dockerfile
       args:
         # Pass dynamic host IDs
         USER_ID: \${HOST_UID}
         GROUP_ID: \${HOST_GID}
         USER_NAME: \${HOST_USER}
     image: antigravity-dev-slim:latest
-    container_name: ${PROJECT_NAME}-agent
+    container_name: ${CONTAINER_NAME}
     network_mode: host
     restart: "no"
     init: true
@@ -300,7 +334,7 @@ services:
       ${WAYLAND_ENV_CONF}
     env_file:
       # Load API keys and other secrets from the .env file
-      - .env-config/.env
+      - .env
     volumes:
       # Mount X11 socket (works for Xorg and XWayland)
       - /tmp/.X11-unix:/tmp/.X11-unix
@@ -309,12 +343,20 @@ services:
       ${WAYLAND_VOL_CONF}
       # Mount /dev to access all serial/USB devices without specifying them individually
       - /dev:/dev
+      # Mount SDKMAN candidates
+      - /home/${HOST_USER}/.sdkman:/home/${HOST_USER}/.sdkman
+      # Mount the global ~/.gitignore file
+      - /home/${HOST_USER}/.gitignore:/home/${HOST_USER}/.gitignore
+      # Mount the copied ~/.gemini directory to persist Antigravity login and config
+      - ${SANDBOX_DIR}/.gemini:/home/${HOST_USER}/.gemini
+      # Mount the copied ~/.antigravity directory to persist extensions
+      - ${SANDBOX_DIR}/.antigravity:/home/${HOST_USER}/.antigravity
       # Mount the current project into the workspace directory
-      - .:/home/${HOST_USER}/workspace
+      - ${PROJECT_ABS_DIR}:/home/${HOST_USER}/workspace
       # Mount ONLY the isolated gcloud configuration for this specific sandbox
-      - .env-config/gcloud-isolated:/home/${HOST_USER}/.config/gcloud
+      - ${SANDBOX_DIR}/gcloud-isolated:/home/${HOST_USER}/.config/gcloud
       # Persist Antigravity IDE state (login, settings, extensions) inside the sandbox
-      - .env-config/antigravity-data:/home/${HOST_USER}/.config/Antigravity
+      - ${SANDBOX_DIR}/antigravity-data:/home/${HOST_USER}/.config/Antigravity
     # Keep the container running in the background
     command: tail -f /dev/null
 EOF
@@ -334,31 +376,16 @@ For multimedia processing use the following pre-installed command-line tools:
 Double check what you are doing, whether it is correct and addresses the request.
 EOF
 
-# Update .gitignore to prevent committing sensitive sandbox data
+# Update .gitignore to prevent committing agent rules
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "Updating .gitignore..."
     if [ ! -f ".gitignore" ]; then
-        echo "# Ignore sandbox environment variables" > .gitignore
+        echo "# Ignore sandbox agent rules" > .gitignore
     fi
     
-    # Append .env-config/.env if it's not already in the file
-    if ! grep -q "^.env-config/\.env$" .gitignore; then
-        echo ".env-config/.env" >> .gitignore
-    fi
-    
-    # Append .env-config/ if it's not already in the file
-    if ! grep -q "^.env-config/$" .gitignore && ! grep -q "^.env-config$" .gitignore; then
-        echo ".env-config/" >> .gitignore
-    fi
-
     # Append .agentrules if it's not already in the file
     if ! grep -q "^.agentrules$" .gitignore; then
         echo ".agentrules" >> .gitignore
-    fi
-
-    # append docker-compose.yml if it's not already in the file
-    if ! grep -q "^docker-compose.*$" .gitignore; then
-        echo "docker-compose.*" >> .gitignore
     fi
 fi
 
@@ -366,22 +393,35 @@ fi
 echo "------------------------------------------------"
 echo "Starting Docker Compose for project: $PROJECT_NAME..."
 # Adding --build to force recreation of the image with the new configuration
-docker compose --env-file "$ENV_DIR/.env" up -d --build
+docker compose -f "$SANDBOX_DIR/docker-compose.yml" --env-file "$SANDBOX_DIR/.env" up -d --build
 
 echo "------------------------------------------------"
 echo "Środowisko zostało pomyślnie wygenerowane i uruchomione!"
-echo "Klucze dostępowe zostały zapisane w izolowanym katalogu .env-config/gcloud-isolated"
-echo "Sekrety powiązane ze środowiskiem dodano do .gitignore"
+echo "Klucze dostępowe zostały zapisane w izolowanym katalogu: $ISOLATED_GCLOUD_DIR"
+echo "Pliki konfiguracyjne piaskownicy znajdują się w: $SANDBOX_DIR"
 
-# Install helper function to ~/.bashrc if it doesn't exist
+# Install or update helper functions in ~/.bashrc
 BASHRC_FILE="$HOME/.bashrc"
-if [ -f "$BASHRC_FILE" ] && ! grep -q "function ai-sandbox()" "$BASHRC_FILE"; then
-    echo "Dodawanie funkcji pomocniczych 'ai-sandbox' oraz 'ai-sandbox-stop' do pliku ~/.bashrc..."
+if [ -f "$BASHRC_FILE" ]; then
+    echo "Instalowanie/aktualizowanie funkcji pomocniczych 'ai-sandbox' oraz 'ai-sandbox-stop' w pliku ~/.bashrc..."
+    
+    # Use python3 to remove old versions of the functions block from ~/.bashrc if present
+    python3 -c '
+import os, re
+path = os.path.expanduser("~/.bashrc")
+if os.path.exists(path):
+    with open(path, "r") as f:
+        content = f.read()
+    new_content = re.sub(r"# Antigravity Sandbox Helper.*?function ai-sandbox-stop\(\)\s*\{.*?\}\n+", "", content, flags=re.DOTALL)
+    with open(path, "w") as f:
+        f.write(new_content)
+'
+
+    # Append new clean functions
     cat << 'EOF' >> "$BASHRC_FILE"
 
 # Antigravity Sandbox Helper
 function ai-sandbox() {
-    local env_dir=".env-config"
     local project_name
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         project_name=$(basename "$(git rev-parse --show-toplevel)")
@@ -389,30 +429,41 @@ function ai-sandbox() {
         project_name=$(basename "$PWD")
     fi
     project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+    local container_name="${project_name}-agent"
+    local sandbox_dir="$HOME/.ai-sandbox/${container_name}"
 
-    if [ -f "$env_dir/.env" ]; then
-        if [ "$(docker container inspect -f '{{.State.Running}}' "${project_name}-agent" 2>/dev/null)" != "true" ]; then
-            echo "Uruchamianie kontenera ${project_name}-agent..."
-            docker compose --env-file "$env_dir/.env" up -d
+    if [ -f "$sandbox_dir/.env" ] && [ -f "$sandbox_dir/docker-compose.yml" ]; then
+        if [ "$(docker container inspect -f '{{.State.Running}}' "${container_name}" 2>/dev/null)" != "true" ]; then
+            echo "Uruchamianie kontenera ${container_name}..."
+            docker compose -f "$sandbox_dir/docker-compose.yml" --env-file "$sandbox_dir/.env" up -d
         fi
-        docker compose --env-file "$env_dir/.env" exec "${project_name}-agent" bash "$@"
+        docker compose -f "$sandbox_dir/docker-compose.yml" --env-file "$sandbox_dir/.env" exec "${container_name}" bash "$@"
     else
-        echo "Błąd: Brak pliku $env_dir/.env w bieżącym katalogu."
+        echo "Błąd: Brak konfiguracji piaskownicy w $sandbox_dir."
         return 1
     fi
 }
 
 function ai-sandbox-stop() {
-    local env_dir=".env-config"
-    if [ -f "$env_dir/.env" ]; then
-        docker compose --env-file "$env_dir/.env" stop
+    local project_name
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        project_name=$(basename "$(git rev-parse --show-toplevel)")
     else
-        echo "Błąd: Brak pliku $env_dir/.env w bieżącym katalogu."
+        project_name=$(basename "$PWD")
+    fi
+    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+    local container_name="${project_name}-agent"
+    local sandbox_dir="$HOME/.ai-sandbox/${container_name}"
+
+    if [ -f "$sandbox_dir/docker-compose.yml" ]; then
+        docker compose -f "$sandbox_dir/docker-compose.yml" --env-file "$sandbox_dir/.env" stop
+    else
+        echo "Błąd: Brak konfiguracji piaskownicy w $sandbox_dir."
         return 1
     fi
 }
 EOF
-    echo "Zainstalowano polecenia. Aby użyć w obecnym oknie, wpisz: source ~/.bashrc"
+    echo "Zainstalowano/zaktualizowano polecenia. Aby użyć w obecnym oknie, wpisz: source ~/.bashrc"
 fi
 
-echo "Możesz teraz wejść do środowiska wpisując: ai-sandbox (lub ręcznie: docker compose --env-file $ENV_DIR/.env exec ${PROJECT_NAME}-agent bash)"
+echo "Możesz teraz wejść do środowiska wpisując: ai-sandbox (lub ręcznie: docker compose -f $SANDBOX_DIR/docker-compose.yml --env-file $SANDBOX_DIR/.env exec ${CONTAINER_NAME} bash)"
