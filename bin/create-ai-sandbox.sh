@@ -90,7 +90,9 @@ FROM ubuntu:22.04
 
 # Prevent interactive prompts during package installation and set terminal type
 ENV DEBIAN_FRONTEND=noninteractive \
-    TERM=xterm-256color
+    TERM=xterm-256color \
+    CI=true \
+    PLAYWRIGHT_HTML_REPORT=none
 
 # Install base prerequisites for adding custom repositories
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -245,6 +247,8 @@ RUN echo 'alias antigravity="antigravity --no-sandbox --disable-gpu --ozone-plat
     echo '[ -n "$HOST_GIT_NAME" ] && git config --global user.name "$HOST_GIT_NAME"' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc && \
     echo 'git config --global core.excludesfile "/home/${USER_NAME}/.gitignore"' >> /home/${USER_NAME}/.bashrc && \
+    echo 'export CI=true' >> /home/${USER_NAME}/.bashrc && \
+    echo 'export PLAYWRIGHT_HTML_REPORT=none' >> /home/${USER_NAME}/.bashrc && \
     echo 'parse_git_branch() {' >> /home/${USER_NAME}/.bashrc && \
     echo '  git branch 2>/dev/null | sed -e "/^[^*]/d" -e "s/* \(.*\)/ (\1)/"' >> /home/${USER_NAME}/.bashrc && \
     echo '}' >> /home/${USER_NAME}/.bashrc && \
@@ -331,6 +335,8 @@ services:
       - XAUTHORITY=\${XAUTHORITY}
       - XDG_RUNTIME_DIR=/run/user/\${HOST_UID}
       - TERM=xterm-256color
+      - CI=true
+      - PLAYWRIGHT_HTML_REPORT=none
       ${WAYLAND_ENV_CONF}
     env_file:
       # Load API keys and other secrets from the .env file
