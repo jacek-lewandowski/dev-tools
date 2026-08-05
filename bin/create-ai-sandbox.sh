@@ -196,8 +196,11 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
 RUN wget -q https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && \
     chmod +x /usr/local/bin/earthly
 
+# Install Python vector search dependencies for semantic_docs tool
+RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm
+
 # Install Firebase CLI, Gemini CLI and ast-grep via NPM, then clean NPM cache
-RUN npm install -g firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
+RUN npm install -g --force firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
 
 # Install comby for structural code search and replace
 RUN curl -sL https://get.comby.netlify.app | bash
@@ -452,10 +455,10 @@ You are operating inside a sandboxed Linux Docker container (Ubuntu 22.04). You 
 # Available CLI Tools
 * docker (Rootless Docker daemon running isolated inside this sandbox container)
 * earthly (Earthly build framework using internal rootless Docker daemon)
+* python3 -m tools.semantic_docs.cli (Local vector search for docs, notes, PDFs, and daily tasks)
 * parec / paplay (PulseAudio recording / playback CLI)
 * arecord / aplay (ALSA recording / playback CLI)
 * sox / ffmpeg (Audio capture, conversion, and processing)
-* ffmpeg
 * ImageMagick 6
 * Sound eXchange
 
