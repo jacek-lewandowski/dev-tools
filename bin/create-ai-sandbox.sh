@@ -450,16 +450,11 @@ cat << 'EOF' > .agentrules
 You are operating inside a sandboxed Linux Docker container (Ubuntu 22.04). You have full CLI access and sudo privileges.
 
 # Available CLI Tools
-For build and container operations, use:
 * docker (Rootless Docker daemon running isolated inside this sandbox container)
 * earthly (Earthly build framework using internal rootless Docker daemon)
-
-For audio recording and playback, use:
 * parec / paplay (PulseAudio recording / playback CLI)
 * arecord / aplay (ALSA recording / playback CLI)
 * sox / ffmpeg (Audio capture, conversion, and processing)
-
-For multimedia and image processing use:
 * ffmpeg
 * ImageMagick 6
 * Sound eXchange
