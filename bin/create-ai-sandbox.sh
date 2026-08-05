@@ -151,6 +151,7 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     git \
     sudo \
     python3 \
+    python3-pip \
     docker.io \
     rootlesskit \
     slirp4netns \
