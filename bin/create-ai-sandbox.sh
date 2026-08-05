@@ -19,7 +19,21 @@ SANDBOX_DIR="$HOME/.ai-sandbox/${CONTAINER_NAME}"
 ENV_DIR="$SANDBOX_DIR"
 ISOLATED_GCLOUD_DIR="$ENV_DIR/gcloud-isolated"
 ANTIGRAVITY_DATA_DIR="$ENV_DIR/antigravity-data"
+ANTIGRAVITY_IDE_DATA_DIR="$ENV_DIR/antigravity-ide-data"
 PROJECT_ABS_DIR=$(pwd)
+
+# Resolve script location and host dev-tools/tools directory
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)
+if [ -d "$DEV_TOOLS_DIR/tools" ]; then
+    HOST_TOOLS_DIR="$DEV_TOOLS_DIR/tools"
+elif [ -d "$HOME/dev/public/dev-tools/tools" ]; then
+    HOST_TOOLS_DIR="$HOME/dev/public/dev-tools/tools"
+elif [ -d "$HOME/tools" ]; then
+    HOST_TOOLS_DIR="$HOME/tools"
+else
+    HOST_TOOLS_DIR="$DEV_TOOLS_DIR/tools"
+fi
 
 # Ensure host variables are available immediately for text replacement
 export HOST_UID=$(id -u)
@@ -30,6 +44,7 @@ export HOST_USER="$USER"
 mkdir -p "$SANDBOX_DIR"
 mkdir -p "$ISOLATED_GCLOUD_DIR"
 mkdir -p "$ANTIGRAVITY_DATA_DIR"
+mkdir -p "$ANTIGRAVITY_IDE_DATA_DIR"
 
 # Copy Antigravity login and configuration data from host
 if [ -d "$HOME/.gemini" ]; then
@@ -54,6 +69,14 @@ if [ -d "$HOME/.antigravity" ]; then
     echo "Copying Antigravity IDE settings/extensions from host ~/.antigravity..."
     mkdir -p "$SANDBOX_DIR/.antigravity"
     rsync -a --exclude="*Cache*" --exclude="*cache*" "$HOME/.antigravity/" "$SANDBOX_DIR/.antigravity/" 2>/dev/null || cp -rn "$HOME/.antigravity/"* "$SANDBOX_DIR/.antigravity/" 2>/dev/null || true
+fi
+if [ -d "$HOME/.config/Antigravity" ]; then
+    echo "Copying Antigravity config and login data from host ~/.config/Antigravity..."
+    rsync -a --exclude="*Cache*" --exclude="*cache*" --exclude="Crashpad" --exclude="logs" "$HOME/.config/Antigravity/" "$ANTIGRAVITY_DATA_DIR/" 2>/dev/null || cp -rn "$HOME/.config/Antigravity/"* "$ANTIGRAVITY_DATA_DIR/" 2>/dev/null || true
+fi
+if [ -d "$HOME/.config/Antigravity IDE" ]; then
+    echo "Copying Antigravity 2 IDE config and login data from host ~/.config/Antigravity IDE..."
+    rsync -a --exclude="*Cache*" --exclude="*cache*" --exclude="Crashpad" --exclude="logs" "$HOME/.config/Antigravity IDE/" "$ANTIGRAVITY_IDE_DATA_DIR/" 2>/dev/null || cp -rn "$HOME/.config/Antigravity IDE/"* "$ANTIGRAVITY_IDE_DATA_DIR/" 2>/dev/null || true
 fi
 
 # Fetch available Google Cloud accounts from the host system
@@ -124,10 +147,16 @@ RUN mkdir -p /etc/apt/keyrings /usr/share/keyrings && \
 # Perform a single apt-get update and install all required packages
 RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
     apt-get update && apt-get install -y --no-install-recommends \
-    # Core dependencies
+    # Core dependencies & Containerization
     git \
     sudo \
     python3 \
+    docker.io \
+    rootlesskit \
+    slirp4netns \
+    fuse-overlayfs \
+    uidmap \
+    iptables \
     libwayland-client0 \
     libwayland-egl1 \
     libwayland-cursor0 \
@@ -139,6 +168,9 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     libgtk-3-0 \
     libgbm1 \
     libasound2 \
+    libasound2-plugins \
+    pulseaudio-utils \
+    alsa-utils \
     xdg-utils \
     dbus-x11 \
     xauth \
@@ -159,6 +191,10 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     # Cleanup
     && rm -rf /tmp/chrome.deb /var/lib/apt/lists/* \
     && dbus-uuidgen > /etc/machine-id
+
+# Install Earthly CLI for containerized builds
+RUN wget -q https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && \
+    chmod +x /usr/local/bin/earthly
 
 # Install Firebase CLI, Gemini CLI and ast-grep via NPM, then clean NPM cache
 RUN npm install -g firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
@@ -205,15 +241,22 @@ RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original && \
     echo 'exit 0' >> /usr/bin/xdg-open && \
     chmod +x /usr/bin/xdg-open
     
-# Write a startup script that initializes an isolated DBus session,
-# then keeps the container alive. This replaces the need to mount
-# the host's session bus socket.
+# Write a startup script that initializes an isolated Rootless Docker daemon
+# and an isolated DBus session daemon, then keeps the container alive.
 RUN echo '#!/bin/bash' > /usr/local/bin/entrypoint.sh && \
+    echo '# Start isolated Rootless Docker daemon in background if rootlesskit is installed' >> /usr/local/bin/entrypoint.sh && \
+    echo 'if command -v dockerd-rootless.sh >/dev/null 2>&1; then' >> /usr/local/bin/entrypoint.sh && \
+    echo '  export XDG_RUNTIME_DIR="/run/user/$(id -u)"' >> /usr/local/bin/entrypoint.sh && \
+    echo '  mkdir -p "$XDG_RUNTIME_DIR"' >> /usr/local/bin/entrypoint.sh && \
+    echo '  dockerd-rootless.sh >/tmp/dockerd-rootless.log 2>&1 &' >> /usr/local/bin/entrypoint.sh && \
+    echo '  export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"' >> /usr/local/bin/entrypoint.sh && \
+    echo 'fi' >> /usr/local/bin/entrypoint.sh && \
     echo '# Start an isolated D-Bus session daemon and export its address' >> /usr/local/bin/entrypoint.sh && \
     echo 'eval $(dbus-launch --sh-syntax)' >> /usr/local/bin/entrypoint.sh && \
     echo 'export DBUS_SESSION_BUS_ADDRESS' >> /usr/local/bin/entrypoint.sh && \
     echo '# Save the address so interactive exec sessions can find it' >> /usr/local/bin/entrypoint.sh && \
     echo 'echo "export DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" > /run/user/$(id -u)/dbus-env.sh' >> /usr/local/bin/entrypoint.sh && \
+    echo 'echo "export DOCKER_HOST=unix:///run/user/\$(id -u)/docker.sock" >> /run/user/$(id -u)/dbus-env.sh' >> /usr/local/bin/entrypoint.sh && \
     echo '# Hand off to whatever command was passed (or keep alive)' >> /usr/local/bin/entrypoint.sh && \
     echo 'exec "$@"' >> /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
@@ -223,14 +266,14 @@ ARG USER_ID=1000
 ARG GROUP_ID=1000
 ARG USER_NAME=developer
 
-# Create a non-root user matching the host UID/GID for GUI socket access.
-# SECURITY WARNING: NOPASSWD:ALL allows the agent to execute any command as root.
-# While typical for dev sandboxes to allow package installation, a compromised
-# or rogue agent could cause damage. For stricter environments, limit sudo capabilities.
+# Create a non-root user matching the host UID/GID for GUI socket access,
+# and configure unprivileged user namespaces for Rootless Docker.
 RUN groupadd -g ${GROUP_ID} ${USER_NAME} && \
     useradd -s /bin/bash -l -u ${USER_ID} -g ${USER_NAME} -m ${USER_NAME} && \
     usermod -aG sudo,dialout,plugdev ${USER_NAME} && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    echo "${USER_NAME}:100000:65536" >> /etc/subuid && \
+    echo "${USER_NAME}:100000:65536" >> /etc/subgid && \
     # Create necessary configuration and runtime directories
     mkdir -p /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /run/user/${USER_ID} && \
     # Change ownership to the user
@@ -250,6 +293,7 @@ RUN echo 'alias antigravity="antigravity --no-sandbox --disable-gpu --ozone-plat
     echo '[ -n "$HOST_GIT_NAME" ] && git config --global user.name "$HOST_GIT_NAME"' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc && \
     echo 'git config --global core.excludesfile "/home/${USER_NAME}/.gitignore"' >> /home/${USER_NAME}/.bashrc && \
+    echo '[ -S /tmp/pulse-socket ] && export PULSE_SERVER=unix:/tmp/pulse-socket' >> /home/${USER_NAME}/.bashrc && \
     echo 'export CI=true' >> /home/${USER_NAME}/.bashrc && \
     echo 'export PLAYWRIGHT_HTML_REPORT=none' >> /home/${USER_NAME}/.bashrc && \
     echo 'parse_git_branch() {' >> /home/${USER_NAME}/.bashrc && \
@@ -269,7 +313,14 @@ fi
 # Ensure the global gitignore, gemini and antigravity folders exist on the host
 touch "$HOME/.gitignore"
 mkdir -p "$HOME/.gemini"
+mkdir -p "$HOME/.gemini/antigravity/brain"
+mkdir -p "$HOME/.gemini/antigravity/conversations"
+mkdir -p "$HOME/.gemini/antigravity-ide/brain"
+mkdir -p "$HOME/.gemini/antigravity-ide/conversations"
 mkdir -p "$HOME/.antigravity"
+mkdir -p "$HOME/.config/Antigravity"
+mkdir -p "$HOME/.config/Antigravity IDE"
+mkdir -p "$HOST_TOOLS_DIR"
 
 # Generate secure X11 authentication cookie
 XAUTH_FILE="/tmp/.docker.xauth"
@@ -306,6 +357,17 @@ else
     echo "Wayland not detected. Falling back to strict X11 configuration..."
 fi
 
+# Dynamically configure PulseAudio/PipeWire audio mounts if socket exists
+PULSE_ENV_CONF=""
+PULSE_VOL_CONF=""
+
+PULSE_SOCKET_HOST="/run/user/${HOST_UID}/pulse/native"
+if [ -S "$PULSE_SOCKET_HOST" ]; then
+    echo "PulseAudio/PipeWire audio session detected. Enabling audio recording & playback..."
+    PULSE_ENV_CONF="- PULSE_SERVER=unix:/tmp/pulse-socket"
+    PULSE_VOL_CONF="- ${PULSE_SOCKET_HOST}:/tmp/pulse-socket"
+fi
+
 # Generate docker-compose.yml
 cat << EOF > "$SANDBOX_DIR/docker-compose.yml"
 # Docker Compose configuration for the Antigravity developer environment
@@ -326,12 +388,13 @@ services:
     restart: "no"
     init: true
     shm_size: '4gb'
-    # Allow access to all USB/serial ports (ACM, USB, etc.) without privileged mode
+    # Allow access to all USB/serial/sound devices without privileged mode
     device_cgroup_rules:
       - 'c 188:* rmw' # USB serial (ttyUSB)
       - 'c 166:* rmw' # ACM serial (ttyACM)
       - 'c 189:* rmw' # USB bus devices
       - 'c 4:* rmw'   # Standard serial (ttyS)
+      - 'c 116:* rmw' # ALSA sound devices (microphone & speakers)
     environment:
       # Inject necessary display variables
       - DISPLAY=\${DISPLAY}
@@ -341,6 +404,7 @@ services:
       - CI=true
       - PLAYWRIGHT_HTML_REPORT=none
       ${WAYLAND_ENV_CONF}
+      ${PULSE_ENV_CONF}
     env_file:
       # Load API keys and other secrets from the .env file
       - .env
@@ -350,14 +414,23 @@ services:
       # Secure X11 authentication cookie
       - \${XAUTHORITY}:\${XAUTHORITY}:ro
       ${WAYLAND_VOL_CONF}
-      # Mount /dev to access all serial/USB devices without specifying them individually
+      ${PULSE_VOL_CONF}
+      # Mount /dev to access all serial/USB/sound devices without specifying them individually
       - /dev:/dev
       # Mount SDKMAN candidates
       - /home/${HOST_USER}/.sdkman:/home/${HOST_USER}/.sdkman
+      # Mount dev-tools / tools directory read-only
+      - ${HOST_TOOLS_DIR}:/home/${HOST_USER}/tools:ro
       # Mount the global ~/.gitignore file
       - /home/${HOST_USER}/.gitignore:/home/${HOST_USER}/.gitignore
       # Mount the copied ~/.gemini directory to persist Antigravity login and config
       - ${SANDBOX_DIR}/.gemini:/home/${HOST_USER}/.gemini
+      # Mount host brain, conversation, and config directories live so the container shares history/brain/rules with host
+      - /home/${HOST_USER}/.gemini/config:/home/${HOST_USER}/.gemini/config
+      - /home/${HOST_USER}/.gemini/antigravity/brain:/home/${HOST_USER}/.gemini/antigravity/brain
+      - /home/${HOST_USER}/.gemini/antigravity/conversations:/home/${HOST_USER}/.gemini/antigravity/conversations
+      - /home/${HOST_USER}/.gemini/antigravity-ide/brain:/home/${HOST_USER}/.gemini/antigravity-ide/brain
+      - /home/${HOST_USER}/.gemini/antigravity-ide/conversations:/home/${HOST_USER}/.gemini/antigravity-ide/conversations
       # Mount the copied ~/.antigravity directory to persist extensions
       - ${SANDBOX_DIR}/.antigravity:/home/${HOST_USER}/.antigravity
       # Mount the current project into the workspace directory
@@ -366,6 +439,7 @@ services:
       - ${SANDBOX_DIR}/gcloud-isolated:/home/${HOST_USER}/.config/gcloud
       # Persist Antigravity IDE state (login, settings, extensions) inside the sandbox
       - ${SANDBOX_DIR}/antigravity-data:/home/${HOST_USER}/.config/Antigravity
+      - "${SANDBOX_DIR}/antigravity-ide-data:/home/${HOST_USER}/.config/Antigravity IDE"
     # Keep the container running in the background
     command: tail -f /dev/null
 EOF
@@ -376,9 +450,17 @@ cat << 'EOF' > .agentrules
 You are operating inside a sandboxed Linux Docker container (Ubuntu 22.04). You have full CLI access and sudo privileges.
 
 # Available CLI Tools
-For multimedia processing use the following pre-installed command-line tools:
+For build and container operations, use:
+* docker (Rootless Docker daemon running isolated inside this sandbox container)
+* earthly (Earthly build framework using internal rootless Docker daemon)
 
-* ffmpeg2
+For audio recording and playback, use:
+* parec / paplay (PulseAudio recording / playback CLI)
+* arecord / aplay (ALSA recording / playback CLI)
+* sox / ffmpeg (Audio capture, conversion, and processing)
+
+For multimedia and image processing use:
+* ffmpeg
 * ImageMagick 6
 * Sound eXchange
 
