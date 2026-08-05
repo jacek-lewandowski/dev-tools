@@ -49,3 +49,9 @@ To optimize token consumption and ensure accurate structural edits across files,
   - Role and responsibility of major directories and core source files.
 - **Maintenance:** Update `PROJECT_MAP.md` whenever adding new components, deleting modules, or performing structural refactorings.
 - **Token Efficiency:** Keep descriptions concise (1-2 sentences per file/component) so the map remains a lightweight index rather than a detailed code dump.
+
+## Semantic Documentation Search (`semantic_docs`)
+
+- When searching non-code documentation, specifications, research notes, or PDFs by intent or topic:
+  - Use `python3 -m tools.semantic_docs.cli search "query"` (or global skill `semantic-docs`).
+  - Index new documentation folders using `python3 -m tools.semantic_docs.cli index /path/to/docs/`.
