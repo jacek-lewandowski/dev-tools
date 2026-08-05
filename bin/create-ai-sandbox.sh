@@ -160,12 +160,15 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     && rm -rf /tmp/chrome.deb /var/lib/apt/lists/* \
     && dbus-uuidgen > /etc/machine-id
 
-# Install Firebase CLI and Gemini CLI via NPM, then clean NPM cache
-RUN npm install -g firebase-tools @google/gemini-cli && npm cache clean --force
+# Install Firebase CLI, Gemini CLI and ast-grep via NPM, then clean NPM cache
+RUN npm install -g firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
+
+# Install comby for structural code search and replace
+RUN curl -sL https://get.comby.netlify.app | bash
 
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
 
-RUN HUB_URL='https://storage.googleapis.com/antigravity-public/antigravity-hub/2.1.4-6481382726303744/linux-x64/Antigravity.tar.gz' && \
+RUN HUB_URL='https://storage.googleapis.com/antigravity-public/antigravity-hub/2.3.0-5214728084127744/linux-x64/Antigravity.tar.gz' && \
     wget -q "$HUB_URL" -O Antigravity.tar.gz && \
     tar -xzf Antigravity.tar.gz -C /usr/local/ && \
     ln -s /usr/local/Antigravity-x64/antigravity /usr/local/bin/antigravity2 && \
