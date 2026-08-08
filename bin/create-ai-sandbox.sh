@@ -227,7 +227,7 @@ RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' /
 # Using --disable-dev-shm-usage as a fallback for shared memory optimization.
 RUN mv /usr/bin/google-chrome /usr/bin/google-chrome-original && \
     echo '#!/bin/bash' > /usr/bin/google-chrome && \
-    echo 'exec /usr/bin/google-chrome-original --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"' >> /usr/bin/google-chrome && \
+    echo 'exec /usr/bin/google-chrome-original --no-sandbox --disable-dev-shm-usage "$@"' >> /usr/bin/google-chrome && \
     chmod +x /usr/bin/google-chrome
 
 # Override xdg-open to intercept URLs (like login links) and print them to all active pseudo-terminals.
@@ -290,9 +290,9 @@ WORKDIR /home/${USER_NAME}/workspace
 USER ${USER_NAME}
 
 # Add aliases, source DBus environment for interactive shell sessions, and configure git
-RUN echo 'alias antigravity="antigravity --no-sandbox --disable-gpu --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
-    echo 'alias antigravity2="antigravity2 --no-sandbox --disable-gpu --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
-    echo 'alias antigravity2-ide="antigravity2-ide --no-sandbox --disable-gpu --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
+RUN echo 'alias antigravity="antigravity --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
+    echo 'alias antigravity2="antigravity2 --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
+    echo 'alias antigravity2-ide="antigravity2-ide --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
     echo 'source /run/user/$(id -u)/dbus-env.sh 2>/dev/null' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_NAME" ] && git config --global user.name "$HOST_GIT_NAME"' >> /home/${USER_NAME}/.bashrc && \
     echo '[ -n "$HOST_GIT_EMAIL" ] && git config --global user.email "$HOST_GIT_EMAIL"' >> /home/${USER_NAME}/.bashrc && \
