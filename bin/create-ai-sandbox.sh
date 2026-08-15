@@ -200,6 +200,9 @@ RUN wget -q https://github.com/earthly/earthly/releases/latest/download/earthly-
 # Install Python vector search dependencies for semantic_docs tool
 RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm
 
+# Install Headroom (token compression for tool outputs, logs, files, and proxy CLI)
+RUN pip3 install --no-cache-dir "headroom-ai[all]"
+
 # Install Firebase CLI, Gemini CLI and ast-grep via NPM, then clean NPM cache
 RUN npm install -g --force firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
 
@@ -457,6 +460,9 @@ You are operating inside a sandboxed Linux Docker container (Ubuntu 22.04). You 
 * docker (Rootless Docker daemon running isolated inside this sandbox container)
 * earthly (Earthly build framework using internal rootless Docker daemon)
 * python3 -m tools.semantic_docs.cli (Local vector search for docs, notes, PDFs, and daily tasks)
+* headroom (Token compression for tool outputs, logs, files, and proxy CLI: headroom wrap/proxy/doctor/mcp)
+  - Use headroom or `from headroom import compress` to compress large JSON payloads, log files, or code outputs to reduce token overhead.
+  - Use `headroom wrap <tool>` or `headroom proxy --port 8787` when running CLI agents to minimize token consumption.
 * parec / paplay (PulseAudio recording / playback CLI)
 * arecord / aplay (ALSA recording / playback CLI)
 * sox / ffmpeg (Audio capture, conversion, and processing)
