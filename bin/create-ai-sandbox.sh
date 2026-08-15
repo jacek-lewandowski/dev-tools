@@ -208,13 +208,13 @@ RUN curl -sL https://get.comby.netlify.app | bash
 
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
 
-RUN HUB_URL='https://storage.googleapis.com/antigravity-public/antigravity-hub/2.3.0-5214728084127744/linux-x64/Antigravity.tar.gz' && \
+RUN HUB_URL='https://storage.googleapis.com/antigravity-public/antigravity-hub/2.8.1-6512087774658560/linux-x64/Antigravity.tar.gz' && \
     wget -q "$HUB_URL" -O Antigravity.tar.gz && \
     tar -xzf Antigravity.tar.gz -C /usr/local/ && \
     ln -s /usr/local/Antigravity-x64/antigravity /usr/local/bin/antigravity2 && \
     rm -rf Antigravity.tar.gz
 
-RUN IDE_URL='https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.1.1-6123990880747520/linux-x64/Antigravity%20IDE.tar.gz' && \
+RUN IDE_URL='https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.5.5-4923483625488384/linux-x64/Antigravity%20IDE.tar.gz' && \
     wget -q "$IDE_URL" -O Antigravity_IDE.tar.gz && \
     tar -xzf Antigravity_IDE.tar.gz -C /usr/local/ && \
     ln -s /usr/local/Antigravity\ IDE/bin/antigravity-ide /usr/local/bin/antigravity2-ide && \
