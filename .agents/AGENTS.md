@@ -7,6 +7,13 @@ When running complex build/test commands (e.g., Earthly, Maven, Gradle, Bazel, N
 - Use the trimmed output files (generated in `.build_logs/`) to analyze compilation/test errors and root causes.
 - This filters progress bars, download noise, and repetitive warnings, preserving context tokens and pinpointing failure points.
 
+## Token Optimization & Context Compression (`headroom`)
+
+When `headroom` CLI or the `headroom-ai` Python package is available in the environment:
+- **Output & Payload Compression:** Compress large JSON dumps, API responses, raw command outputs, or multi-file context chunks before parsing or adding to conversation context (e.g., via `python3 -c "import sys; from headroom import compress; print(compress(sys.stdin.read()))"` or global skill `headroom`).
+- **Proxy & Subagent Wrapping:** When spawning child tools or proxying LLM interactions, use `headroom wrap <tool>` or `headroom proxy --port 8787` to minimize token overhead.
+- **Rule & Session Learning:** Run `headroom learn` (or `headroom learn --verbosity`) to extract patterns from past sessions and optimize rule verbosity.
+
 ## Code Refactoring and Structural Rewrites
 
 To optimize token consumption and ensure accurate structural edits across files, follow these guidelines when performing refactorings or pattern replacements:
