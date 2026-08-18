@@ -45,6 +45,8 @@ mkdir -p "$SANDBOX_DIR"
 mkdir -p "$ISOLATED_GCLOUD_DIR"
 mkdir -p "$ANTIGRAVITY_DATA_DIR"
 mkdir -p "$ANTIGRAVITY_IDE_DATA_DIR"
+mkdir -p "$SANDBOX_DIR/.claude"
+mkdir -p "$SANDBOX_DIR/claude-data"
 
 # Copy Antigravity login and configuration data from host
 if [ -d "$HOME/.gemini" ]; then
@@ -77,6 +79,16 @@ fi
 if [ -d "$HOME/.config/Antigravity IDE" ]; then
     echo "Copying Antigravity 2 IDE config and login data from host ~/.config/Antigravity IDE..."
     rsync -a --exclude="*Cache*" --exclude="*cache*" --exclude="Crashpad" --exclude="logs" "$HOME/.config/Antigravity IDE/" "$ANTIGRAVITY_IDE_DATA_DIR/" 2>/dev/null || cp -rn "$HOME/.config/Antigravity IDE/"* "$ANTIGRAVITY_IDE_DATA_DIR/" 2>/dev/null || true
+fi
+if [ -d "$HOME/.claude" ]; then
+    echo "Copying Claude configuration from host ~/.claude..."
+    mkdir -p "$SANDBOX_DIR/.claude"
+    rsync -a --exclude="*Cache*" --exclude="*cache*" "$HOME/.claude/" "$SANDBOX_DIR/.claude/" 2>/dev/null || cp -rn "$HOME/.claude/"* "$SANDBOX_DIR/.claude/" 2>/dev/null || true
+fi
+if [ -d "$HOME/.config/Claude" ]; then
+    echo "Copying Claude Desktop config and login data from host ~/.config/Claude..."
+    mkdir -p "$SANDBOX_DIR/claude-data"
+    rsync -a --exclude="*Cache*" --exclude="*cache*" --exclude="Crashpad" --exclude="logs" "$HOME/.config/Claude/" "$SANDBOX_DIR/claude-data/" 2>/dev/null || cp -rn "$HOME/.config/Claude/"* "$SANDBOX_DIR/claude-data/" 2>/dev/null || true
 fi
 
 # Fetch available Google Cloud accounts from the host system
@@ -127,6 +139,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Add all custom GPG keys and repositories
 RUN mkdir -p /etc/apt/keyrings /usr/share/keyrings && \
+    # Anthropic Claude Desktop
+    curl -fsSLo /usr/share/keyrings/claude-desktop-archive-keyring.asc https://downloads.claude.ai/claude-desktop/key.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/claude-desktop-archive-keyring.asc] https://downloads.claude.ai/claude-desktop/apt/stable stable main" > /etc/apt/sources.list.d/claude-desktop.list && \
     # Google Antigravity
     curl -fsSL https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg | gpg --dearmor -o /etc/apt/keyrings/antigravity-repo-key.gpg && \
     echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" > /etc/apt/sources.list.d/antigravity.list && \
@@ -176,6 +191,7 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     dbus-x11 \
     xauth \
     # Custom repository packages
+    claude-desktop \
     antigravity \
     google-cloud-cli \
     cloudflared \
@@ -203,8 +219,8 @@ RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm
 # Install Headroom (token compression for tool outputs, logs, files, and proxy CLI)
 RUN pip3 install --no-cache-dir "headroom-ai[all]"
 
-# Install Firebase CLI, Gemini CLI and ast-grep via NPM, then clean NPM cache
-RUN npm install -g --force firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
+# Install Claude Code CLI, Firebase CLI, Gemini CLI and ast-grep via NPM, then clean NPM cache
+RUN npm install -g --force @anthropic-ai/claude-code firebase-tools @google/gemini-cli @ast-grep/cli && npm cache clean --force
 
 # Install comby for structural code search and replace
 RUN curl -sL https://get.comby.netlify.app | bash
@@ -282,9 +298,9 @@ RUN groupadd -g ${GROUP_ID} ${USER_NAME} && \
     echo "${USER_NAME}:100000:65536" >> /etc/subuid && \
     echo "${USER_NAME}:100000:65536" >> /etc/subgid && \
     # Create necessary configuration and runtime directories
-    mkdir -p /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /run/user/${USER_ID} && \
+    mkdir -p /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /home/${USER_NAME}/.claude /run/user/${USER_ID} && \
     # Change ownership to the user
-    chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /run/user/${USER_ID} && \
+    chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.config /home/${USER_NAME}/.antigravity /home/${USER_NAME}/.gemini /home/${USER_NAME}/.claude /run/user/${USER_ID} && \
     # Set strict permissions for the XDG_RUNTIME_DIR as required by Linux security standards
     chmod 700 /run/user/${USER_ID}
 
@@ -293,7 +309,8 @@ WORKDIR /home/${USER_NAME}/workspace
 USER ${USER_NAME}
 
 # Add aliases, source DBus environment for interactive shell sessions, and configure git
-RUN echo 'alias antigravity="antigravity --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
+RUN echo 'alias claude-desktop="claude-desktop --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
+    echo 'alias antigravity="antigravity --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
     echo 'alias antigravity2="antigravity2 --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
     echo 'alias antigravity2-ide="antigravity2-ide --no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations"' >> /home/${USER_NAME}/.bashrc && \
     echo 'source /run/user/$(id -u)/dbus-env.sh 2>/dev/null' >> /home/${USER_NAME}/.bashrc && \
@@ -314,10 +331,11 @@ EOF
 # Ensure the .env file exists and populate it with required variables
 if [ ! -f "$ENV_DIR/.env" ]; then
     echo "# Environment variables for your sandbox" > "$ENV_DIR/.env"
+    echo "# ANTHROPIC_API_KEY=your_api_key_here" >> "$ENV_DIR/.env"
     echo "# GEMINI_API_KEY=your_api_key_here" >> "$ENV_DIR/.env"
 fi
 
-# Ensure the global gitignore, gemini and antigravity folders exist on the host
+# Ensure the global gitignore, gemini, antigravity, and claude folders exist on the host
 touch "$HOME/.gitignore"
 mkdir -p "$HOME/.gemini"
 mkdir -p "$HOME/.gemini/antigravity/brain"
@@ -327,6 +345,8 @@ mkdir -p "$HOME/.gemini/antigravity-ide/conversations"
 mkdir -p "$HOME/.antigravity"
 mkdir -p "$HOME/.config/Antigravity"
 mkdir -p "$HOME/.config/Antigravity IDE"
+mkdir -p "$HOME/.config/Claude"
+mkdir -p "$HOME/.claude"
 mkdir -p "$HOST_TOOLS_DIR"
 
 # Generate secure X11 authentication cookie
@@ -447,6 +467,9 @@ services:
       # Persist Antigravity IDE state (login, settings, extensions) inside the sandbox
       - ${SANDBOX_DIR}/antigravity-data:/home/${HOST_USER}/.config/Antigravity
       - "${SANDBOX_DIR}/antigravity-ide-data:/home/${HOST_USER}/.config/Antigravity IDE"
+      # Persist Claude Code / Claude Desktop state inside the sandbox
+      - ${SANDBOX_DIR}/.claude:/home/${HOST_USER}/.claude
+      - ${SANDBOX_DIR}/claude-data:/home/${HOST_USER}/.config/Claude
     # Keep the container running in the background
     command: tail -f /dev/null
 EOF
@@ -457,6 +480,8 @@ cat << 'EOF' > .agentrules
 You are operating inside a sandboxed Linux Docker container (Ubuntu 22.04). You have full CLI access and sudo privileges.
 
 # Available CLI Tools
+* claude (Claude Code CLI for agentic coding and terminal assistance)
+* claude-desktop (Claude Desktop application on Linux)
 * docker (Rootless Docker daemon running isolated inside this sandbox container)
 * earthly (Earthly build framework using internal rootless Docker daemon)
 * python3 -m tools.semantic_docs.cli (Local vector search for docs, notes, PDFs, and daily tasks)
