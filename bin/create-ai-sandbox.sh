@@ -22,9 +22,12 @@ readonly BASHRC_BEGIN='# >>> dev-tools ai-sandbox helpers >>>'
 readonly BASHRC_END='# <<< dev-tools ai-sandbox helpers <<<'
 
 # Pinned upstream versions. Bump deliberately; do not float.
+readonly ANTIGRAVITY_CLI_VERSION='1.1.22-5711547746615296'
 readonly ANTIGRAVITY_HUB_VERSION='2.8.1-6512087774658560'
 readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
+readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
+readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
 readonly NODE_MAJOR='24'
 
 # ---------------------------------------------------------------------------
@@ -363,7 +366,7 @@ if [ "$DISPLAY_MODE" = "nested" ] || [ "$DISPLAY_MODE" = "xpra" ]; then
     # 'xauth -f F nmerge' deadlocks the second process against the first's lock
     # on F, which fails with "timeout in locking authority file".
     XAUTH_WILD=$(xauth -f "$XAUTH_FILE" nlist ":${NESTED_DISPLAY_NUM}" 2>/dev/null \
-                 | sed -e 's/^..../ffff/' || true)
+                 | grep -v '^ffff' | sed -e 's/^..../ffff/' || true)
     if [ -n "$XAUTH_WILD" ]; then
         printf '%s\n' "$XAUTH_WILD" | xauth -f "$XAUTH_FILE" nmerge -
     fi
@@ -372,7 +375,10 @@ elif [ "$DISPLAY_MODE" = "host" ]; then
     rm -f "$XAUTH_FILE"
     : > "$XAUTH_FILE"
     chmod 600 "$XAUTH_FILE"
-    xauth nlist "$DISPLAY" | sed -e 's/^..../ffff/' | xauth -f "$XAUTH_FILE" nmerge -
+    XAUTH_HOST=$(xauth nlist "$DISPLAY" 2>/dev/null | sed -e 's/^..../ffff/' | sort -u || true)
+    if [ -n "$XAUTH_HOST" ]; then
+        printf '%s\n' "$XAUTH_HOST" | xauth -f "$XAUTH_FILE" nmerge -
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -868,9 +874,12 @@ ENV DEBIAN_FRONTEND=noninteractive \\
     PLAYWRIGHT_HTML_REPORT=none
 
 ARG NODE_MAJOR=${NODE_MAJOR}
+ARG ANTIGRAVITY_CLI_VERSION=${ANTIGRAVITY_CLI_VERSION}
 ARG ANTIGRAVITY_HUB_VERSION=${ANTIGRAVITY_HUB_VERSION}
 ARG ANTIGRAVITY_IDE_VERSION=${ANTIGRAVITY_IDE_VERSION}
+ARG COMBY_VERSION=${COMBY_VERSION}
 ARG EARTHLY_VERSION=${EARTHLY_VERSION}
+ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
 DOCKERFILE_HEAD
 
 cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
@@ -924,10 +933,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && dbus-uuidgen > /etc/machine-id
 
 # Google Chrome, in its own layer so the rest of the image caches independently.
-RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends /tmp/chrome.deb \
-    && rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
+RUN set -eux; \
+    wget -q -O /tmp/chrome.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${GOOGLE_CHROME_VERSION}_amd64.deb"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends /tmp/chrome.deb; \
+    rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm "headroom-ai[all]"
 
@@ -935,8 +945,16 @@ RUN npm install -g --force \
         @anthropic-ai/claude-code firebase-tools @google/gemini-cli @ast-grep/cli \
     && npm cache clean --force
 
-RUN curl -sL https://get.comby.netlify.app | bash
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash
+RUN set -eux; \
+    wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
+    chmod +x /usr/local/bin/comby
+
+RUN set -eux; \
+    wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
+    tar -xzf /tmp/cli.tar.gz -C /tmp; \
+    mv /tmp/antigravity /usr/local/bin/agy; \
+    chmod +x /usr/local/bin/agy; \
+    rm -f /tmp/cli.tar.gz
 
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-hub/${ANTIGRAVITY_HUB_VERSION}/linux-x64/Antigravity.tar.gz" -O /tmp/hub.tar.gz; \
@@ -1085,17 +1103,24 @@ chmod 600 "$ENV_FILE"
 HOST_GIT_NAME=$(git config user.name 2>/dev/null || true)
 HOST_GIT_EMAIL=$(git config user.email 2>/dev/null || true)
 
-python3 - "$ENV_FILE" <<PYEOF
-import sys
+HOST_UID="$HOST_UID" \
+HOST_GID="$HOST_GID" \
+HOST_USER="$HOST_USER" \
+HOST_GIT_NAME="$HOST_GIT_NAME" \
+HOST_GIT_EMAIL="$HOST_GIT_EMAIL" \
+WITH_DOCKER="$WITH_DOCKER" \
+DISPLAY_MODE="$DISPLAY_MODE" \
+python3 - "$ENV_FILE" <<'PYEOF'
+import os, sys
 path = sys.argv[1]
 managed = {
-    "HOST_UID": "${HOST_UID}",
-    "HOST_GID": "${HOST_GID}",
-    "HOST_USER": "${HOST_USER}",
-    "HOST_GIT_NAME": "${HOST_GIT_NAME}",
-    "HOST_GIT_EMAIL": "${HOST_GIT_EMAIL}",
-    "SANDBOX_WITH_DOCKER": "$([ "$WITH_DOCKER" = yes ] && echo 1 || echo 0)",
-    "SANDBOX_DISPLAY_MODE": "${DISPLAY_MODE}",
+    "HOST_UID": os.environ.get("HOST_UID", ""),
+    "HOST_GID": os.environ.get("HOST_GID", ""),
+    "HOST_USER": os.environ.get("HOST_USER", ""),
+    "HOST_GIT_NAME": os.environ.get("HOST_GIT_NAME", ""),
+    "HOST_GIT_EMAIL": os.environ.get("HOST_GIT_EMAIL", ""),
+    "SANDBOX_WITH_DOCKER": "1" if os.environ.get("WITH_DOCKER") == "yes" else "0",
+    "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
 }
 MARKER = "# Managed by create-ai-sandbox.sh"
 kept = [
@@ -1177,8 +1202,8 @@ cat <<COMPOSE_VOLS
       - "${PROJECT_ABS_DIR}:${PROJECT_ABS_DIR}"
       # dev-tools helpers, read-only.
       - "${HOST_TOOLS_DIR}:${CONTAINER_HOME}/tools:ro"
-      # Toolchains managed by SDKMAN on the host.
-      - "${HOME}/.sdkman:${CONTAINER_HOME}/.sdkman"
+      # Toolchains managed by SDKMAN on the host, read-only.
+      - "${HOME}/.sdkman:${CONTAINER_HOME}/.sdkman:ro"
       - "${HOME}/.gitignore:${CONTAINER_HOME}/.gitignore"
       # Sandbox-local copies of tool state (logins, settings, extensions).
       - "${SANDBOX_DIR}/.gemini:${CONTAINER_HOME}/.gemini"
@@ -1236,6 +1261,7 @@ case "$MODE" in
     *) exit 0 ;;
 esac
 
+HOST_XAUTHORITY="${XAUTHORITY:-}"
 SOCK="/tmp/.X11-unix/X${NUM}"
 export XAUTHORITY="$XAUTH"
 
@@ -1314,7 +1340,7 @@ else
         for subcmd in start seamless; do
             for extra in "--systemd-run=no --notifications=no --mdns=no --pulseaudio=no --dbus-launch=no" ""; do
                 # shellcheck disable=SC2086
-                if xpra "$subcmd" ":${NUM}" --use-display=yes --daemon=yes $extra \
+                if xpra "$subcmd" ":${NUM}" --use-display=yes --daemon=yes --start-child="" $extra \
                         >>"${LOG_DIR}/xpra.log" 2>&1; then
                     started=yes; break
                 fi
@@ -1333,7 +1359,11 @@ else
     # your normal display and cookie -- not the sandbox's.
     if ! pgrep -f "xpra attach :${NUM}\b" >/dev/null 2>&1; then
         echo "Attaching the xpra viewer..."
-        ( unset XAUTHORITY
+        ( if [ -n "$HOST_XAUTHORITY" ]; then
+              export XAUTHORITY="$HOST_XAUTHORITY"
+          else
+              unset XAUTHORITY
+          fi
           exec xpra attach ":${NUM}" >>"${LOG_DIR}/xpra-attach.log" 2>&1 ) &
         sleep 1
     fi
@@ -1422,8 +1452,12 @@ ai-sandbox() {
     fi
     if [ "$#" -eq 0 ]; then
         _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash
+    elif [ "$#" -eq 1 ]; then
+        # A single argument is treated as a shell snippet: ai-sandbox 'cd src && make'
+        _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc "$1"
     else
-        _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc "$*"
+        # Several arguments are a command and its arguments; quoting is preserved.
+        _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc 'exec "$@"' ai-sandbox "$@"
     fi
 }
 
