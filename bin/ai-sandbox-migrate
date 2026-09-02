@@ -76,6 +76,18 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
         continue
     fi
 
+    # Never migrate a sandbox that is currently running. Moving the directory
+    # out from under a live container strands its bind mounts, and force-removing
+    # the container would destroy whatever the user is doing inside it -- which,
+    # for the sandbox this very script may be running in, means killing the
+    # session that invoked it. Refuse, and say how to proceed.
+    if command -v docker >/dev/null 2>&1 &&
+       [ "$(docker container inspect -f '{{.State.Running}}' "$(basename "$dir")" 2>/dev/null)" = "true" ]; then
+        say "cannot migrate $(basename "$dir"): its container is running."
+        say "  stop it first (ai-sandbox-stop in that project), then re-run."
+        continue
+    fi
+
     # The display number is derived from the id, so the old server must go
     # before the directory holding its stop script moves.
     [ -x "$dir/stop-display.sh" ] && "$dir/stop-display.sh" >/dev/null 2>&1 || true
