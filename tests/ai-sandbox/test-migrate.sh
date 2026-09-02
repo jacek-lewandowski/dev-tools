@@ -68,4 +68,22 @@ assert_file     "conflicting source kept" "$AI_SANDBOX_ROOT/dup-agent"
 assert_contains "conflict reported"       "$out" 'already exists'
 
 rm -rf "$tmp" "$tmp2" "$tmp3" "$tmp4"
+# A running container must block its own migration: moving the directory would
+# strand a live container's bind mounts, and force-removing it would destroy
+# whatever is running inside.
+fake_home >/dev/null; tmpR="$FAKE_HOME_DIR"
+pr="$tmpR/work/live"; mkdir -p "$pr"
+live="$AI_SANDBOX_ROOT/live-agent"; mkdir -p "$live/.claude"
+printf 'working_dir: "%s"\n' "$pr" > "$live/docker-compose.yml"
+echo token > "$live/.claude/.credentials.json"
+out=$(DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai-sandbox-migrate" 2>&1)
+assert_file     "running sandbox not moved"    "$live/docker-compose.yml"
+assert_eq       "its credentials untouched"    "$(cat "$live/.claude/.credentials.json")" 'token'
+assert_no_file  "no new dir created for it"    "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$pr")-agent"
+assert_contains "refusal explains what to do"  "$out" 'ai-sandbox-stop'
+# Once stopped, the same sandbox migrates normally.
+out=$(bash "$REPO_ROOT/bin/ai-sandbox-migrate" 2>&1)
+assert_file "migrates once stopped" "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$pr")-agent/.claude/.credentials.json"
+rm -rf "$tmpR"
+
 finish
