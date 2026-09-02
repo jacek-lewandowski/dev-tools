@@ -276,6 +276,13 @@ printf '%s\n' "$PROJECT_ABS_DIR" > "$SANDBOX_DIR/project-path"
 
 mkdir -p "$BUILD_DIR"
 
+# Bulk assets every sandbox shares, rather than each carrying a copy.
+SHARED_DIR="$AI_SANDBOX_ROOT/shared"
+while IFS='|' read -r _sub _ctr _sb; do
+    [ -n "$_sub" ] && mkdir -p "$SHARED_DIR/$_sub"
+done < <(ai_sandbox_shared_mounts)
+unset _sub _ctr _sb
+
 mkdir -p "$XAUTH_DIR" \
          "$SANDBOX_DIR/antigravity-data" \
          "$SANDBOX_DIR/antigravity-ide-data" \
@@ -710,6 +717,18 @@ step "Copying tool state into the sandbox"
 COMMON_EXCLUDES=(
     --exclude='*Cache*' --exclude='*cache*' --exclude='BrowserMetrics*'
     --exclude='Crashpad' --exclude='logs' --exclude='tmp'
+    # Shared between sandboxes now, so a per-project copy is pure duplication.
+    --exclude='extensions'
+    --exclude='downloads'
+    --exclude='claude-code'
+    --exclude='CachedExtensionVSIXs' --exclude='CachedData' --exclude='WebStorage'
+    # Host state a single-project sandbox has no use for: workspaceStorage holds
+    # the host's state for every workspace ever opened, and the browser profile's
+    # model stores regenerate on demand.
+    --exclude='workspaceStorage'
+    --exclude='Safe Browsing' --exclude='optimization_guide_model_store'
+    --exclude='WasmTtsEngine' --exclude='OnDeviceHeadSuggestModel'
+    --exclude='CertificateRevocation'
 )
 
 if [ -d "$HOME/.gemini" ]; then
@@ -1316,6 +1335,12 @@ cat <<COMPOSE_VOLS
       # Live-shared Claude Code per-project history.
       - "${HOME}/.claude/projects:${CONTAINER_HOME}/.claude/projects"
 COMPOSE_VOLS
+
+echo "      # Bulk assets shared by every sandbox."
+while IFS='|' read -r _sub _ctr _sb; do
+    [ -n "$_sub" ] || continue
+    printf '      - "%s/%s:%s/%s"\n' "$SHARED_DIR" "$_sub" "$CONTAINER_HOME" "$_ctr"
+done < <(ai_sandbox_shared_mounts)
 printf '%s' "$DISPLAY_VOL_LINES"
 } > "$COMPOSE_FILE"
 
