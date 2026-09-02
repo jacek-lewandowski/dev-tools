@@ -76,3 +76,32 @@ ai_sandbox_build_hash() {
         printf '%s\0' "$@"
     } | sha256sum | cut -d' ' -f1
 }
+
+# Bulk, read-mostly data that is identical across projects, so every sandbox
+# mounts one shared copy instead of carrying its own.
+#
+# Each row is three fields:
+#   <subdirectory of shared/>|<path in the container>|<path in the sandbox dir>
+#
+# The second and third differ, and that difference is load-bearing. The
+# container sees ~/.config/Claude, but the sandbox directory holds the same data
+# under claude-data/ (and antigravity-data/, antigravity-ide-data/). An empty
+# third field means the data exists ONLY in the container's writable layer and
+# has no per-project copy on disk -- migration and gc skip those rows rather
+# than hunting for a directory that never existed.
+#
+# These are nested bind mounts inside the per-project mounts. Docker orders
+# mounts by destination depth, which is what makes the nesting work;
+# ~/.claude/projects has relied on that since before this change.
+ai_sandbox_shared_mounts() {
+    cat <<'SHARED'
+antigravity-extensions|.antigravity/extensions|.antigravity/extensions
+antigravity-ide-extensions|.antigravity-ide/extensions|
+claude-downloads|.claude/downloads|.claude/downloads
+claude-desktop-versions|.config/Claude/claude-code|claude-data/claude-code
+ide-vsix|.config/Antigravity IDE/CachedExtensionVSIXs|antigravity-ide-data/CachedExtensionVSIXs
+ide-cacheddata|.config/Antigravity IDE/CachedData|antigravity-ide-data/CachedData
+cache|.cache|
+npm|.npm|
+SHARED
+}
