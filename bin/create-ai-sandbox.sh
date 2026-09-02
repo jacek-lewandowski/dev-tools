@@ -145,28 +145,44 @@ docker compose version >/dev/null 2>&1 || die "'docker compose' (v2 plugin) is r
 log "ok"
 
 # ---------------------------------------------------------------------------
+# Resolve this script's own location, so we can find both the dev-tools repo
+# it lives in and the identity library it shares with the ai-sandbox-* helpers.
+# ---------------------------------------------------------------------------
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+    link=$(readlink "$SCRIPT_PATH")
+    case "$link" in
+        /*) SCRIPT_PATH=$link ;;
+        *)  SCRIPT_PATH="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/$link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+
+# Identity and path helpers, shared with the ai-sandbox-* commands so the two
+# can never compute a different id for the same project.
+# shellcheck source=bin/ai-sandbox-lib.sh
+. "$SCRIPT_DIR/ai-sandbox-lib.sh"
+
+# ---------------------------------------------------------------------------
 # Resolve the project
 # ---------------------------------------------------------------------------
 
-cd "${PROJECT_ARG:-.}" || die "Cannot enter ${PROJECT_ARG:-.}"
-
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    PROJECT_ABS_DIR=$(git rev-parse --show-toplevel)
-else
-    PROJECT_ABS_DIR=$PWD
-fi
+PROJECT_ABS_DIR=$(ai_sandbox_project_root "${PROJECT_ARG:-.}") \
+    || die "Cannot enter ${PROJECT_ARG:-.}"
 cd "$PROJECT_ABS_DIR"
 
-# Sanitise for Docker. Names must start with an alphanumeric character.
-PROJECT_NAME=$(printf '%s' "${PROJECT_ABS_DIR##*/}" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed -e 's/[^a-z0-9]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-\{2,\}/-/g')
+# Cosmetic only: hostname and log lines. Never used as a unique key, because
+# two projects can share a basename.
+PROJECT_NAME=$(ai_sandbox_slug "${PROJECT_ABS_DIR##*/}")
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="project"
 
-CONTAINER_NAME="${PROJECT_NAME}-agent"
-IMAGE_NAME="ai-sandbox-${PROJECT_NAME}:latest"
+PROJECT_ID=$(ai_sandbox_project_id "$PROJECT_ABS_DIR")
+CONTAINER_NAME="${PROJECT_ID}-agent"
 
-SANDBOX_DIR="$HOME/.ai-sandbox/${CONTAINER_NAME}"
+SANDBOX_DIR="$AI_SANDBOX_ROOT/${CONTAINER_NAME}"
+IMAGE_NAME="ai-sandbox-${PROJECT_ID}:latest"   # replaced by the shared tag in Task 6
 BUILD_DIR="$SANDBOX_DIR/build"          # docker build context: Dockerfile + helpers only
 ENV_FILE="$SANDBOX_DIR/.env"
 COMPOSE_FILE="$SANDBOX_DIR/docker-compose.yml"
@@ -190,6 +206,11 @@ log "container $CONTAINER_NAME"
 
 mkdir -p "$SANDBOX_DIR"
 chmod 700 "$SANDBOX_DIR"                # holds OAuth tokens and API keys
+
+# The authoritative record of which project this sandbox belongs to. Migration
+# reads it to tell an already-migrated directory from a legacy one.
+printf '%s\n' "$PROJECT_ABS_DIR" > "$SANDBOX_DIR/project-path"
+
 mkdir -p "$BUILD_DIR" \
          "$XAUTH_DIR" \
          "$SANDBOX_DIR/antigravity-data" \
@@ -202,17 +223,6 @@ mkdir -p "$BUILD_DIR" \
 # ---------------------------------------------------------------------------
 # Locate the host tools/ directory
 # ---------------------------------------------------------------------------
-
-SCRIPT_PATH="${BASH_SOURCE[0]}"
-while [ -L "$SCRIPT_PATH" ]; do
-    link=$(readlink "$SCRIPT_PATH")
-    case "$link" in
-        /*) SCRIPT_PATH=$link ;;
-        *)  SCRIPT_PATH="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/$link" ;;
-    esac
-done
-SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
-DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
 if   [ -d "$DEV_TOOLS_DIR/tools" ];              then HOST_TOOLS_DIR="$DEV_TOOLS_DIR/tools"
 elif [ -d "$HOME/dev/public/dev-tools/tools" ];  then HOST_TOOLS_DIR="$HOME/dev/public/dev-tools/tools"
@@ -258,9 +268,9 @@ if [ "$DISPLAY_MODE" = "auto" ]; then
 fi
 log "mode: $DISPLAY_MODE"
 
-# NESTED_DISPLAY is derived from the project name so it is stable across runs
-# and distinct per sandbox.
-NESTED_DISPLAY_NUM=$(( 100 + $(printf '%s' "$PROJECT_NAME" | cksum | cut -d' ' -f1) % 80 ))
+# NESTED_DISPLAY is derived from the project id so it is stable across runs
+# and distinct per sandbox, even for two projects sharing a basename.
+NESTED_DISPLAY_NUM=$(( 100 + $(printf '%s' "$PROJECT_ID" | cksum | cut -d' ' -f1) % 80 ))
 
 # The container gets its own /tmp/.X11-unix containing exactly one socket: a hard
 # link to this sandbox's Xephyr socket. A directory (rather than a single-socket
