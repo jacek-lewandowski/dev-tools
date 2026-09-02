@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Removes ONE project's sandbox. Never touches shared/ or image/, which other
+# projects depend on.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_require_ctx || exit 1
+
+printf 'Remove %s and all credentials in %s? [y/N] ' "$AI_SANDBOX_NAME" "$AI_SANDBOX_DIR"
+read -r reply
+case "$reply" in
+    y|Y) ;;
+    *) echo "Cancelled."; exit 1 ;;
+esac
+ai_sandbox_compose down -v 2>/dev/null || true
+[ -x "$AI_SANDBOX_DIR/stop-display.sh" ] && "$AI_SANDBOX_DIR/stop-display.sh"
+rm -rf "$AI_SANDBOX_DIR"
+echo "Removed $AI_SANDBOX_DIR."
+echo "Shared assets in $AI_SANDBOX_ROOT/shared and the image were left in place."

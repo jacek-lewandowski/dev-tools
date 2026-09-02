@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+
+ai_sandbox_require_ctx || exit 1
+
+if [ "${1:-}" = "--print-context" ]; then
+    printf 'dir=%s\nname=%s\nproject=%s\n' \
+        "$AI_SANDBOX_DIR" "$AI_SANDBOX_NAME" "$AI_SANDBOX_PROJECT"
+    exit 0
+fi
+
+# Must precede 'compose up': Docker would otherwise create the display's mount
+# source itself, as root, and Xephyr could no longer bind its socket.
+if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
+    "$AI_SANDBOX_DIR/start-display.sh" || exit 1
+fi
+if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null)" != "true" ]; then
+    echo "Starting $AI_SANDBOX_NAME..."
+    ai_sandbox_compose up -d || exit 1
+fi
+
+if [ "$#" -eq 0 ]; then
+    ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash
+elif [ "$#" -eq 1 ]; then
+    # A single argument is treated as a shell snippet: ai-sandbox 'cd src && make'
+    ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc "$1"
+else
+    # Several arguments are a command and its arguments; quoting is preserved.
+    ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc 'exec "$@"' ai-sandbox "$@"
+fi

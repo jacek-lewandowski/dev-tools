@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Expose a device plugged in after the container started, without recreating
+# it. The device cgroup already permits USB serial majors.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_require_ctx || exit 1
+
+dev=${1:-}
+if [ -z "$dev" ] || [ ! -e "$dev" ]; then
+    echo "Usage: ai-sandbox-attach /dev/ttyUSB0" >&2
+    exit 1
+fi
+major=$((16#$(stat -c '%t' "$dev")))
+minor=$((16#$(stat -c '%T' "$dev")))
+docker exec -u 0 "$AI_SANDBOX_NAME" bash -c \
+    "rm -f '$dev'; mknod '$dev' c $major $minor && chgrp dialout '$dev' && chmod 660 '$dev'"
+echo "Attached $dev ($major:$minor) to $AI_SANDBOX_NAME."
