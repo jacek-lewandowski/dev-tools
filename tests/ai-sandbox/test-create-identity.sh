@@ -19,7 +19,15 @@ id=$(ai_sandbox_project_id "$proj")
 dir="$AI_SANDBOX_ROOT/${id}-agent"
 assert_file  "sandbox dir uses the path-derived id" "$dir"
 assert_file  "project-path recorded"                "$dir/project-path"
-assert_eq    "project-path content"                 "$(cat "$dir/project-path")" "$proj"
+# $(...) strips ALL trailing newlines, so comparing against "$(cat file)"
+# can't tell "$proj\n" apart from "$proj" with no newline at all. Read the
+# exact bytes instead (appending 'x' then stripping it is the standard trick
+# to stop command substitution from eating a trailing newline) so a
+# regression that drops the trailing newline actually fails this assertion.
+project_path_bytes=$(cat "$dir/project-path"; printf x)
+project_path_bytes=${project_path_bytes%x}
+assert_eq    "project-path content (exact bytes, trailing newline included)" \
+             "$project_path_bytes" "$proj"$'\n'
 assert_no_file "no basename-only dir"               "$AI_SANDBOX_ROOT/dev-tools-agent"
 assert_contains "compose names the new container"   "$(cat "$dir/docker-compose.yml")" \
                 "container_name: \"${id}-agent\""
