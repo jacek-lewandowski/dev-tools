@@ -169,6 +169,10 @@ DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 # Resolve the project
 # ---------------------------------------------------------------------------
 
+if [ -x "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" ]; then
+    "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" || true
+fi
+
 PROJECT_ABS_DIR=$(ai_sandbox_project_root "${PROJECT_ARG:-.}") \
     || die "Cannot enter ${PROJECT_ARG:-.}"
 cd "$PROJECT_ABS_DIR"
@@ -1422,7 +1426,7 @@ touch "$BASHRC_FILE"
 
 mkdir -p "$AI_SANDBOX_ROOT/bin"
 for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop ai-sandbox-restart \
-              ai-sandbox-attach ai-sandbox-rm; do
+              ai-sandbox-attach ai-sandbox-rm ai-sandbox-migrate; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
 done
 # ai-sandbox-lib.sh is sourced, not run.

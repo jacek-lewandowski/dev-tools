@@ -2,6 +2,10 @@
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
 
+# Runs on every start so an old layout is repaired without the user having to
+# know that anything changed.
+"$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-migrate" || true
+
 ai_sandbox_require_ctx || exit 1
 
 if [ "${1:-}" = "--print-context" ]; then
