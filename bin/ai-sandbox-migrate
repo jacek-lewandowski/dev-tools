@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Bring ~/.ai-sandbox up to the current schema. Idempotent, silent when there
+# is nothing to do, and safe to run before every sandbox start.
+#
+# Nothing here deletes user data. Directories MOVE; there is no
+# copy-then-delete anywhere in this file.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+
+[ -d "$AI_SANDBOX_ROOT" ] || exit 0
+
+say() { printf 'ai-sandbox: %s\n' "$*"; }
+
+# --- Refresh installed helpers from the recorded source tree ---------------
+if [ -f "$AI_SANDBOX_ROOT/config" ]; then
+    # shellcheck disable=SC1091
+    . "$AI_SANDBOX_ROOT/config"
+    if [ -n "${DEV_TOOLS_DIR:-}" ] && [ -d "$DEV_TOOLS_DIR/bin" ]; then
+        for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop \
+                      ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm \
+                      ai-sandbox-migrate; do
+            src="$DEV_TOOLS_DIR/bin/$helper"
+            dst="$AI_SANDBOX_ROOT/bin/$helper"
+            [ -f "$src" ] || continue
+            if ! cmp -s "$src" "$dst"; then
+                install -m 0755 "$src" "$dst"
+            fi
+        done
+        chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh" 2>/dev/null || true
+    fi
+fi
+
+# --- M1: rename legacy, basename-keyed sandboxes ---------------------------
+# 'working_dir:' is the absolute project path; the script has always written
+# it. Reading it makes the rename deterministic instead of a basename guess,
+# which is what lets two same-named projects migrate correctly.
+legacy_project_of() {
+    # '|| true': an unreadable or otherwise unparsable compose file must be
+    # reported and skipped like any other unparsable directory, not (via
+    # set -e + pipefail) abort the whole run and strand every later
+    # directory in the glob unmigrated.
+    sed -n 's/^[[:space:]]*working_dir:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' \
+        "$1" 2>/dev/null | tail -n 1 || true
+}
+
+migrated=0
+for dir in "$AI_SANDBOX_ROOT"/*-agent; do
+    [ -d "$dir" ] || continue
+    [ -f "$dir/project-path" ] && continue          # already on the new scheme
+
+    compose="$dir/docker-compose.yml"
+    project=""
+    [ -f "$compose" ] && project=$(legacy_project_of "$compose")
+    if [ -z "$project" ]; then
+        say "cannot determine the project for $(basename "$dir"); left unchanged."
+        say "  (no readable working_dir: in $compose)"
+        continue
+    fi
+
+    target="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$project")-agent"
+    if [ "$target" = "$dir" ]; then
+        printf '%s\n' "$project" > "$dir/project-path"
+        continue
+    fi
+    if [ -e "$target" ]; then
+        say "cannot migrate $(basename "$dir"): $(basename "$target") already exists."
+        say "  source $dir"
+        say "  target $target"
+        continue
+    fi
+
+    # The display number is derived from the id, so the old server must go
+    # before the directory holding its stop script moves.
+    [ -x "$dir/stop-display.sh" ] && "$dir/stop-display.sh" >/dev/null 2>&1 || true
+
+    old_name=$(basename "$dir")
+    mv "$dir" "$target"
+    printf '%s\n' "$project" > "$target/project-path"
+
+    # Safe to drop: every durable thing is a bind mount; the writable layer
+    # holds caches and shell history only. Compose recreates it on next start.
+    if command -v docker >/dev/null 2>&1; then
+        docker rm -f "$old_name" >/dev/null 2>&1 || true
+    fi
+    rm -rf "/tmp/.X11-unix/.ai-sandbox-${old_name}" 2>/dev/null || true
+
+    say "migrated $old_name -> $(basename "$target")  ($project)"
+    migrated=$((migrated + 1))
+done
+
+[ "$migrated" -gt 0 ] && say "$migrated sandbox(es) moved to path-derived names."
+
+printf '%s\n' "$AI_SANDBOX_SCHEMA_VERSION" > "$AI_SANDBOX_ROOT/.schema-version"
+exit 0
