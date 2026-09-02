@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Records every invocation and answers the few queries the script makes.
+printf '%s\n' "$*" >> "${DOCKER_STUB_LOG:-/dev/null}"
+case "$1 $2" in
+    "compose version") exit 0 ;;
+esac
+case "$1" in
+    image)
+        # 'docker image inspect TAG': missing unless the test pre-seeded it.
+        [ -n "${DOCKER_STUB_IMAGES:-}" ] || exit 1
+        case " $DOCKER_STUB_IMAGES " in *" $3 "*) exit 0 ;; *) exit 1 ;; esac
+        ;;
+    container)
+        # 'docker container inspect -f {{.State.Running}} NAME'
+        echo "${DOCKER_STUB_RUNNING:-false}"; exit 0
+        ;;
+    build|compose|rename|rm|rmi|images|exec|inspect) exit 0 ;;
+esac
+exit 0
