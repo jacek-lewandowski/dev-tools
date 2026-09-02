@@ -37,6 +37,7 @@ readonly NODE_MAJOR='24'
 DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
+WITH_DOCKER_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
 PROJECT_ARG=""
@@ -45,54 +46,93 @@ usage() {
     cat <<'USAGE'
 Usage: create-ai-sandbox.sh [OPTIONS] [PROJECT_DIR]
 
-Creates (or refreshes) an isolated container sandbox for PROJECT_DIR, defaulting
-to the current directory. The project's git root is used, so it is safe to run
-from a subdirectory.
+Creates or refreshes an isolated container sandbox for PROJECT_DIR, defaulting
+to the current directory. The project's git root is used, so running from a
+subdirectory is safe. Sandboxes are keyed on the project's full path, so two
+projects whose directories share a name do not collide.
 
 Options:
-  --display=MODE   How GUI apps in the sandbox reach a screen. Default: auto.
+  --display=MODE   How GUI apps reach a screen. Default: auto. Remembered.
                      wayland  Mount only the host Wayland socket. The container
                               runs its own Xwayland for X11-only apps. Wayland's
                               client isolation means sandboxed apps cannot read
                               your keystrokes or screen. Safest; needs a Wayland
                               host session.
-                     xpra     Dedicated Xvfb display plus an xpra server, with
-                              its own auth cookie. Each sandboxed app appears as
-                              an ordinary window on your desktop -- seamless like
-                              host mode -- but it renders on the virtual display,
-                              so it cannot read your keystrokes or screen. Needs
-                              xpra and xvfb.
-                     nested   Run a dedicated Xephyr X server on the host for
-                              this sandbox, with its own auth cookie. Sandboxed
-                              apps live inside that one window and cannot touch
-                              your real display. Needs xserver-xephyr.
+                     xpra     Dedicated Xvfb display plus an xpra server with
+                              its own auth cookie. Each app appears as an
+                              ordinary window on your desktop, but renders on
+                              the virtual display, so it cannot read your
+                              keystrokes or screen. Needs xpra and xvfb.
+                     nested   Dedicated Xephyr server with its own cookie.
+                              Sandboxed apps live inside that one window and
+                              cannot touch your real display. Needs
+                              xserver-xephyr.
                      host     Legacy: share the real host X11 display. Anything
-                              in the sandbox can keylog and screenshot your whole
-                              session. Opt in explicitly.
+                              in the sandbox can keylog and screenshot your
+                              whole session, in every application. Opt in
+                              explicitly.
                      none     No GUI at all. CLI agents only.
-                     auto     wayland if available, else nested, else fail with
-                              instructions. Never silently falls back to host.
+                     auto     wayland if available, else xpra, else nested, else
+                              fail with instructions. Never silently falls back
+                              to host.
   --with-docker    Install a rootless Docker daemon and Earthly inside the
-                   sandbox. Requires relaxing seccomp/apparmor for the container,
-                   which meaningfully weakens isolation. Off by default.
-  --rebuild        Force a no-cache image rebuild.
+                   sandbox. Off by default. Remembered. This sets
+                   seccomp:unconfined and apparmor:unconfined for the container,
+                   which meaningfully weakens isolation, and the nested daemon
+                   keeps its own image store inside the container, costing disk
+                   per sandbox.
+  --no-docker      Undo a remembered --with-docker.
+  --rebuild        Force a no-cache rebuild of the image. That image is
+                   shared by every project, so other sandboxes pick up the new
+                   one on their next start.
   --no-start       Generate configuration but do not build or start anything.
   -h, --help       Show this message.
 
-Shell helpers installed into ~/.bashrc:
-  ai-sandbox            enter the sandbox for the current project
-  ai-sandbox-stop       stop it (and its nested display, if any)
+Options marked "Remembered" persist per project: re-running with no flags keeps
+the last choice, and passing the option again changes it.
+
+Commands on the host (installed into ~/.ai-sandbox/bin, put on your PATH):
+  ai-sandbox            enter the sandbox for the current project; with
+                        arguments, run a command inside it
+  ai-sandbox-stop       stop it, and its private display if it has one
   ai-sandbox-restart    recreate the container, picking up new devices
-  ai-sandbox-attach     expose a hot-plugged host device, e.g.
+  ai-sandbox-attach     expose a hot-plugged device, e.g.
                         ai-sandbox-attach /dev/ttyUSB0
-  ai-sandbox-rm         remove the container and all copied credentials
+  ai-sandbox-account    status | refresh | reset -- which AI account this
+                        project uses, and re-seeding it from the host
+  ai-sandbox-extensions refresh -- reinstall the shared IDE extensions
+  ai-sandbox-gc         reclaim duplicated state and unused images; confirms
+                        before removing anything
+  ai-sandbox-migrate    bring ~/.ai-sandbox up to the current layout; runs
+                        automatically before every start
+  ai-sandbox-rm         remove this project's sandbox and its credentials
+
+Commands inside the sandbox:
+  sandbox-doctor        report what is and is not working
+  sandbox-desktop       start a window manager on the private display
+
+Layout under ~/.ai-sandbox:
+  <project>-<hash>-agent/   per project: credentials, tool state, compose file.
+                            Seeded from the host once, then never overwritten,
+                            so each project can hold a different Claude, Codex
+                            or Gemini account.
+  shared/                   bulk read-mostly data shared by every sandbox: IDE
+                            extensions, CLI downloads, package caches.
+  image/                    build context and stamp for the one image every
+                            project shares.
+  bin/                      the ai-sandbox-* commands listed above.
+
+Mounted live from the host into every sandbox: ~/.gemini/GEMINI.md (the shared
+brain, also read as ~/.claude/CLAUDE.md), the Antigravity brain and
+conversations, and ~/.claude/projects. Edits there are real edits on the host.
 USAGE
 }
 
 for arg in "$@"; do
     case "$arg" in
         --display=*)  DISPLAY_MODE="${arg#*=}"; DISPLAY_MODE_EXPLICIT="yes" ;;
-        --with-docker) WITH_DOCKER="yes" ;;
+        --with-docker) WITH_DOCKER="yes"; WITH_DOCKER_EXPLICIT="yes" ;;
+        --no-docker)   WITH_DOCKER="no";  WITH_DOCKER_EXPLICIT="yes" ;;
         --rebuild)    FORCE_REBUILD="yes" ;;
         --no-start)   NO_START="yes" ;;
         -h|--help)    usage; exit 0 ;;
@@ -100,6 +140,20 @@ for arg in "$@"; do
         *)            PROJECT_ARG="$arg" ;;
     esac
 done
+
+# Last-one-wins would silently pick a Docker setting the user did not intend.
+seen_with="no"; seen_without="no"
+for arg in "$@"; do
+    case "$arg" in
+        --with-docker) seen_with="yes" ;;
+        --no-docker)   seen_without="yes" ;;
+    esac
+done
+if [ "$seen_with" = "yes" ] && [ "$seen_without" = "yes" ]; then
+    echo "Pass --with-docker or --no-docker, not both." >&2
+    exit 2
+fi
+unset seen_with seen_without
 
 case "$DISPLAY_MODE" in
     auto|wayland|xpra|nested|host|none) ;;
@@ -243,6 +297,18 @@ step "Selecting display mode"
 
 # A display mode chosen once stays chosen. Without this, re-running the script
 # bare would silently fall back to 'auto' and undo a deliberate --display=host.
+# A Docker choice made once stays chosen. Without this, re-running the script
+# bare silently regenerates the sandbox without the daemon: the Dockerfile loses
+# it, security_opt disappears from the compose file, SANDBOX_WITH_DOCKER flips to
+# 0, and the next start has no daemon and no explanation.
+if [ "$WITH_DOCKER_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
+    STORED_DOCKER=$(sed -n 's/^SANDBOX_WITH_DOCKER=//p' "$ENV_FILE" | tail -n 1)
+    case "$STORED_DOCKER" in
+        1) WITH_DOCKER="yes"; log "keeping rootless Docker (pass --no-docker to drop it)" ;;
+        0) WITH_DOCKER="no" ;;
+    esac
+fi
+
 if [ "$DISPLAY_MODE_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_MODE=$(sed -n 's/^SANDBOX_DISPLAY_MODE=//p' "$ENV_FILE" | tail -n 1)
     case "$STORED_MODE" in
@@ -1061,8 +1127,10 @@ RUN set -eux; \
     usermod -aG sudo,dialout,plugdev,audio,video "${USER_NAME}"; \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ai-sandbox; \
     chmod 0440 /etc/sudoers.d/ai-sandbox; \
-    echo "${USER_NAME}:100000:65536" >> /etc/subuid; \
-    echo "${USER_NAME}:100000:65536" >> /etc/subgid; \
+    if ! grep -q "^${USER_NAME}:" /etc/subuid; then \
+        echo "${USER_NAME}:100000:65536" >> /etc/subuid; fi; \
+    if ! grep -q "^${USER_NAME}:" /etc/subgid; then \
+        echo "${USER_NAME}:100000:65536" >> /etc/subgid; fi; \
     mkdir -p "/home/${USER_NAME}/.config" "/home/${USER_NAME}/.antigravity" \
              "/home/${USER_NAME}/.gemini" "/home/${USER_NAME}/.claude" \
              "/home/${USER_NAME}/tools" "/run/user/${USER_ID}"; \

@@ -23,7 +23,13 @@ if [ -f "$AI_SANDBOX_ROOT/config" ]; then
             dst="$AI_SANDBOX_ROOT/bin/$helper"
             [ -f "$src" ] || continue
             if ! cmp -s "$src" "$dst"; then
-                install -m 0755 "$src" "$dst"
+                # Install via a temp file and rename. This script refreshes
+                # ITSELF here, and bash reads a script incrementally by file
+                # offset: truncating the file in place under a running bash can
+                # feed it the wrong bytes. A rename swaps the directory entry
+                # and leaves the running process on its original inode.
+                install -m 0755 "$src" "$dst.new.$$"
+                mv -f "$dst.new.$$" "$dst"
             fi
         done
         chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh" 2>/dev/null || true
