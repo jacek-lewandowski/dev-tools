@@ -33,7 +33,15 @@ assert_no_file() {
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
-# A throwaway HOME with the stub docker first on PATH. Echoes the temp dir.
+# A throwaway HOME with the stub docker first on PATH.
+#
+# Command substitution forks a subshell, so `tmp=$(fake_home)` cannot make the
+# exports below visible to the calling shell -- only the printed path survives
+# that. That is harmless for a suite that only compares $AI_SANDBOX_ROOT
+# against itself, but a suite that shells out to create-ai-sandbox.sh needs
+# the real isolation, so call this directly (`fake_home`, no `$()`) and read
+# $FAKE_HOME_DIR for the temp dir; the printed value keeps working for
+# existing `tmp=$(fake_home)` callers that don't need the exports.
 fake_home() {
     local tmp
     tmp=$(mktemp -d)
@@ -43,6 +51,7 @@ fake_home() {
     export PATH="$REPO_ROOT/tests/ai-sandbox/stub:$PATH"
     mkdir -p "$HOME" "$AI_SANDBOX_ROOT"
     : > "$DOCKER_STUB_LOG"
+    FAKE_HOME_DIR="$tmp"
     printf '%s' "$tmp"
 }
 
