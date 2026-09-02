@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Populate the shared IDE extension stores.
+#
+# The image no longer bakes extensions in -- they would be shadowed by the
+# shared bind mount and duplicated on disk -- so this is their only source. A
+# failure here is therefore loud, and leaves the directory empty rather than
+# half-populated so the next run retries cleanly.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+
+EXTENSIONS="anthropic.claude-code redhat.java"
+
+shared_ide="$AI_SANDBOX_ROOT/shared/antigravity-ide-extensions"
+shared_agy="$AI_SANDBOX_ROOT/shared/antigravity-extensions"
+mkdir -p "$shared_ide" "$shared_agy"
+
+populated() { [ -n "$(ls -A "$1" 2>/dev/null)" ]; }
+
+if [ "${1:-}" != "refresh" ] && populated "$shared_ide"; then
+    exit 0
+fi
+
+# 1. The host's own extensions, when it has them. Cheapest and most faithful.
+for pair in "$HOME/.antigravity-ide/extensions|$shared_ide" \
+            "$HOME/.antigravity/extensions|$shared_agy"; do
+    src=${pair%%|*}; dst=${pair#*|}
+    if [ -d "$src" ] && populated "$src" && ! populated "$dst"; then
+        echo "Seeding $(basename "$dst") from the host..."
+        rsync -a "$src/" "$dst/"
+    fi
+done
+populated "$shared_ide" && exit 0
+
+# 2. Otherwise install them with a throwaway container.
+uid=$(id -u)
+for variant in docker base; do
+    tag="ai-sandbox:${variant}-u${uid}"
+    docker image inspect "$tag" >/dev/null 2>&1 || continue
+    echo "Installing IDE extensions into $shared_ide using $tag..."
+    for ext in $EXTENSIONS; do
+        docker run --rm \
+            -v "$shared_ide:$HOME/.antigravity-ide/extensions" \
+            --entrypoint antigravity2-ide "$tag" --install-extension "$ext" \
+            || echo "WARNING: could not install $ext" >&2
+    done
+    populated "$shared_ide" && exit 0
+done
+
+echo "ERROR: could not populate $shared_ide." >&2
+echo "       The IDE will start without extensions." >&2
+echo "       Retry with: ai-sandbox-extensions refresh" >&2
+exit 1

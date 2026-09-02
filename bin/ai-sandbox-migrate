@@ -18,7 +18,8 @@ if [ -f "$AI_SANDBOX_ROOT/config" ]; then
     if [ -n "${DEV_TOOLS_DIR:-}" ] && [ -d "$DEV_TOOLS_DIR/bin" ]; then
         for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop \
                       ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm \
-                      ai-sandbox-migrate ai-sandbox-account; do
+                      ai-sandbox-migrate ai-sandbox-account \
+                      ai-sandbox-gc ai-sandbox-extensions; do
             src="$DEV_TOOLS_DIR/bin/$helper"
             dst="$AI_SANDBOX_ROOT/bin/$helper"
             [ -f "$src" ] || continue
@@ -95,6 +96,46 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
 done
 
 [ "$migrated" -gt 0 ] && say "$migrated sandbox(es) moved to path-derived names."
+
+# --- M2: lift shared bulk out of existing sandboxes ------------------------
+# The first sandbox to migrate donates its copy; later ones are reported, not
+# deleted. Rows whose third field is empty hold data that lives only in the
+# container's writable layer and has no per-project copy to lift.
+duplicates=0
+for dir in "$AI_SANDBOX_ROOT"/*-agent; do
+    [ -d "$dir" ] || continue
+    while IFS='|' read -r sub _ctr sb; do
+        [ -n "$sub" ] && [ -n "$sb" ] || continue
+        src="$dir/$sb"
+        dst="$AI_SANDBOX_ROOT/shared/$sub"
+        [ -d "$src" ] || continue
+        [ -n "$(ls -A "$src" 2>/dev/null)" ] || continue
+        mkdir -p "$(dirname "$dst")"
+        if [ ! -d "$dst" ] || [ -z "$(ls -A "$dst" 2>/dev/null)" ]; then
+            rmdir "$dst" 2>/dev/null || true
+            mv "$src" "$dst"
+            mkdir -p "$src"
+            say "shared $(basename "$dir")/$sb -> shared/$sub"
+        else
+            duplicates=$((duplicates + 1))
+            say "duplicate: $(basename "$dir")/$sb (shared/$sub is already populated)"
+        fi
+    done < <(ai_sandbox_shared_mounts)
+done
+if [ "$duplicates" -gt 0 ]; then
+    say "$duplicates duplicated director(ies) can be reclaimed: run ai-sandbox-gc"
+fi
+
+# --- M3: report per-project images left over from the old scheme -----------
+if command -v docker >/dev/null 2>&1; then
+    legacy_images=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+                    | grep '^ai-sandbox-' || true)
+    if [ -n "$legacy_images" ]; then
+        say "images from the old per-project naming scheme are no longer used:"
+        printf '  %s\n' $legacy_images
+        say "remove them with ai-sandbox-gc"
+    fi
+fi
 
 printf '%s\n' "$AI_SANDBOX_SCHEMA_VERSION" > "$AI_SANDBOX_ROOT/.schema-version"
 exit 0

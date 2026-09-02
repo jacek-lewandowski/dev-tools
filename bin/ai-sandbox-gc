@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Reclaim space that migration deliberately left alone: per-sandbox duplicates
+# of assets that now live once under shared/, and images from the old
+# per-project naming scheme.
+#
+# Migration never deletes. This does -- so it lists everything first and removes
+# nothing without confirmation.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+
+assume_yes="no"
+[ "${1:-}" = "--yes" ] && assume_yes="yes"
+
+targets=()
+for dir in "$AI_SANDBOX_ROOT"/*-agent; do
+    [ -d "$dir" ] || continue
+    while IFS='|' read -r sub _ctr sb; do
+        [ -n "$sub" ] && [ -n "$sb" ] || continue
+        src="$dir/$sb"
+        dst="$AI_SANDBOX_ROOT/shared/$sub"
+        # Only ever a duplicate: the shared copy must already be populated.
+        [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ] || continue
+        [ -d "$dst" ] && [ -n "$(ls -A "$dst" 2>/dev/null)" ] || continue
+        targets+=("$src")
+    done < <(ai_sandbox_shared_mounts)
+done
+
+legacy_images=()
+if command -v docker >/dev/null 2>&1; then
+    while IFS= read -r img; do
+        [ -n "$img" ] && legacy_images+=("$img")
+    done < <(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^ai-sandbox-' || true)
+fi
+
+if [ "${#targets[@]}" -eq 0 ] && [ "${#legacy_images[@]}" -eq 0 ]; then
+    echo "Nothing to reclaim."
+    exit 0
+fi
+
+if [ "${#targets[@]}" -gt 0 ]; then
+    echo "Duplicated directories (a populated shared copy already exists):"
+    for t in "${targets[@]}"; do
+        printf '  %-6s %s\n' "$(du -sh "$t" 2>/dev/null | cut -f1)" "$t"
+    done
+fi
+if [ "${#legacy_images[@]}" -gt 0 ]; then
+    echo "Images from the old per-project naming scheme:"
+    printf '  %s\n' "${legacy_images[@]}"
+fi
+
+if [ "$assume_yes" != "yes" ]; then
+    printf 'Remove all of the above? [y/N] '
+    read -r reply || reply=n
+    case "$reply" in y|Y) ;; *) echo "Cancelled. Nothing was removed."; exit 0 ;; esac
+fi
+
+for t in "${targets[@]+"${targets[@]}"}"; do
+    rm -rf "$t"
+    mkdir -p "$t"      # stays a valid bind-mount source
+done
+for img in "${legacy_images[@]+"${legacy_images[@]}"}"; do
+    docker rmi "$img" >/dev/null 2>&1 || echo "  could not remove $img (still in use?)" >&2
+done
+echo "Reclaimed."

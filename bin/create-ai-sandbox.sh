@@ -1186,27 +1186,10 @@ RUN set -eux; \
 USER ${USER_NAME}
 WORKDIR ${USER_HOME}
 
-# Antigravity IDE extensions. Claude Code and Red Hat Java come from Open VSX
-# (the IDE's default registry); Microsoft-published extensions are not on Open
-# VSX, so they are sideloaded from the Marketplace download endpoint. Extension
-# registries are outside this script's control, so every install is best-effort.
-RUN for ext in anthropic.claude-code redhat.java; do \
-        antigravity2-ide --install-extension "$ext" \
-            || echo "WARNING: could not install $ext; continuing"; \
-    done
-
-RUN set -u; \
-    for pair in "ms-python:python" "dbaeumer:vscode-eslint" "esbenp:prettier-vscode"; do \
-        publisher="${pair%%:*}"; name="${pair##*:}"; \
-        if curl -fsSL --compressed -o "/tmp/${name}.vsix" \
-             "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/${publisher}/vsextensions/${name}/latest/vspackage"; then \
-            antigravity2-ide --install-extension "/tmp/${name}.vsix" \
-                || echo "WARNING: could not install ${publisher}.${name}; continuing"; \
-        else \
-            echo "WARNING: could not download ${publisher}.${name}; continuing"; \
-        fi; \
-    done; \
-    rm -f /tmp/*.vsix
+# IDE extensions are NOT installed here. They live in ~/.ai-sandbox/shared and
+# are bind-mounted in, so one copy serves every sandbox; anything installed here
+# would be shadowed by that mount and duplicated on disk.
+# ai-sandbox-extensions populates the shared store.
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["tail", "-f", "/dev/null"]
@@ -1540,7 +1523,7 @@ touch "$BASHRC_FILE"
 mkdir -p "$AI_SANDBOX_ROOT/bin"
 for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop ai-sandbox-restart \
               ai-sandbox-attach ai-sandbox-rm ai-sandbox-migrate \
-              ai-sandbox-account; do
+              ai-sandbox-account ai-sandbox-gc ai-sandbox-extensions; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
 done
 # ai-sandbox-lib.sh is sourced, not run.
@@ -1624,6 +1607,12 @@ if [ "$need_build" = "yes" ]; then
     printf '%s\n' "$BUILD_HASH" > "$IMAGE_STAMP"
 else
     log "$IMAGE_NAME is up to date"
+fi
+
+# The image no longer carries extensions, so the shared store is their only
+# source. Not fatal: the IDE simply starts without them until this succeeds.
+if ! "$AI_SANDBOX_ROOT/bin/ai-sandbox-extensions"; then
+    warn "IDE extensions are not installed. Retry with: ai-sandbox-extensions refresh"
 fi
 
 step "Starting $CONTAINER_NAME"
