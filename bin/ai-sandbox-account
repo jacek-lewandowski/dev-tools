@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Inspect and manage the AI accounts this project's sandbox uses.
+#
+# Credentials are seeded from the host once, when the sandbox is created, and
+# are never overwritten afterwards -- that is what lets one project hold a
+# different Claude, Codex or Gemini account from another. This command is how
+# you deliberately change that: pull the host's credentials in again, or clear
+# them so the next start prompts for a fresh login.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_require_ctx || exit 1
+
+cmd=${1:-status}
+assume_yes="no"
+[ "${2:-}" = "--yes" ] && assume_yes="yes"
+
+confirm() {
+    [ "$assume_yes" = "yes" ] && return 0
+    printf '%s [y/N] ' "$1"
+    read -r reply || reply=n
+    case "$reply" in y|Y) return 0 ;; *) echo "Cancelled."; return 1 ;; esac
+}
+
+claude_account_of() {
+    [ -f "$1" ] || { echo "no state file"; return 0; }
+    python3 - "$1" <<'PY' 2>/dev/null || echo unknown
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("unreadable"); raise SystemExit
+print((d.get("oauthAccount") or {}).get("emailAddress") or "not logged in")
+PY
+}
+
+case "$cmd" in
+status)
+    printf '%-13s %s\n' project "$AI_SANDBOX_PROJECT"
+    printf '%-13s %s\n' sandbox "$AI_SANDBOX_NAME"
+    if [ -f "$AI_SANDBOX_DIR/.seeded" ]; then
+        printf '%-13s %s\n' seeded "$(cat "$AI_SANDBOX_DIR/.seeded") -- host credentials are no longer copied in"
+    else
+        printf '%-13s %s\n' seeded "no (the sandbox has not been created yet)"
+    fi
+    printf '%-13s %s\n' claude "$(claude_account_of "$AI_SANDBOX_DIR/.claude.json")"
+    while IFS='|' read -r name path; do
+        [ -n "$name" ] || continue
+        if [ -s "$AI_SANDBOX_DIR/$path" ]; then
+            printf '%-13s credentials present\n' "$name"
+        else
+            printf '%-13s no credentials\n' "$name"
+        fi
+    done <<'TOOLS'
+claude-cli|.claude/.credentials.json
+codex|.codex/auth.json
+gemini|.gemini/google_accounts.json
+TOOLS
+    ;;
+refresh)
+    confirm "Replace this project's AI credentials with the host's?" || exit 1
+    backup="$AI_SANDBOX_DIR/.credentials-backup"
+    rm -rf "$backup"; mkdir -p "$backup"
+    while IFS='|' read -r host_rel sb_rel; do
+        [ -n "$host_rel" ] || continue
+        if [ -e "$AI_SANDBOX_DIR/$sb_rel" ]; then
+            mkdir -p "$backup/$(dirname "$sb_rel")"
+            cp -a "$AI_SANDBOX_DIR/$sb_rel" "$backup/$sb_rel"
+        fi
+        [ -d "$HOME/$host_rel" ] || continue
+        mkdir -p "$AI_SANDBOX_DIR/$sb_rel"
+        rsync -a --delete "$HOME/$host_rel/" "$AI_SANDBOX_DIR/$sb_rel/"
+    done < <(ai_sandbox_seed_paths)
+    [ -f "$AI_SANDBOX_DIR/.claude.json" ] && cp -a "$AI_SANDBOX_DIR/.claude.json" "$backup/"
+    if [ -f "$HOME/.claude.json" ]; then cp -f "$HOME/.claude.json" "$AI_SANDBOX_DIR/.claude.json"; fi
+    chmod 600 "$AI_SANDBOX_DIR/.claude.json" 2>/dev/null || true
+    date -Iseconds > "$AI_SANDBOX_DIR/.seeded"
+    echo "Refreshed from the host. What was replaced is in $backup."
+    echo "Restart the sandbox for it to take effect: ai-sandbox-restart"
+    ;;
+reset)
+    confirm "Erase this project's AI credentials and start from a clean login?" || exit 1
+    while IFS='|' read -r _ sb_rel; do
+        [ -n "$sb_rel" ] && rm -rf "${AI_SANDBOX_DIR:?}/$sb_rel"
+    done < <(ai_sandbox_seed_paths)
+    echo '{}' > "$AI_SANDBOX_DIR/.claude.json"
+    chmod 600 "$AI_SANDBOX_DIR/.claude.json"
+    # Keep the marker: the point is that the host's credentials do NOT come back.
+    date -Iseconds > "$AI_SANDBOX_DIR/.seeded"
+    echo "Cleared. Log in inside the sandbox; the host's credentials will not return."
+    echo "Restart the sandbox: ai-sandbox-restart"
+    ;;
+*)
+    echo "Usage: ai-sandbox-account [status|refresh|reset] [--yes]" >&2
+    exit 2
+    ;;
+esac

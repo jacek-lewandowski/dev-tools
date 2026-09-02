@@ -105,3 +105,20 @@ cache|.cache|
 npm|.npm|
 SHARED
 }
+
+# '<path under $HOME on the host>|<path under the sandbox directory>'.
+# Everything here is identity-bearing -- OAuth tokens, account records, the
+# Electron profiles that hold a logged-in session -- so it is seeded from the
+# host exactly once and never overwritten afterwards. That is what lets one
+# project hold a different Claude, Codex or Gemini account from another.
+ai_sandbox_seed_paths() {
+    cat <<'SEED'
+.gemini|.gemini
+.antigravity|.antigravity
+.claude|.claude
+.codex|.codex
+.config/Antigravity|antigravity-data
+.config/Antigravity IDE|antigravity-ide-data
+.config/Claude|claude-data
+SEED
+}
