@@ -1415,108 +1415,32 @@ chmod +x "$SANDBOX_DIR/stop-display.sh"
 # Shell helpers
 # ---------------------------------------------------------------------------
 
-step "Installing shell helpers"
+step "Installing helper commands"
 
 BASHRC_FILE="$HOME/.bashrc"
 touch "$BASHRC_FILE"
 
-HELPERS=$(cat <<'HELPERS_EOF'
-# Helpers for dev-tools/bin/create-ai-sandbox.sh.
-_ai_sandbox_dir() {
-    local name
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        name=$(basename "$(git rev-parse --show-toplevel)")
-    else
-        name=$(basename "$PWD")
-    fi
-    name=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' \
-           | sed -e 's/[^a-z0-9]/-/g' -e 's/^[^a-z0-9]*//' -e 's/-\{2,\}/-/g')
-    [ -n "$name" ] || name=project
-    printf '%s\n' "$HOME/.ai-sandbox/${name}-agent"
-}
+mkdir -p "$AI_SANDBOX_ROOT/bin"
+for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop ai-sandbox-restart \
+              ai-sandbox-attach ai-sandbox-rm; do
+    install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
+done
+# ai-sandbox-lib.sh is sourced, not run.
+chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 
-_ai_sandbox_ctx() {
-    AI_SANDBOX_DIR=$(_ai_sandbox_dir)
-    AI_SANDBOX_NAME=$(basename "$AI_SANDBOX_DIR")
-    if [ ! -f "$AI_SANDBOX_DIR/docker-compose.yml" ]; then
-        echo "No sandbox configured for this project ($AI_SANDBOX_DIR)." >&2
-        echo "Create one with: create-ai-sandbox.sh" >&2
-        return 1
-    fi
-}
+# Recorded so ai-sandbox-migrate can refresh these copies without being told
+# where the repository lives.
+printf 'DEV_TOOLS_DIR=%s\n' "$DEV_TOOLS_DIR" > "$AI_SANDBOX_ROOT/config"
+log "$AI_SANDBOX_ROOT/bin"
 
-_ai_sandbox_compose() {
-    docker compose -f "$AI_SANDBOX_DIR/docker-compose.yml" --env-file "$AI_SANDBOX_DIR/.env" "$@"
-}
-
-ai-sandbox() {
-    _ai_sandbox_ctx || return 1
-    # Must precede 'compose up': Docker would otherwise create the display's
-    # mount source itself, as root, and Xephyr could no longer bind its socket.
-    if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
-        "$AI_SANDBOX_DIR/start-display.sh" || return 1
-    fi
-    if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null)" != "true" ]; then
-        echo "Starting $AI_SANDBOX_NAME..."
-        _ai_sandbox_compose up -d || return 1
-    fi
-    if [ "$#" -eq 0 ]; then
-        _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash
-    elif [ "$#" -eq 1 ]; then
-        # A single argument is treated as a shell snippet: ai-sandbox 'cd src && make'
-        _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc "$1"
-    else
-        # Several arguments are a command and its arguments; quoting is preserved.
-        _ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash -lc 'exec "$@"' ai-sandbox "$@"
-    fi
-}
-
-ai-sandbox-stop() {
-    _ai_sandbox_ctx || return 1
-    _ai_sandbox_compose stop
-    [ -x "$AI_SANDBOX_DIR/stop-display.sh" ] && "$AI_SANDBOX_DIR/stop-display.sh"
-}
-
-ai-sandbox-restart() {
-    _ai_sandbox_ctx || return 1
-    _ai_sandbox_compose down
-    if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
-        "$AI_SANDBOX_DIR/start-display.sh" || return 1
-    fi
-    _ai_sandbox_compose up -d
-}
-
-# Expose a device that was plugged in after the container started, without
-# recreating it. The device cgroup already permits USB serial majors.
-ai-sandbox-attach() {
-    local dev=$1 major minor
-    _ai_sandbox_ctx || return 1
-    if [ -z "${dev:-}" ] || [ ! -e "$dev" ]; then
-        echo "Usage: ai-sandbox-attach /dev/ttyUSB0" >&2
-        return 1
-    fi
-    major=$((16#$(stat -c '%t' "$dev")))
-    minor=$((16#$(stat -c '%T' "$dev")))
-    docker exec -u 0 "$AI_SANDBOX_NAME" bash -c \
-        "rm -f '$dev'; mknod '$dev' c $major $minor && chgrp dialout '$dev' && chmod 660 '$dev'" \
-        && echo "Attached $dev ($major:$minor) to $AI_SANDBOX_NAME."
-}
-
-ai-sandbox-rm() {
-    _ai_sandbox_ctx || return 1
-    printf 'Remove %s and all copied credentials in %s? [y/N] ' "$AI_SANDBOX_NAME" "$AI_SANDBOX_DIR"
-    local reply; read -r reply
-    case "$reply" in
-        y|Y) ;;
-        *) echo "Cancelled."; return 1 ;;
-    esac
-    _ai_sandbox_compose down -v 2>/dev/null || true
-    [ -x "$AI_SANDBOX_DIR/stop-display.sh" ] && "$AI_SANDBOX_DIR/stop-display.sh"
-    rm -rf "$AI_SANDBOX_DIR"
-    echo "Removed $AI_SANDBOX_DIR."
-}
-HELPERS_EOF
-)
+# The block below is deliberately trivial and stable: the helpers are real
+# files now, so an open shell picks up a new version without re-sourcing
+# anything, and this text should never need to change again.
+HELPERS='# Helpers for dev-tools/bin/create-ai-sandbox.sh live in ~/.ai-sandbox/bin.
+case ":$PATH:" in
+    *":$HOME/.ai-sandbox/bin:"*) ;;
+    *) PATH="$HOME/.ai-sandbox/bin:$PATH" ;;
+esac'
 
 SB_BEGIN="$BASHRC_BEGIN" SB_END="$BASHRC_END" SB_HELPERS="$HELPERS" \
 python3 - "$BASHRC_FILE" <<'PYEOF'
@@ -1536,7 +1460,7 @@ content = re.sub(r"\n*# Antigravity Sandbox Helper\n.*?\nfunction ai-sandbox-sto
 content = content.rstrip("\n")
 open(path, "w", encoding="utf-8").write(content + "\n\n" + block + "\n")
 PYEOF
-log "ai-sandbox, -stop, -restart, -attach, -rm installed in ~/.bashrc"
+log "~/.ai-sandbox/bin added to PATH in ~/.bashrc (run 'source ~/.bashrc' or open a new shell)"
 
 # ---------------------------------------------------------------------------
 # Build and start
