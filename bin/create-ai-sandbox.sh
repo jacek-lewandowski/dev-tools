@@ -289,6 +289,7 @@ mkdir -p "$XAUTH_DIR" \
          "$SANDBOX_DIR/claude-data" \
          "$SANDBOX_DIR/gcloud" \
          "$SANDBOX_DIR/.claude" \
+         "$SANDBOX_DIR/.codex" \
          "$SANDBOX_DIR/.gemini"
 
 # ---------------------------------------------------------------------------
@@ -731,52 +732,63 @@ COMMON_EXCLUDES=(
     --exclude='CertificateRevocation'
 )
 
-if [ -d "$HOME/.gemini" ]; then
-    safe_rsync -a --delete-excluded "${COMMON_EXCLUDES[@]}" \
-        --exclude='brain' --exclude='conversations' --exclude='config' \
-        --exclude='browser_recordings' --exclude='html_artifacts' \
-        --exclude='history' --exclude='History*' \
-        --exclude='IndexedDB' --exclude='Service Worker' --exclude='GEMINI.md' \
-        "$HOME/.gemini/" "$SANDBOX_DIR/.gemini/"
-    log ".gemini"
-fi
-if [ -d "$HOME/.antigravity" ]; then
-    safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.antigravity/" "$SANDBOX_DIR/.antigravity/"
-    log ".antigravity"
-fi
-if [ -d "$HOME/.config/Antigravity" ]; then
-    safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Antigravity/" "$SANDBOX_DIR/antigravity-data/"
-    log "Antigravity"
-fi
-if [ -d "$HOME/.config/Antigravity IDE" ]; then
-    safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Antigravity IDE/" "$SANDBOX_DIR/antigravity-ide-data/"
-    log "Antigravity IDE"
-fi
-if [ -d "$HOME/.config/Claude" ]; then
-    safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Claude/" "$SANDBOX_DIR/claude-data/"
-    log "Claude Desktop"
-fi
-if [ -d "$HOME/.claude" ]; then
-    # CLAUDE.md and projects/ are bind-mounted live further down, not copied.
-    safe_rsync -a "${COMMON_EXCLUDES[@]}" --exclude='CLAUDE.md' --exclude='projects' \
-        "$HOME/.claude/" "$SANDBOX_DIR/.claude/"
-    log ".claude"
+if [ -f "$SANDBOX_DIR/.seeded" ]; then
+    log "already seeded on $(cat "$SANDBOX_DIR/.seeded")"
+    log "this project's logins are left alone; 'ai-sandbox-account refresh' re-pulls the host's"
+else
+    log "seeding from the host, once. Later runs will not overwrite this, so a"
+    log "login made inside the sandbox survives."
+
+    if [ -d "$HOME/.gemini" ]; then
+        safe_rsync -a --delete-excluded "${COMMON_EXCLUDES[@]}" \
+            --exclude='brain' --exclude='conversations' --exclude='config' \
+            --exclude='browser_recordings' --exclude='html_artifacts' \
+            --exclude='history' --exclude='History*' \
+            --exclude='IndexedDB' --exclude='Service Worker' --exclude='GEMINI.md' \
+            "$HOME/.gemini/" "$SANDBOX_DIR/.gemini/"
+        log ".gemini"
+    fi
+    if [ -d "$HOME/.antigravity" ]; then
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.antigravity/" "$SANDBOX_DIR/.antigravity/"
+        log ".antigravity"
+    fi
+    if [ -d "$HOME/.config/Antigravity" ]; then
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Antigravity/" "$SANDBOX_DIR/antigravity-data/"
+        log "Antigravity"
+    fi
+    if [ -d "$HOME/.config/Antigravity IDE" ]; then
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Antigravity IDE/" "$SANDBOX_DIR/antigravity-ide-data/"
+        log "Antigravity IDE"
+    fi
+    if [ -d "$HOME/.config/Claude" ]; then
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Claude/" "$SANDBOX_DIR/claude-data/"
+        log "Claude Desktop"
+    fi
+    if [ -d "$HOME/.claude" ]; then
+        # CLAUDE.md and projects/ are bind-mounted live further down, not copied.
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" --exclude='CLAUDE.md' --exclude='projects' \
+            "$HOME/.claude/" "$SANDBOX_DIR/.claude/"
+        log ".claude"
+    fi
+
+    # ~/.claude.json is the Claude Code CLI's account/session state and lives
+    # beside ~/.claude rather than inside it.
+    if [ -f "$HOME/.claude.json" ]; then
+        cp -f "$HOME/.claude.json" "$SANDBOX_DIR/.claude.json"
+    else
+        echo '{}' > "$SANDBOX_DIR/.claude.json"
+    fi
+
+    if [ -d "$HOME/.codex" ]; then
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.codex/" "$SANDBOX_DIR/.codex/"
+        log ".codex"
+    fi
+
+    date -Iseconds > "$SANDBOX_DIR/.seeded"
 fi
 
-# ~/.claude.json is the Claude Code CLI's account/session state and lives beside
-# ~/.claude rather than inside it. It is copied, not shared, so the host and the
-# sandbox keep separate sessions -- but that means sandbox-side changes are lost
-# on the next run. Only refresh it when the host copy is newer.
-if [ -f "$HOME/.claude.json" ]; then
-    if [ ! -f "$SANDBOX_DIR/.claude.json" ] || [ "$HOME/.claude.json" -nt "$SANDBOX_DIR/.claude.json" ]; then
-        cp -f "$HOME/.claude.json" "$SANDBOX_DIR/.claude.json"
-        log ".claude.json (refreshed from host)"
-    else
-        log ".claude.json (sandbox copy is newer; left alone)"
-    fi
-elif [ ! -f "$SANDBOX_DIR/.claude.json" ]; then
-    echo '{}' > "$SANDBOX_DIR/.claude.json"
-fi
+# Enforced on every run, seeded or not.
+[ -f "$SANDBOX_DIR/.claude.json" ] || echo '{}' > "$SANDBOX_DIR/.claude.json"
 chmod 600 "$SANDBOX_DIR/.claude.json"
 
 # gcloud: no host credentials are copied and no login is performed. The isolated
@@ -1053,7 +1065,7 @@ RUN set -eux; \
 RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm "headroom-ai[all]"
 
 RUN npm install -g --force \
-        @anthropic-ai/claude-code firebase-tools @google/gemini-cli @ast-grep/cli \
+        @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
     && npm cache clean --force
 
 RUN set -eux; \
@@ -1318,6 +1330,7 @@ cat <<COMPOSE_VOLS
       - "${SANDBOX_DIR}/.antigravity:${CONTAINER_HOME}/.antigravity"
       - "${SANDBOX_DIR}/.claude:${CONTAINER_HOME}/.claude"
       - "${SANDBOX_DIR}/.claude.json:${CONTAINER_HOME}/.claude.json"
+      - "${SANDBOX_DIR}/.codex:${CONTAINER_HOME}/.codex"
       - "${SANDBOX_DIR}/antigravity-data:${CONTAINER_HOME}/.config/Antigravity"
       - "${SANDBOX_DIR}/antigravity-ide-data:${CONTAINER_HOME}/.config/Antigravity IDE"
       - "${SANDBOX_DIR}/claude-data:${CONTAINER_HOME}/.config/Claude"
@@ -1526,7 +1539,8 @@ touch "$BASHRC_FILE"
 
 mkdir -p "$AI_SANDBOX_ROOT/bin"
 for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop ai-sandbox-restart \
-              ai-sandbox-attach ai-sandbox-rm ai-sandbox-migrate; do
+              ai-sandbox-attach ai-sandbox-rm ai-sandbox-migrate \
+              ai-sandbox-account; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
 done
 # ai-sandbox-lib.sh is sourced, not run.
