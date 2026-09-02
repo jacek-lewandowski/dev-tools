@@ -37,4 +37,28 @@ assert_eq "dir_for uses AI_SANDBOX_ROOT" \
     "$(ai_sandbox_dir_for /home/u/work/dev-tools)" "$AI_SANDBOX_ROOT/${a}-agent"
 rm -rf "$tmp"
 
+# Test ai_sandbox_project_root: inside a git repo from a subdirectory
+git_tmp=$(mktemp -d)
+(cd "$git_tmp" && git init -q && mkdir subdir)
+subdir_result=$(ai_sandbox_project_id "$git_tmp/subdir")
+toplevel_result=$(ai_sandbox_project_id "$git_tmp")
+assert_eq "project_root returns toplevel from subdir" \
+    "$(cd "$git_tmp/subdir" && ai_sandbox_project_root)" "$git_tmp"
+rm -rf "$git_tmp"
+
+# Test ai_sandbox_project_root: outside a git repo
+no_git=$(mktemp -d)
+assert_eq "project_root returns dir outside git" \
+    "$(ai_sandbox_project_root "$no_git")" "$no_git"
+rm -rf "$no_git"
+
+# Test ai_sandbox_project_root: nonexistent directory fails
+nonexist=/tmp/this-dir-definitely-does-not-exist-$$
+result=$(ai_sandbox_project_root "$nonexist" 2>&1) || exit_code=$?
+if [ "${exit_code:-0}" -ne 0 ]; then
+    TESTS_RUN=$((TESTS_RUN + 1)); _pass "project_root fails for nonexistent dir"
+else
+    TESTS_RUN=$((TESTS_RUN + 1)); _fail "project_root should fail for nonexistent dir" "exit code was 0"
+fi
+
 finish
