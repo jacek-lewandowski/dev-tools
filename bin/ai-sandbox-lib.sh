@@ -61,3 +61,18 @@ ai_sandbox_compose() {
     docker compose -f "$AI_SANDBOX_DIR/docker-compose.yml" \
                    --env-file "$AI_SANDBOX_DIR/.env" "$@"
 }
+
+# Deterministic hash over a build context and the build args that go with it.
+# Sorting the paths under a fixed locale is what makes it reproducible across
+# machines; hashing contents rather than mtimes is what stops a rebuild being
+# triggered by a rewrite that changed nothing.
+ai_sandbox_build_hash() {
+    local dir=$1; shift
+    {
+        ( cd "$dir" && find . -type f -print0 | LC_ALL=C sort -z \
+            | while IFS= read -r -d '' f; do
+                  printf '%s\0%s\0' "${f#./}" "$(sha256sum "$f" | cut -d' ' -f1)"
+              done )
+        printf '%s\0' "$@"
+    } | sha256sum | cut -d' ' -f1
+}
