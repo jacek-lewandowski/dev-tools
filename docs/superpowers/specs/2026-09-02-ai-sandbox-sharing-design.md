@@ -61,15 +61,19 @@ and skills only -- no credentials -- so it stays shared.
 ### 1. Project identity
 
 ```
-slug() { printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's/[^a-z0-9]/-/g' \
-                                                 -e 's/^[^a-z0-9]*//' -e 's/-\{2,\}/-/g'; }
+slug() { printf '%s' "$1" | tr 'A-Z' 'a-z' \
+    | sed -e 's/[^a-z0-9]/-/g' -e 's/-\{2,\}/-/g' \
+          -e 's/^-*//' -e 's/-*$//'; }
 PROJECT_ID = "$(slug "$(basename "$ABS")")-$(printf '%s' "$ABS" \
                 | sha256sum | cut -c1-8)"
 ```
 
 `$ABS` is the absolute project path (the git toplevel when there is one). The
-sanitisation is the one the script already uses; an empty slug falls back to
-`project`. This is computed in two places -- `create-ai-sandbox.sh` and the
+sanitisation is the one the script already uses, with one correction: the
+current `sed` strips leading non-alphanumerics but not trailing ones, so a
+directory like `foo.` yields `foo-`, which would produce the double dash
+`foo--<hash>` here and is not a legal Docker repository component. The pinned
+version trims both ends. An empty slug falls back to `project`. This is computed in two places -- `create-ai-sandbox.sh` and the
 helper library -- so it is pinned here byte-for-byte and both must use the
 shared `_lib.sh` definition rather than reimplementing it.
 
@@ -152,6 +156,12 @@ already relies on it today.
 - `USER_HOME` becomes a build arg set to the host `$HOME`, so container and host
   home paths match rather than being hardcoded to `/home/$USER`.
 - `@openai/codex` is added to the node globals.
+- The unconditional `echo "${USER_NAME}:100000:65536" >> /etc/subuid` (and the
+  `subgid` twin) becomes conditional. `useradd` on Ubuntu 22.04 already
+  allocates subordinate ranges for a new non-system user, so the append produces
+  a duplicate line in each file, confirmed present in the running image. Whether
+  duplicate identical ranges upset `newuidmap` has not been verified; the append
+  is redundant either way and should only run when the user has no range yet.
 
 Legacy `ai-sandbox-<project>:latest` images are reported, never deleted
 automatically. `ai-sandbox-gc` removes them after confirmation.
@@ -243,6 +253,48 @@ existing sandbox.
 
 `ai-sandbox-rm` is updated to leave `shared/` and `image/` alone.
 
+### 8. CLI surface and help
+
+`--with-docker` becomes sticky, exactly as `--display` already is. Today
+`WITH_DOCKER` is hardcoded to `no` at the top of the script and set only by the
+flag, with no restore-from-`.env` step, so re-running `create-ai-sandbox.sh`
+bare on a project created with `--with-docker` silently regenerates it without
+Docker: the Dockerfile loses the daemon, `security_opt` disappears from the
+compose file, and `SANDBOX_WITH_DOCKER` flips to `0`. The next container start
+then has no daemon and no explanation. The `--display` restore exists to prevent
+precisely this class of bug; Docker gets the same treatment, reading
+`SANDBOX_WITH_DOCKER` back from `.env` when neither flag is given.
+
+`--no-docker` is added so a sticky choice can be reversed, mirroring how an
+explicit `--display=` overrides a stored mode.
+
+`--with-docker` stays opt-in rather than becoming the default. It sets
+`seccomp:unconfined` and `apparmor:unconfined` and passes through `/dev/fuse`
+and `/dev/net/tun`; the nested daemon's own image store also lives in the
+container's writable layer, duplicating gigabytes per sandbox and defeating
+section 3. Stickiness gives the ergonomics of a default without the cost.
+
+`usage()` is rewritten to cover the whole surface. Known gaps in the current
+text:
+
+- the `auto` description says "wayland if available, else nested", but the code
+  tries wayland, then xpra, then nested. `xpra` is missing from the fallback
+  chain it documents.
+- `--no-docker` and the stickiness of both `--display` and `--with-docker` are
+  undocumented.
+- `--rebuild` no longer means "rebuild this project's image"; it rebuilds the
+  image every project shares, and must say so.
+- the helper list omits the in-container commands (`sandbox-doctor`,
+  `sandbox-desktop`) and all the new ones (`ai-sandbox-account`,
+  `ai-sandbox-gc`, `ai-sandbox-migrate`, `ai-sandbox-extensions`).
+- nothing explains the on-disk layout: what is per-project, what is shared
+  between projects, and what is mounted live from the host.
+
+The rewritten help documents each option with its default and whether it is
+remembered, the positional `PROJECT_DIR`, both helper groups, and a short
+layout summary pointing at `~/.ai-sandbox/`.
+
+
 ## Error handling
 
 - Migration failure on one sandbox warns and continues to the next; it never
@@ -252,6 +304,8 @@ existing sandbox.
 - A target `<PROJECT_ID>-agent` that already exists is a hard stop for that one
   sandbox, reported with both paths, for manual resolution.
 - Image build failure aborts, as today.
+- `--with-docker` and `--no-docker` together is a usage error, not a silent
+  last-one-wins.
 - Extension bootstrap failure is reported loudly and leaves the shared directory
   empty rather than half-populated, so the next run retries it. The sandbox still
   starts; the IDE simply has no extensions until the bootstrap succeeds.
@@ -278,3 +332,8 @@ What must be verified on the host, by the user:
 5. `du -sh ~/.ai-sandbox/*` shows the per-sandbox drop and a single populated
    `shared/`.
 6. Antigravity conversation history is present in a migrated sandbox.
+7. `create-ai-sandbox.sh --with-docker`, then a bare re-run; confirm the compose
+   file still carries `security_opt` and `SANDBOX_WITH_DOCKER=1`. Then
+   `--no-docker`, and confirm both are gone.
+8. `create-ai-sandbox.sh --help` lists every option, both helper groups and the
+   layout summary.
