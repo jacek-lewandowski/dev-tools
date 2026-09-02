@@ -32,9 +32,11 @@ case "$id" in *--*) TESTS_RUN=$((TESTS_RUN+1)); _fail "no double dash in id" "$i
 assert_eq "empty slug falls back" "$(ai_sandbox_project_id /home/u/...)" \
           "project-$(printf '%s' /home/u/... | sha256sum | cut -c1-8)"
 
-tmp=$(fake_home)
+# Pin the redirected root literally: comparing against $AI_SANDBOX_ROOT on both
+# sides would hold even if fake_home's redirection never took effect.
+fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 assert_eq "dir_for uses AI_SANDBOX_ROOT" \
-    "$(ai_sandbox_dir_for /home/u/work/dev-tools)" "$AI_SANDBOX_ROOT/${a}-agent"
+    "$(ai_sandbox_dir_for /home/u/work/dev-tools)" "$tmp/home/.ai-sandbox/${a}-agent"
 rm -rf "$tmp"
 
 # Test ai_sandbox_project_root: inside a git repo from a subdirectory

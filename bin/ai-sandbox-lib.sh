@@ -32,8 +32,9 @@ ai_sandbox_project_root() {
     local dir=${1:-$PWD}
     (
         cd "$dir" 2>/dev/null || exit 1
-        if git rev-parse --show-toplevel >/dev/null 2>&1; then
-            git rev-parse --show-toplevel
+        local top
+        if top=$(git rev-parse --show-toplevel 2>/dev/null); then
+            printf '%s\n' "$top"
         else
             pwd
         fi

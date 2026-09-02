@@ -24,9 +24,11 @@ assert_contains "config points at the repo" "$(cat "$AI_SANDBOX_ROOT/config")" \
 # The bashrc block must be the stable one-liner, not a pile of functions.
 block=$(sed -n '/>>> dev-tools ai-sandbox helpers >>>/,/<<< dev-tools ai-sandbox helpers <<</p' "$HOME/.bashrc")
 assert_contains "bashrc adds bin to PATH" "$block" '.ai-sandbox/bin'
+# Match any function definition, not one remembered name: the point is that the
+# block stays a stable PATH stub, whatever a future helper might be called.
 case "$block" in
-    *"_ai_sandbox_dir()"*) TESTS_RUN=$((TESTS_RUN+1)); _fail "bashrc defines no functions" "still defines _ai_sandbox_dir" ;;
-    *) TESTS_RUN=$((TESTS_RUN+1)); _pass "bashrc defines no functions" ;;
+    *'() {'*) TESTS_RUN=$((TESTS_RUN+1)); _fail "bashrc defines no functions" "block still defines a function" ;;
+    *)        TESTS_RUN=$((TESTS_RUN+1)); _pass "bashrc defines no functions" ;;
 esac
 
 # The helper must resolve the same project the script did.
