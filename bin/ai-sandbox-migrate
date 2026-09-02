@@ -18,7 +18,7 @@ if [ -f "$AI_SANDBOX_ROOT/config" ]; then
     if [ -n "${DEV_TOOLS_DIR:-}" ] && [ -d "$DEV_TOOLS_DIR/bin" ]; then
         for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop \
                       ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm \
-                      ai-sandbox-migrate; do
+                      ai-sandbox-migrate ai-sandbox-account; do
             src="$DEV_TOOLS_DIR/bin/$helper"
             dst="$AI_SANDBOX_ROOT/bin/$helper"
             [ -f "$src" ] || continue
