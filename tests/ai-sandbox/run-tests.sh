@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs every test-*.sh and reports a combined result.
-set -uo pipefail
+set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 rc=0
 for t in "$here"/test-*.sh; do
