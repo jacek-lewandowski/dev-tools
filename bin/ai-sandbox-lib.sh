@@ -43,3 +43,21 @@ ai_sandbox_project_root() {
 ai_sandbox_dir_for() {
     printf '%s/%s-agent' "$AI_SANDBOX_ROOT" "$(ai_sandbox_project_id "$1")"
 }
+
+# Resolve the sandbox for the current directory. Sets AI_SANDBOX_DIR,
+# AI_SANDBOX_NAME and AI_SANDBOX_PROJECT, or returns 1 with a message.
+ai_sandbox_require_ctx() {
+    AI_SANDBOX_PROJECT=$(ai_sandbox_project_root) || return 1
+    AI_SANDBOX_DIR=$(ai_sandbox_dir_for "$AI_SANDBOX_PROJECT")
+    AI_SANDBOX_NAME=$(basename "$AI_SANDBOX_DIR")
+    if [ ! -f "$AI_SANDBOX_DIR/docker-compose.yml" ]; then
+        echo "No sandbox configured for this project ($AI_SANDBOX_DIR)." >&2
+        echo "Create one with: create-ai-sandbox.sh" >&2
+        return 1
+    fi
+}
+
+ai_sandbox_compose() {
+    docker compose -f "$AI_SANDBOX_DIR/docker-compose.yml" \
+                   --env-file "$AI_SANDBOX_DIR/.env" "$@"
+}

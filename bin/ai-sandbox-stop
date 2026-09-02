@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_require_ctx || exit 1
+ai_sandbox_compose stop
+[ -x "$AI_SANDBOX_DIR/stop-display.sh" ] && "$AI_SANDBOX_DIR/stop-display.sh"
+exit 0
