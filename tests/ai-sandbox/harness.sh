@@ -15,6 +15,11 @@ assert_eq() {
     if [ "$2" = "$3" ]; then _pass "$1"
     else _fail "$1" "expected '$3', got '$2'"; fi
 }
+assert_ne() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ "$2" != "$3" ]; then _pass "$1"
+    else _fail "$1" "expected something other than '$3'"; fi
+}
 assert_contains() {
     TESTS_RUN=$((TESTS_RUN + 1))
     case "$2" in
