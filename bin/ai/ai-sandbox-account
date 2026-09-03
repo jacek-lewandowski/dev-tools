@@ -82,14 +82,15 @@ refresh)
     ;;
 reset)
     confirm "Erase this project's AI credentials and start from a clean login?" || exit 1
-    # Recreate each directory after wiping it: they are compose bind sources,
-    # and a missing source is created root-owned on restart, which the
-    # container user cannot write to -- so the clean login would fail.
     while IFS='|' read -r _ sb_rel; do
-        [ -n "$sb_rel" ] || continue
-        rm -rf "${AI_SANDBOX_DIR:?}/$sb_rel"
-        mkdir -p "$AI_SANDBOX_DIR/$sb_rel"
+        [ -n "$sb_rel" ] && rm -rf "${AI_SANDBOX_DIR:?}/$sb_rel"
     done < <(ai_sandbox_seed_paths)
+    # Then recreate every bind source, .claude/projects included: a missing
+    # one is created root-owned on restart, which the container user cannot
+    # write to -- so the clean login would fail -- and cannot remove later.
+    while IFS= read -r d; do
+        [ -n "$d" ] && mkdir -p "$AI_SANDBOX_DIR/$d"
+    done < <(ai_sandbox_state_dirs)
     echo '{}' > "$AI_SANDBOX_DIR/.claude.json"
     chmod 600 "$AI_SANDBOX_DIR/.claude.json"
     # Keep the marker: the point is that the host's credentials do NOT come back.

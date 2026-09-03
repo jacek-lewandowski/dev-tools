@@ -192,6 +192,36 @@ EX
     esac
 }
 
+# Every directory under a sandbox directory that the compose file binds into
+# the container, plus the parents of nested mount targets. All of them must
+# exist before 'compose up': Docker creates a missing bind source -- or a
+# missing parent for a nested target -- as root, and the container user can
+# then neither write to it nor, later, remove it. create-ai-sandbox.sh makes
+# them before generating the compose file; 'ai-sandbox-account reset' remakes
+# them after wiping the credential directories.
+#
+# .claude/projects is the parent of the ~/.claude/projects/<key> mount. Without
+# it Docker creates projects/ and projects/<key> root-owned inside .claude, and
+# 'rm -rf .claude' fails on <key> ever after.
+# cache/ and npm/ are per sandbox on purpose: both hold code the sandbox writes
+# at run time (wheels, npm tarballs), so sharing them would let one sandbox
+# feed code to another.
+ai_sandbox_state_dirs() {
+    cat <<'DIRS'
+.gemini
+.antigravity
+.claude
+.claude/projects
+.codex
+antigravity-data
+antigravity-ide-data
+claude-data
+gcloud
+cache
+npm
+DIRS
+}
+
 # '<path under $HOME on the host>|<path under the sandbox directory>'.
 # Everything here is identity-bearing -- OAuth tokens, account records, the
 # Electron profiles that hold a logged-in session -- so it is seeded from the

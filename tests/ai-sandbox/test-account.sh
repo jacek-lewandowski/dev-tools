@@ -69,6 +69,10 @@ assert_file    "reset kept the sandbox"     "$dir/docker-compose.yml"
 while IFS='|' read -r _ sb_rel; do
     [ -n "$sb_rel" ] && assert_file "reset kept bind source $sb_rel" "$dir/$sb_rel"
 done < <(ai_sandbox_seed_paths)
+# The nested ~/.claude/projects/<key> mount needs its parent to exist too, or
+# Docker creates projects/ and projects/<key> root-owned on the next start and
+# rm -rf of .claude fails ever after.
+assert_file "reset kept .claude/projects for the nested mount" "$dir/.claude/projects"
 create
 assert_no_file "reset is not undone by a re-run" "$dir/.claude/.credentials.json"
 
