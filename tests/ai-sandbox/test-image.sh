@@ -43,6 +43,10 @@ else TESTS_RUN=$((TESTS_RUN+1)); _pass "build hash covers file contents"; fi
 # The docker variant is a separate tag, so the two never overwrite each other.
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --with-docker "$a" >>"$tmp/o1" 2>&1 || true
 assert_contains "docker variant tag" "$(cat "$ca")" "ai-sandbox:docker-u${uid}"
+# A bare re-run keeps the docker tag: the sticky flag must be read from .env
+# before the tag is derived, or the docker Dockerfile lands under the base tag.
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$a" >>"$tmp/o1" 2>&1 || true
+assert_contains "docker tag survives a bare re-run" "$(cat "$ca")" "ai-sandbox:docker-u${uid}"
 
 rm -rf "$tmp"
 finish
