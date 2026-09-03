@@ -138,8 +138,8 @@ Layout under ~/.ai-sandbox:
                             Seeded from the host once, then never overwritten,
                             so each project can hold a different Claude, Codex
                             or Gemini account.
-  shared/                   bulk read-mostly data shared by every sandbox: IDE
-                            extensions, CLI downloads, package caches.
+  shared/                   IDE extensions, plugins and CLI builds, synced from
+                            the host and read-only in every sandbox.
   image/                    build context and stamp for the one image every
                             project shares.
   bin/                      the ai-sandbox-* commands listed above.
@@ -321,14 +321,25 @@ printf '%s\n' "$PROJECT_ABS_DIR" > "$SANDBOX_DIR/project-path"
 
 mkdir -p "$BUILD_DIR"
 
-# Bulk assets every sandbox shares, rather than each carrying a copy.
+# Bulk assets every sandbox shares, read-only. The host is their only writer:
+# its own copy is synced in on every run, so installing or updating an
+# extension, plugin or CLI build on the host is what updates the sandboxes.
 SHARED_DIR="$AI_SANDBOX_ROOT/shared"
 while IFS='|' read -r _sub _ctr _sb; do
-    [ -n "$_sub" ] && mkdir -p "$SHARED_DIR/$_sub"
+    [ -n "$_sub" ] || continue
+    mkdir -p "$SHARED_DIR/$_sub"
+    if [ -d "$HOME/$_ctr" ] && [ -n "$(ls -A "$HOME/$_ctr" 2>/dev/null)" ]; then
+        safe_rsync -a "$HOME/$_ctr/" "$SHARED_DIR/$_sub/"
+    fi
 done < <(ai_sandbox_shared_mounts)
 unset _sub _ctr _sb
 
+# cache/ and npm/ are per sandbox on purpose: both hold code the sandbox writes
+# at run time (wheels, npm tarballs), so sharing them would let one sandbox
+# feed code to another.
 mkdir -p "$XAUTH_DIR" \
+         "$SANDBOX_DIR/cache" \
+         "$SANDBOX_DIR/npm" \
          "$SANDBOX_DIR/antigravity-data" \
          "$SANDBOX_DIR/antigravity-ide-data" \
          "$SANDBOX_DIR/claude-data" \
@@ -867,11 +878,10 @@ log "gcloud: isolated empty config at $SANDBOX_DIR/gcloud (log in inside the san
 #                             token -- per sandbox, seeded from the host once so
 #                             the IDE comes up already activated.
 #   ~/.local/share/JetBrains  downloaded plugins -- bulk and identical for every
-#                             project, so it lives in the shared store.
+#                             project, so it lives in the shared store, read-only.
 #   ~/.cache/JetBrains        indexes, logs, the system directory -- per sandbox,
-#                             never seeded. This one has to be per sandbox: it is
-#                             nested inside the SHARED ~/.cache mount, and two
-#                             IDEs indexing through one directory corrupt it.
+#                             never seeded, and a mount of its own: two IDEs
+#                             indexing through one directory corrupt it.
 #
 # All three are mounts, so they survive the container being recreated, which
 # happens on every run of this script.
@@ -895,13 +905,9 @@ if [ -d "$IDEA_HOST_DIR" ]; then
         log "settings are this sandbox's own; delete jetbrains-config to re-seed"
     fi
 
-    # Plugins: one copy for every sandbox, filled from the host if still empty.
-    if [ -d "$HOME/.local/share/JetBrains" ] \
-       && [ -z "$(ls -A "$SHARED_DIR/jetbrains-plugins" 2>/dev/null)" ]; then
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" \
-            "$HOME/.local/share/JetBrains/" "$SHARED_DIR/jetbrains-plugins/"
-        log "plugins seeded into the shared store ($(du -sh "$SHARED_DIR/jetbrains-plugins" 2>/dev/null | cut -f1))"
-    fi
+    # Plugins come from the shared store, synced from the host above and
+    # read-only in the sandbox, so they are installed on the host.
+    log "plugins from the shared store, read-only ($(du -sh "$SHARED_DIR/jetbrains-plugins" 2>/dev/null | cut -f1))"
 
     # Created here, not by Docker: a missing bind source becomes a root-owned
     # directory the IDE then cannot write to.
@@ -1154,12 +1160,12 @@ if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
             "${SANDBOX_IDEA_HOME}/product-info.json" 2>/dev/null)
     status "intellij idea" "${_idea:-mounted} at ${SANDBOX_IDEA_HOME} (run 'idea &')"
     status "  its settings" "$( [ -w "$HOME/.config/JetBrains" ] && echo "writable, sandbox-local" || echo "NOT writable -- re-run create-ai-sandbox.sh" )"
-    # ~/.cache is one directory shared by every sandbox, so the index directory
-    # has to be a mount of its own nested inside it. Two IDEs indexing through
-    # one directory corrupt it, and that failure is slow and confusing, so check.
+    # The index directory has to be a mount of its own. Two IDEs indexing
+    # through one directory corrupt it, and that failure is slow and confusing,
+    # so check.
     status "  its indexes" "$( findmnt -no TARGET "$HOME/.cache/JetBrains" >/dev/null 2>&1 \
         && echo "own mount, not shared with other sandboxes" \
-        || echo "SHARING the ~/.cache mount -- re-run create-ai-sandbox.sh" )"
+        || echo "NOT its own mount -- re-run create-ai-sandbox.sh" )"
 else
     status "intellij idea" "not mounted"
 fi
@@ -1639,6 +1645,10 @@ cat <<COMPOSE_VOLS
       - "${SANDBOX_DIR}/antigravity-ide-data:${CONTAINER_HOME}/.config/Antigravity IDE"
       - "${SANDBOX_DIR}/claude-data:${CONTAINER_HOME}/.config/Claude"
       - "${SANDBOX_DIR}/gcloud:${CONTAINER_HOME}/.config/gcloud"
+      # Per sandbox, never shared: these hold code the sandbox writes at run
+      # time, and a shared copy would let one sandbox feed code to another.
+      - "${SANDBOX_DIR}/cache:${CONTAINER_HOME}/.cache"
+      - "${SANDBOX_DIR}/npm:${CONTAINER_HOME}/.npm"
       # The shared brain: one file, read by Antigravity as GEMINI.md and by
       # Claude Code as CLAUDE.md, live on the host and in every sandbox.
       - "${HOME}/.gemini/GEMINI.md:${CONTAINER_HOME}/.gemini/GEMINI.md"
@@ -1672,10 +1682,11 @@ if [ -d "$HOST_SDKMAN" ]; then
     printf '      - "%s:%s/.sdkman"\n' "$SDKMAN_FARM" "$CONTAINER_HOME"
 fi
 
-echo "      # Bulk assets shared by every sandbox."
+echo "      # Code shared by every sandbox, synced from the host and read-only:"
+echo "      # one sandbox cannot plant code that another sandbox runs."
 while IFS='|' read -r _sub _ctr _sb; do
     [ -n "$_sub" ] || continue
-    printf '      - "%s/%s:%s/%s"\n' "$SHARED_DIR" "$_sub" "$CONTAINER_HOME" "$_ctr"
+    printf '      - "%s/%s:%s/%s:ro"\n' "$SHARED_DIR" "$_sub" "$CONTAINER_HOME" "$_ctr"
 done < <(ai_sandbox_shared_mounts)
 printf '%s' "$DISPLAY_VOL_LINES"
 } > "$COMPOSE_FILE"

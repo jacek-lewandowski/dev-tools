@@ -32,20 +32,50 @@ assert_no_file "extensions not copied"       "$dir/.antigravity/extensions"
 assert_no_file "vsix cache not copied"       "$dir/antigravity-ide-data/CachedExtensionVSIXs"
 
 for d in antigravity-extensions antigravity-ide-extensions claude-downloads \
-         claude-desktop-versions ide-vsix ide-cacheddata cache npm; do
+         claude-desktop-versions ide-vsix jetbrains-plugins; do
     assert_file "shared/$d exists" "$AI_SANDBOX_ROOT/shared/$d"
 done
 
+# The host is the only writer of shared/: its own copy is synced in, so a
+# sandbox never has to (and, mounted read-only, never can) populate it.
+assert_eq "claude-code versions synced from the host" \
+    "$(cat "$AI_SANDBOX_ROOT/shared/claude-desktop-versions/9.9.9/bin")" 'bulk'
+assert_eq "downloads synced from the host" \
+    "$(cat "$AI_SANDBOX_ROOT/shared/claude-downloads/cli")" 'bulk'
+assert_eq "vsix cache synced from the host" \
+    "$(cat "$AI_SANDBOX_ROOT/shared/ide-vsix/x.vsix")" 'bulk'
+assert_eq "extensions synced from the host" \
+    "$(cat "$AI_SANDBOX_ROOT/shared/antigravity-extensions/ext-a/package.json")" 'bulk'
+
 compose=$(cat "$dir/docker-compose.yml")
-assert_contains "ide extensions mounted from shared" "$compose" \
-    "shared/antigravity-ide-extensions:$HOME/.antigravity-ide/extensions"
-assert_contains "downloads mounted from shared" "$compose" \
-    "shared/claude-downloads:$HOME/.claude/downloads"
-assert_contains "cache mounted from shared" "$compose" "shared/cache:$HOME/.cache"
-assert_contains "claude-code versions mounted" "$compose" \
-    "shared/claude-desktop-versions:$HOME/.config/Claude/claude-code"
+assert_contains "ide extensions mounted from shared, read-only" "$compose" \
+    "shared/antigravity-ide-extensions:$HOME/.antigravity-ide/extensions:ro\""
+assert_contains "downloads mounted from shared, read-only" "$compose" \
+    "shared/claude-downloads:$HOME/.claude/downloads:ro\""
+assert_contains "claude-code versions mounted, read-only" "$compose" \
+    "shared/claude-desktop-versions:$HOME/.config/Claude/claude-code:ro\""
 assert_contains "a container path containing a space survives" "$compose" \
-    "Antigravity IDE/CachedExtensionVSIXs"
+    "Antigravity IDE/CachedExtensionVSIXs:ro\""
+# Sandboxes are not one trust domain: every shared store holds code, so no
+# shared mount may be writable from inside a sandbox.
+assert_eq "every shared mount is read-only" \
+    "$(printf '%s\n' "$compose" | grep -c '/shared/')" \
+    "$(printf '%s\n' "$compose" | grep -c '/shared/.*:ro"')"
+# What a sandbox writes at run time is its own: caches hold code too.
+assert_contains "~/.cache is per sandbox" "$compose" "\"$dir/cache:$HOME/.cache\""
+assert_contains "~/.npm is per sandbox"   "$compose" "\"$dir/npm:$HOME/.npm\""
+assert_file "the cache directory is created, not left to Docker" "$dir/cache"
+assert_file "the npm directory is created, not left to Docker"   "$dir/npm"
+for d in cache npm ide-cacheddata; do
+    assert_no_file "shared/$d is no longer a store" "$AI_SANDBOX_ROOT/shared/$d"
+done
+
+# Updating on the host is what updates the sandboxes: a re-run syncs again.
+mkdir -p "$HOME/.config/Claude/claude-code/9.9.10"
+echo newer > "$HOME/.config/Claude/claude-code/9.9.10/bin"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out2" 2>&1 || true
+assert_eq "a re-run syncs the host's newer copy into shared" \
+    "$(cat "$AI_SANDBOX_ROOT/shared/claude-desktop-versions/9.9.10/bin")" 'newer'
 # ~/.gemini/config holds mcp_config.json and plugins/, which the host's
 # Antigravity executes. It is seeded once per sandbox, never live-shared, so
 # a sandbox cannot register an MCP server or plugin on the host.
