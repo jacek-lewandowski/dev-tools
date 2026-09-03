@@ -545,7 +545,9 @@ fi
 # container the host's devpts (every terminal in your session) and the host's
 # virtual consoles. Instead each needed device node is passed through
 # explicitly, and cgroup rules are added only for majors that are inherently
-# per-device (USB serial, USB raw, ALSA) rather than blanket wildcards.
+# per-device (USB serial, ALSA) rather than blanket wildcards. /dev/bus/usb
+# is never mounted: that tree, and the 189:* major behind it, is every USB
+# device on the host (webcam, fingerprint reader, network adapter).
 # ---------------------------------------------------------------------------
 
 step "Enumerating devices"
@@ -603,12 +605,6 @@ shopt -u nullglob
 # 'ai-sandbox-attach' create the node later without recreating the container.
 add_cgroup 'c 188:* rwm'    # ttyUSB
 add_cgroup 'c 166:* rwm'    # ttyACM
-
-if [ -d /dev/bus/usb ]; then
-    add_vol '"/dev/bus/usb:/dev/bus/usb"'
-    add_cgroup 'c 189:* rwm'
-    log "usb: /dev/bus/usb (libusb tools, hot-plug aware)"
-fi
 
 if [ -d /dev/snd ] && [ "$DISPLAY_MODE" != "none" ]; then
     add_vol '"/dev/snd:/dev/snd"'
@@ -739,8 +735,13 @@ Environment notes:
 - The container is capped at ${MEMORY_LIMIT} of RAM with no swap. Keep build and test
   parallelism modest: an over-parallel build is OOM-killed, not merely slowed.
 - The project is mounted read-write at its real host path, so edits are real
-  edits to the user's working tree. The rest of the host filesystem is not mounted.
-- Only explicitly passed-through serial/USB devices are visible under /dev.
+  edits to the user's working tree. The only other host paths mounted are the
+  shared AI rules file, the Antigravity brain and conversations, this project's
+  Claude Code history and memory, and ~/.gitignore (read-write), plus the
+  dev-tools helpers, IntelliJ IDEA and SDKMAN (read-only, when present). The
+  rest of the host filesystem is not mounted.
+- Only explicitly passed-through serial ports are visible under /dev. No other
+  host USB device is reachable: /dev/bus/usb is not mounted.
 
 Double-check what you are doing, and whether it addresses the request, before acting.
 ${MARKER_END}"
