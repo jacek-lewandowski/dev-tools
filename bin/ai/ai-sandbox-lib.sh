@@ -27,6 +27,13 @@ ai_sandbox_project_id() {
     printf '%s-%s' "$slug" "$hash"
 }
 
+# Claude Code keys its per-project state (~/.claude/projects/<key>) by the
+# absolute project path with every character outside [A-Za-z0-9] turned into
+# '-'. Reproducing that lets a sandbox mount only its own project's entry.
+ai_sandbox_claude_project_key() {
+    printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
+}
+
 # The git toplevel when there is one, so running from a subdirectory is safe.
 ai_sandbox_project_root() {
     local dir=${1:-$PWD}
