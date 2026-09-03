@@ -50,6 +50,10 @@ assert_eq   "backup holds the replaced login" \
 acct reset --yes >/dev/null
 assert_no_file "reset cleared claude creds" "$dir/.claude/.credentials.json"
 assert_file    "reset kept the sandbox"     "$dir/docker-compose.yml"
+# Bind sources must survive reset, or compose recreates them root-owned.
+while IFS='|' read -r _ sb_rel; do
+    [ -n "$sb_rel" ] && assert_file "reset kept bind source $sb_rel" "$dir/$sb_rel"
+done < <(ai_sandbox_seed_paths)
 create
 assert_no_file "reset is not undone by a re-run" "$dir/.claude/.credentials.json"
 
