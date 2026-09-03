@@ -26,12 +26,19 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
 done
 
 # Stores that left the shared table -- ~/.cache, ~/.npm and the IDE's CachedData
-# were shared once and are per sandbox now -- are never mounted again.
-stale=()
+# were shared once and are per sandbox now -- are never mounted again by a
+# compose file that create-ai-sandbox.sh has rewritten. A sandbox whose compose
+# file predates the change still binds them read-write, and only a re-run of
+# create-ai-sandbox.sh rewrites it: removing the store from under such a sandbox
+# hands it a root-owned ~/.cache or ~/.npm on its next start, so those stay.
+stale=(); held=()
 for d in "$AI_SANDBOX_ROOT"/shared/*/; do
     [ -d "$d" ] || continue
     d=${d%/}
     ai_sandbox_shared_mounts | cut -d'|' -f1 | grep -qx "$(basename "$d")" && continue
+    if grep -lsF -e "$d:" -e "$d/" "$AI_SANDBOX_ROOT"/*-agent/docker-compose.yml >/dev/null 2>&1; then
+        held+=("$d"); continue
+    fi
     stale+=("$d")
 done
 
@@ -59,13 +66,20 @@ if [ "${#stale[@]}" -gt 0 ]; then
         printf '  %-6s %s\n' "$(du -sh "$t" 2>/dev/null | cut -f1)" "$t"
     done
 fi
+if [ "${#held[@]}" -gt 0 ]; then
+    echo "Kept: shared stores an older compose file still mounts (re-run create-ai-sandbox.sh on those sandboxes first):"
+    for t in "${held[@]}"; do
+        printf '  %-6s %s  <- %s\n' "$(du -sh "$t" 2>/dev/null | cut -f1)" "$t" \
+            "$(grep -lsF -e "$t:" -e "$t/" "$AI_SANDBOX_ROOT"/*-agent/docker-compose.yml | xargs -n1 dirname | xargs -n1 basename | paste -sd' ')"
+    done
+fi
 if [ "${#legacy_images[@]}" -gt 0 ]; then
     echo "Images from the old per-project naming scheme:"
     printf '  %s\n' "${legacy_images[@]}"
 fi
 
 if [ "$assume_yes" != "yes" ]; then
-    printf 'Remove all of the above? [y/N] '
+    printf 'Remove the duplicates, stale stores and images listed above (kept stores stay)? [y/N] '
     read -r reply || reply=n
     case "$reply" in y|Y) ;; *) echo "Cancelled. Nothing was removed."; exit 0 ;; esac
 fi
