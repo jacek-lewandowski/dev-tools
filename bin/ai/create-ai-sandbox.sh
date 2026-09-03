@@ -361,6 +361,7 @@ mkdir -p "$XAUTH_DIR" \
          "$SANDBOX_DIR/gcloud" \
          "$SANDBOX_DIR/.antigravity" \
          "$SANDBOX_DIR/.claude" \
+         "$SANDBOX_DIR/.claude/projects" \
          "$SANDBOX_DIR/.codex" \
          "$SANDBOX_DIR/.gemini"
 

@@ -45,6 +45,11 @@ case "$(cat "$dir/docker-compose.yml")" in
 esac
 assert_file "host-side project entry is created so docker does not make it root-owned" \
             "$HOME/.claude/projects/$key"
+# The mount target sits two levels inside the per-sandbox .claude mount; the
+# intermediate projects/ must exist user-owned or runc creates it as root, which
+# breaks rm -rf on .claude (account reset, ai-sandbox-rm) and sibling entries.
+assert_file "sandbox-side .claude/projects is pre-created so docker does not make it root-owned" \
+            "$dir/.claude/projects"
 
 # Two projects with the same basename must land in different directories.
 proj2="$tmp/play/dev-tools"
