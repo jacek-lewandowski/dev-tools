@@ -146,7 +146,9 @@ Layout under ~/.ai-sandbox:
 
 Mounted live from the host into every sandbox: ~/.gemini/GEMINI.md (the shared
 brain, also read as ~/.claude/CLAUDE.md), the Antigravity brain and
-conversations, and ~/.claude/projects. Edits there are real edits on the host.
+conversations, and this project's own ~/.claude/projects/<key> entry only, so a
+sandbox cannot read or write another project's Claude Code history or memory.
+Edits there are real edits on the host.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
@@ -276,6 +278,8 @@ PROJECT_NAME=$(ai_sandbox_slug "${PROJECT_ABS_DIR##*/}")
 
 PROJECT_ID=$(ai_sandbox_project_id "$PROJECT_ABS_DIR")
 CONTAINER_NAME="${PROJECT_ID}-agent"
+# This project's entry under ~/.claude/projects; the only one the sandbox sees.
+CLAUDE_PROJECT_DIR="$HOME/.claude/projects/$(ai_sandbox_claude_project_key "$PROJECT_ABS_DIR")"
 
 SANDBOX_DIR="$AI_SANDBOX_ROOT/${CONTAINER_NAME}"
 # ONE build context and ONE image for every project: nothing in the generated
@@ -635,7 +639,7 @@ fi
 
 step "Wiring the shared brain"
 
-mkdir -p "$HOME/.gemini" "$HOME/.claude/projects" "$HOME/.antigravity" \
+mkdir -p "$HOME/.gemini" "$CLAUDE_PROJECT_DIR" "$HOME/.antigravity" \
          "$HOME/.config/Antigravity" "$HOME/.config/Antigravity IDE" "$HOME/.config/Claude" \
          "$HOME/.gemini/config" \
          "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/antigravity/conversations" \
@@ -820,7 +824,8 @@ else
         log "Claude Desktop"
     fi
     if [ -d "$HOME/.claude" ]; then
-        # CLAUDE.md and projects/ are bind-mounted live further down, not copied.
+        # CLAUDE.md and this project's projects/ entry are bind-mounted live
+        # further down, not copied; other projects' history stays on the host.
         safe_rsync -a "${COMMON_EXCLUDES[@]}" --exclude='CLAUDE.md' --exclude='projects' \
             "$HOME/.claude/" "$SANDBOX_DIR/.claude/"
         log ".claude"
@@ -1644,8 +1649,10 @@ cat <<COMPOSE_VOLS
       - "${HOME}/.gemini/antigravity/conversations:${CONTAINER_HOME}/.gemini/antigravity/conversations"
       - "${HOME}/.gemini/antigravity-ide/brain:${CONTAINER_HOME}/.gemini/antigravity-ide/brain"
       - "${HOME}/.gemini/antigravity-ide/conversations:${CONTAINER_HOME}/.gemini/antigravity-ide/conversations"
-      # Live-shared Claude Code per-project history.
-      - "${HOME}/.claude/projects:${CONTAINER_HOME}/.claude/projects"
+      # Live-shared Claude Code history and memory for THIS project only. The
+      # whole of ~/.claude/projects would let a prompt-injected agent read other
+      # projects' transcripts and plant memory the host loads automatically.
+      - "${CLAUDE_PROJECT_DIR}:${CONTAINER_HOME}/.claude/projects/${CLAUDE_PROJECT_DIR##*/}"
 COMPOSE_VOLS
 
 if [ -d "$IDEA_HOST_DIR" ]; then

@@ -33,6 +33,18 @@ assert_contains "compose names the new container"   "$(cat "$dir/docker-compose.
                 "container_name: \"${id}-agent\""
 assert_contains "compose keeps the real project path" \
                 "$(cat "$dir/docker-compose.yml")" "\"${proj}:${proj}\""
+# Only this project's Claude Code entry is shared with the host, never the
+# whole of ~/.claude/projects (other projects' transcripts and memory).
+key=$(printf '%s' "$proj" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')
+assert_contains "compose mounts only this project's ~/.claude/projects entry" \
+                "$(cat "$dir/docker-compose.yml")" \
+                "\"$HOME/.claude/projects/$key:$HOME/.claude/projects/$key\""
+case "$(cat "$dir/docker-compose.yml")" in
+    *"$HOME/.claude/projects:"*) TESTS_RUN=$((TESTS_RUN + 1)); _fail "whole ~/.claude/projects is not mounted" "found a mount of the parent directory" ;;
+    *) TESTS_RUN=$((TESTS_RUN + 1)); _pass "whole ~/.claude/projects is not mounted" ;;
+esac
+assert_file "host-side project entry is created so docker does not make it root-owned" \
+            "$HOME/.claude/projects/$key"
 
 # Two projects with the same basename must land in different directories.
 proj2="$tmp/play/dev-tools"
