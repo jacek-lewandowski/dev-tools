@@ -122,6 +122,76 @@ jetbrains-plugins|.local/share/JetBrains|
 SHARED
 }
 
+# Every helper installed into $AI_SANDBOX_ROOT/bin. create-ai-sandbox.sh
+# installs from this list and ai-sandbox-migrate refreshes from it, so a helper
+# added here is picked up by both without either being edited.
+ai_sandbox_helpers() {
+    cat <<'HELPERS'
+ai-sandbox-lib.sh
+ai-sandbox
+ai-sandbox-stop
+ai-sandbox-restart
+ai-sandbox-attach
+ai-sandbox-rm
+ai-sandbox-migrate
+ai-sandbox-account
+ai-sandbox-gc
+ai-sandbox-extensions
+HELPERS
+}
+
+# True when the sandbox container NAME is running. Without docker on PATH
+# nothing can be running, so the answer is no rather than an error.
+ai_sandbox_container_running() {
+    command -v docker >/dev/null 2>&1 || return 1
+    [ "$(docker container inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
+}
+
+# rsync '--exclude=' arguments for copying the host's <path under $HOME> into
+# a sandbox, one per line. Used by the one-time seed in create-ai-sandbox.sh
+# and by 'ai-sandbox-account refresh', so a refresh can never drag in what the
+# seed deliberately left out: caches, the bulk that now lives in shared/, host
+# state a single-project sandbox has no use for, and the paths that are
+# bind-mounted live instead of copied (the shared brain and conversations,
+# ~/.claude/CLAUDE.md and this project's ~/.claude/projects entry).
+ai_sandbox_seed_excludes() {
+    cat <<'EX'
+--exclude=*Cache*
+--exclude=*cache*
+--exclude=BrowserMetrics*
+--exclude=Crashpad
+--exclude=logs
+--exclude=tmp
+--exclude=extensions
+--exclude=downloads
+--exclude=claude-code
+--exclude=CachedExtensionVSIXs
+--exclude=CachedData
+--exclude=WebStorage
+--exclude=workspaceStorage
+--exclude=Safe Browsing
+--exclude=optimization_guide_model_store
+--exclude=WasmTtsEngine
+--exclude=OnDeviceHeadSuggestModel
+--exclude=CertificateRevocation
+EX
+    case $1 in
+        .gemini) cat <<'EX'
+--exclude=brain
+--exclude=conversations
+--exclude=browser_recordings
+--exclude=html_artifacts
+--exclude=history
+--exclude=History*
+--exclude=IndexedDB
+--exclude=Service Worker
+--exclude=GEMINI.md
+EX
+        ;;
+        .claude) printf '%s\n' --exclude=CLAUDE.md --exclude=projects ;;
+    esac
+}
+
 # '<path under $HOME on the host>|<path under the sandbox directory>'.
 # Everything here is identity-bearing -- OAuth tokens, account records, the
 # Electron profiles that hold a logged-in session -- so it is seeded from the

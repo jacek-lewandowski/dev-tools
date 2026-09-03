@@ -68,7 +68,10 @@ refresh)
         fi
         [ -d "$HOME/$host_rel" ] || continue
         mkdir -p "$AI_SANDBOX_DIR/$sb_rel"
-        rsync -a --delete "$HOME/$host_rel/" "$AI_SANDBOX_DIR/$sb_rel/"
+        # Same excludes as the seed, and --delete (not --delete-excluded)
+        # leaves the excluded live mount points in place.
+        mapfile -t ex < <(ai_sandbox_seed_excludes "$host_rel")
+        rsync -a --delete "${ex[@]}" "$HOME/$host_rel/" "$AI_SANDBOX_DIR/$sb_rel/"
     done < <(ai_sandbox_seed_paths)
     [ -f "$AI_SANDBOX_DIR/.claude.json" ] && cp -a "$AI_SANDBOX_DIR/.claude.json" "$backup/"
     if [ -f "$HOME/.claude.json" ]; then cp -f "$HOME/.claude.json" "$AI_SANDBOX_DIR/.claude.json"; fi
