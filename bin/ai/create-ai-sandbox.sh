@@ -349,21 +349,14 @@ while IFS='|' read -r _sub _ctr _sb; do
 done < <(ai_sandbox_shared_mounts)
 unset _sub _ctr _sb
 
-# cache/ and npm/ are per sandbox on purpose: both hold code the sandbox writes
-# at run time (wheels, npm tarballs), so sharing them would let one sandbox
-# feed code to another.
-mkdir -p "$XAUTH_DIR" \
-         "$SANDBOX_DIR/cache" \
-         "$SANDBOX_DIR/npm" \
-         "$SANDBOX_DIR/antigravity-data" \
-         "$SANDBOX_DIR/antigravity-ide-data" \
-         "$SANDBOX_DIR/claude-data" \
-         "$SANDBOX_DIR/gcloud" \
-         "$SANDBOX_DIR/.antigravity" \
-         "$SANDBOX_DIR/.claude" \
-         "$SANDBOX_DIR/.claude/projects" \
-         "$SANDBOX_DIR/.codex" \
-         "$SANDBOX_DIR/.gemini"
+# Every per-sandbox bind source, created here rather than left to Docker, which
+# would make a missing one root-owned. The list is ai_sandbox_state_dirs in
+# ai-sandbox-lib.sh, so that 'ai-sandbox-account reset' recreates the same set.
+mkdir -p "$XAUTH_DIR"
+while IFS= read -r _dir; do
+    [ -n "$_dir" ] && mkdir -p "$SANDBOX_DIR/$_dir"
+done < <(ai_sandbox_state_dirs)
+unset _dir
 
 # ---------------------------------------------------------------------------
 # Locate the host tools/ directory
