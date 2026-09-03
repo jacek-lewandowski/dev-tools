@@ -329,6 +329,7 @@ mkdir -p "$XAUTH_DIR" \
          "$SANDBOX_DIR/antigravity-ide-data" \
          "$SANDBOX_DIR/claude-data" \
          "$SANDBOX_DIR/gcloud" \
+         "$SANDBOX_DIR/.antigravity" \
          "$SANDBOX_DIR/.claude" \
          "$SANDBOX_DIR/.codex" \
          "$SANDBOX_DIR/.gemini"
@@ -343,12 +344,6 @@ elif [ -d "$HOME/tools" ];                       then HOST_TOOLS_DIR="$HOME/tool
 else die "Cannot locate the dev-tools 'tools' directory (looked next to this script, in ~/dev/public/dev-tools, and in ~/tools)."
 fi
 log "tools     $HOST_TOOLS_DIR"
-
-# The uid suffix keeps two host users sharing one Docker daemon from fighting
-# over a single tag, since the image bakes in USER_ID.
-if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
-IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"
-IMAGE_STAMP="$IMAGE_DIR/${IMAGE_VARIANT}-u${HOST_UID}.stamp"
 
 # ---------------------------------------------------------------------------
 # Display mode
@@ -369,6 +364,12 @@ if [ "$WITH_DOCKER_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
         0) WITH_DOCKER="no" ;;
     esac
 fi
+
+# The uid suffix keeps two host users sharing one Docker daemon from fighting
+# over a single tag, since the image bakes in USER_ID.
+if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
+IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"
+IMAGE_STAMP="$IMAGE_DIR/${IMAGE_VARIANT}-u${HOST_UID}.stamp"
 
 if [ "$DISPLAY_MODE_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_MODE=$(sed -n 's/^SANDBOX_DISPLAY_MODE=//p' "$ENV_FILE" | tail -n 1)
