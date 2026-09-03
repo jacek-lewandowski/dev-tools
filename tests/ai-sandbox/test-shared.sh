@@ -18,6 +18,8 @@ echo bulk > "$HOME/.claude/downloads/cli"
 echo bulk > "$HOME/.antigravity/extensions/ext-a/package.json"
 echo bulk > "$HOME/.config/Antigravity IDE/CachedExtensionVSIXs/x.vsix"
 echo keep > "$HOME/.claude/.credentials.json"
+mkdir -p "$HOME/.gemini/config/plugins"
+echo '{"mcpServers":{}}' > "$HOME/.gemini/config/mcp_config.json"
 
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
 dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
@@ -44,6 +46,14 @@ assert_contains "claude-code versions mounted" "$compose" \
     "shared/claude-desktop-versions:$HOME/.config/Claude/claude-code"
 assert_contains "a container path containing a space survives" "$compose" \
     "Antigravity IDE/CachedExtensionVSIXs"
+# ~/.gemini/config holds mcp_config.json and plugins/, which the host's
+# Antigravity executes. It is seeded once per sandbox, never live-shared, so
+# a sandbox cannot register an MCP server or plugin on the host.
+assert_file "gemini config seeded into the sandbox" "$dir/.gemini/config/mcp_config.json"
+case "$compose" in
+    *"$HOME/.gemini/config:"*) TESTS_RUN=$((TESTS_RUN + 1)); _fail "host ~/.gemini/config is not mounted" "found a live mount of the host directory" ;;
+    *) TESTS_RUN=$((TESTS_RUN + 1)); _pass "host ~/.gemini/config is not mounted" ;;
+esac
 
 # The table's third field is the path inside the SANDBOX dir, which differs from
 # the container path for the Electron dirs, and is empty where the data lives

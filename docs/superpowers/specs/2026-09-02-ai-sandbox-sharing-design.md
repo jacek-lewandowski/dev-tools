@@ -43,8 +43,8 @@ sandbox.
 Identity-bearing files, all already per-project: `.claude/.credentials.json`,
 `.claude.json`, `.gemini/google_accounts.json`, `gcloud/`, and the Electron
 profiles under `.config/{Antigravity,Antigravity IDE,Claude}`.
-`~/.gemini/config` is live-shared from the host and holds config, MCP settings
-and skills only -- no credentials -- so it stays shared.
+`~/.gemini/config` holds MCP settings and plugins that the host's Antigravity
+executes, so it is seeded once per sandbox rather than live-shared.
 
 ## Non-goals
 

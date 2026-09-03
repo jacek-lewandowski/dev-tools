@@ -641,7 +641,6 @@ step "Wiring the shared brain"
 
 mkdir -p "$HOME/.gemini" "$CLAUDE_PROJECT_DIR" "$HOME/.antigravity" \
          "$HOME/.config/Antigravity" "$HOME/.config/Antigravity IDE" "$HOME/.config/Claude" \
-         "$HOME/.gemini/config" \
          "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/antigravity/conversations" \
          "$HOME/.gemini/antigravity-ide/brain" "$HOME/.gemini/antigravity-ide/conversations"
 touch "$HOME/.gitignore"
@@ -800,7 +799,7 @@ else
 
     if [ -d "$HOME/.gemini" ]; then
         safe_rsync -a --delete-excluded "${COMMON_EXCLUDES[@]}" \
-            --exclude='brain' --exclude='conversations' --exclude='config' \
+            --exclude='brain' --exclude='conversations' \
             --exclude='browser_recordings' --exclude='html_artifacts' \
             --exclude='history' --exclude='History*' \
             --exclude='IndexedDB' --exclude='Service Worker' --exclude='GEMINI.md' \
@@ -1643,8 +1642,9 @@ cat <<COMPOSE_VOLS
       # Claude Code as CLAUDE.md, live on the host and in every sandbox.
       - "${HOME}/.gemini/GEMINI.md:${CONTAINER_HOME}/.gemini/GEMINI.md"
       - "${HOME}/.gemini/GEMINI.md:${CONTAINER_HOME}/.claude/CLAUDE.md"
-      # Live-shared Antigravity brain, conversations and config.
-      - "${HOME}/.gemini/config:${CONTAINER_HOME}/.gemini/config"
+      # Live-shared Antigravity brain and conversations. ~/.gemini/config is
+      # deliberately NOT here: it holds mcp_config.json and plugins/, which the
+      # host's Antigravity executes, so it is seeded per sandbox instead.
       - "${HOME}/.gemini/antigravity/brain:${CONTAINER_HOME}/.gemini/antigravity/brain"
       - "${HOME}/.gemini/antigravity/conversations:${CONTAINER_HOME}/.gemini/antigravity/conversations"
       - "${HOME}/.gemini/antigravity-ide/brain:${CONTAINER_HOME}/.gemini/antigravity-ide/brain"
