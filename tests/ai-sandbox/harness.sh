@@ -26,6 +26,21 @@ assert_file() {
     TESTS_RUN=$((TESTS_RUN + 1))
     if [ -e "$2" ]; then _pass "$1"; else _fail "$1" "missing path: $2"; fi
 }
+# The sandbox's SDKMAN farm is symlinks whose targets are container paths, so
+# they dangle when read from the host: -e follows the link and reports nothing
+# there, which makes it silently blind to both presence and absence.
+assert_link() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ ! -L "$2" ]; then _fail "$1" "not a symlink: $2"
+    elif [ "$(readlink "$2")" != "$3" ]; then
+        _fail "$1" "expected link to '$3', got '$(readlink "$2")'"
+    else _pass "$1"; fi
+}
+assert_no_link() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [ -L "$2" ] || [ -d "$2" ]; then _fail "$1" "still present: $2"
+    else _pass "$1"; fi
+}
 assert_no_file() {
     TESTS_RUN=$((TESTS_RUN + 1))
     if [ ! -e "$2" ]; then _pass "$1"; else _fail "$1" "path should not exist: $2"; fi

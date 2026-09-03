@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 a="$tmp/work/a"; b="$tmp/work/b"; mkdir -p "$a" "$b"
 uid=$(id -u)
 tag="ai-sandbox:base-u${uid}"
 
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$a" >"$tmp/o1" 2>&1 || true
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$b" >"$tmp/o2" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$a" >"$tmp/o1" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$b" >"$tmp/o2" 2>&1 || true
 
 ca="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$a")-agent/docker-compose.yml"
 cb="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$b")-agent/docker-compose.yml"
@@ -41,7 +41,7 @@ if [ "$h1" = "$h4" ]; then TESTS_RUN=$((TESTS_RUN+1)); _fail "build hash covers 
 else TESTS_RUN=$((TESTS_RUN+1)); _pass "build hash covers file contents"; fi
 
 # The docker variant is a separate tag, so the two never overwrite each other.
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start --with-docker "$a" >>"$tmp/o1" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --with-docker "$a" >>"$tmp/o1" 2>&1 || true
 assert_contains "docker variant tag" "$(cat "$ca")" "ai-sandbox:docker-u${uid}"
 
 rm -rf "$tmp"

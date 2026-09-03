@@ -108,7 +108,7 @@ What to look for:
   inside the container: whether the old per-project images were genuinely
   separate copies or were already sharing layers.
 
-Then, deliberately: `./bin/create-ai-sandbox.sh` (builds ~10GB once, starts).
+Then, deliberately: `./bin/ai/create-ai-sandbox.sh` (builds ~10GB once, starts).
 
 ## If it goes wrong
 

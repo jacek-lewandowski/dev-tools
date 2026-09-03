@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 # Called directly, not via $(), so the exports inside fake_home actually
 # reach this shell (and thus the create-ai-sandbox.sh child processes below).
@@ -10,7 +10,7 @@ fake_home >/dev/null
 tmp="$FAKE_HOME_DIR"
 proj="$tmp/work/proj"; mkdir -p "$proj"
 touch "$HOME/.bashrc"
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 \
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 \
     || { echo "script failed:"; cat "$tmp/out"; }
 
 for h in ai-sandbox ai-sandbox-stop ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm; do
@@ -39,7 +39,7 @@ assert_contains "helper resolves the same sandbox" "$out" "${id}-agent"
 
 # Re-running create refreshes stale installed copies.
 echo '# stale' > "$AI_SANDBOX_ROOT/bin/ai-sandbox-stop"
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true
 assert_contains "stale helper refreshed" "$(cat "$AI_SANDBOX_ROOT/bin/ai-sandbox-stop")" 'compose stop'
 
 rm -rf "$tmp"

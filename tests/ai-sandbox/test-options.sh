@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 proj="$tmp/work/p"; mkdir -p "$proj"
 
-run() { bash "$REPO_ROOT/bin/create-ai-sandbox.sh" "$@" >"$tmp/out" 2>&1 || true; }
+run() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" "$@" >"$tmp/out" 2>&1 || true; }
 envfile() { cat "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent/.env"; }
 
 run --display=none --no-start --with-docker "$proj"
@@ -22,12 +22,12 @@ run --display=none --no-start "$proj"
 assert_contains "off is sticky too" "$(envfile)" 'SANDBOX_WITH_DOCKER=0'
 
 # Contradictory flags are a usage error, not last-one-wins.
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --with-docker --no-docker "$proj" \
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --with-docker --no-docker "$proj" \
     >"$tmp/both" 2>&1 && rc=0 || rc=$?
 assert_eq       "both flags exit 2"    "$rc" '2'
 assert_contains "both flags explained" "$(cat "$tmp/both")" 'not both'
 
-help=$(bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --help 2>&1)
+help=$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)
 assert_contains "help documents xpra in auto"   "$help" 'else xpra'
 assert_contains "help documents --no-docker"    "$help" '--no-docker'
 assert_contains "help says rebuild is shared"   "$help" 'shared by every project'
