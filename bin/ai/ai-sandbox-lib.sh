@@ -85,13 +85,23 @@ ai_sandbox_build_hash() {
     } | sha256sum | cut -d' ' -f1
 }
 
-# Bulk, read-mostly data that is identical across projects, so every sandbox
-# mounts one shared copy instead of carrying its own.
+# Bulk data that is identical across projects, so every sandbox mounts one
+# shared copy instead of carrying its own.
+#
+# Sandboxes are NOT one trust domain. Everything here is executable code -- IDE
+# extensions, JetBrains plugins, Claude Code and Claude Desktop binaries -- so
+# it is mounted READ-ONLY into every sandbox and written only by the host:
+# create-ai-sandbox.sh syncs the host's own copy in on every run, and
+# ai-sandbox-extensions installs what the host does not have. A compromised
+# sandbox therefore cannot plant code that another sandbox runs. Whatever a
+# sandbox must write at run time (~/.cache, ~/.npm, the IDE's CachedData) is
+# per sandbox and deliberately absent from this table.
 #
 # Each row is three fields:
 #   <subdirectory of shared/>|<path in the container>|<path in the sandbox dir>
 #
-# The second and third differ, and that difference is load-bearing. The
+# The second field is also the path under $HOME on the host that the store is
+# populated from. The second and third differ, and that difference is load-bearing. The
 # container sees ~/.config/Claude, but the sandbox directory holds the same data
 # under claude-data/ (and antigravity-data/, antigravity-ide-data/). An empty
 # third field means the data exists ONLY in the container's writable layer and
@@ -108,10 +118,7 @@ antigravity-ide-extensions|.antigravity-ide/extensions|
 claude-downloads|.claude/downloads|.claude/downloads
 claude-desktop-versions|.config/Claude/claude-code|claude-data/claude-code
 ide-vsix|.config/Antigravity IDE/CachedExtensionVSIXs|antigravity-ide-data/CachedExtensionVSIXs
-ide-cacheddata|.config/Antigravity IDE/CachedData|antigravity-ide-data/CachedData
 jetbrains-plugins|.local/share/JetBrains|
-cache|.cache|
-npm|.npm|
 SHARED
 }
 

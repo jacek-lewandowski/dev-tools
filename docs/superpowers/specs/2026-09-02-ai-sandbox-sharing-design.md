@@ -103,20 +103,19 @@ paths, so no credential path changes and no risk of losing a login.
   image/
     build/                   Dockerfile + entrypoint + sandbox-* helpers
     <variant>-u<uid>.stamp   hash of build inputs
-  shared/                    bulk, read-mostly, mounted into every sandbox
+  shared/                    bulk code, synced from the host, mounted READ-ONLY
     antigravity-extensions/       -> ~/.antigravity/extensions
     antigravity-ide-extensions/   -> ~/.antigravity-ide/extensions
     claude-downloads/             -> ~/.claude/downloads
     claude-desktop-versions/      -> ~/.config/Claude/claude-code
     ide-vsix/                     -> ~/.config/Antigravity IDE/CachedExtensionVSIXs
-    ide-cacheddata/               -> ~/.config/Antigravity IDE/CachedData
-    cache/                        -> ~/.cache
-    npm/                          -> ~/.npm
+    jetbrains-plugins/            -> ~/.local/share/JetBrains
   <PROJECT_ID>-agent/
     project-path  .seeded  .env  docker-compose.yml
     x11auth/  start-display.sh  stop-display.sh
     .claude/ .claude.json .codex/ .gemini/ gcloud/
     antigravity-data/ antigravity-ide-data/ claude-data/ .antigravity/
+    cache/ npm/                -> ~/.cache, ~/.npm: per sandbox, writable
 ```
 
 `~/.antigravity-ide/` is deliberately absent from the per-project set: only its
@@ -126,6 +125,20 @@ container's writable layer, as it does today.
 The `shared/*` directories are nested bind mounts inside the per-project mounts.
 Docker orders mounts by destination depth, so this works; `~/.claude/projects`
 already relies on it today.
+
+**Trust between sandboxes.** Sandboxes are not one trust domain: an agent in one
+project must not be able to run code in another. Every `shared/*` store holds
+executable code -- IDE extensions, JetBrains plugins, Claude Code and Claude
+Desktop binaries -- so all of them are mounted read-only, and only the host
+writes them. `create-ai-sandbox.sh` syncs the host's own copy of each store in
+on every run, and `ai-sandbox-extensions` installs, from a throwaway container,
+what the host does not have. Installing or updating on the host and re-running
+the script is how a change reaches the sandboxes; installing inside a sandbox
+fails. Whatever a sandbox must write at run time -- `~/.cache`, `~/.npm`, the
+IDE's `CachedData` -- is therefore per sandbox (`cache/`, `npm/` and
+`antigravity-ide-data/CachedData` in the project directory), one copy per
+project by design. The one exception is migration step M2 below, a one-off lift
+of a legacy sandbox's copy into an empty `shared/`.
 
 ### 3. One shared image
 
