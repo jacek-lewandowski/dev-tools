@@ -41,7 +41,22 @@ acct() { ( cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" "$@" 2>&1 )
 assert_contains "status names the sandbox" "$(acct status)" "$(ai_sandbox_project_id "$proj")"
 assert_contains "status reports seeding"   "$(acct status)" 'seeded'
 
+# What the seed leaves out, refresh must leave out too: live-mounted paths,
+# caches, and the bulk that lives in shared/.
+mkdir -p "$HOME/.claude/projects/-home-other" "$HOME/.claude/downloads" "$HOME/.gemini/antigravity/brain"
+echo host-rules > "$HOME/.claude/CLAUDE.md"
+echo other      > "$HOME/.claude/projects/-home-other/x.jsonl"
+echo bulk       > "$HOME/.claude/downloads/bin"
+echo brain      > "$HOME/.gemini/antigravity/brain/CLAUDE.md"
+mkdir -p "$dir/.claude/projects/mine" "$dir/.claude/downloads"
+echo mine > "$dir/.claude/projects/mine/keep"
 acct refresh --yes >/dev/null
+assert_no_file "refresh excludes CLAUDE.md"        "$dir/.claude/CLAUDE.md"
+assert_no_file "refresh excludes other projects"   "$dir/.claude/projects/-home-other"
+assert_no_file "refresh excludes shared downloads" "$dir/.claude/downloads/bin"
+assert_no_file "refresh excludes the brain"        "$dir/.gemini/antigravity/brain"
+assert_file    "refresh keeps the projects mount"  "$dir/.claude/projects/mine/keep"
+assert_file    "refresh keeps the downloads mount" "$dir/.claude/downloads"
 assert_eq   "refresh pulls the host token" "$(cat "$dir/.claude/.credentials.json")" 'host-token-2'
 assert_file "refresh leaves a backup"      "$dir/.credentials-backup"
 assert_eq   "backup holds the replaced login" \

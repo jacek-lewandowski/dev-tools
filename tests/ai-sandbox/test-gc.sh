@@ -41,6 +41,19 @@ assert_no_file "gc --yes removes the duplicate" "$dir2/.antigravity/extensions/e
 assert_file    "gc kept the shared copy" \
                "$AI_SANDBOX_ROOT/shared/antigravity-extensions/ext-a/package.json"
 
+# A store that left the shared table is stale only once no compose file binds
+# it: an older sandbox's compose file still mounts shared/cache read-write.
+mkdir -p "$AI_SANDBOX_ROOT/shared/cache" "$AI_SANDBOX_ROOT/shared/npm"
+echo payload > "$AI_SANDBOX_ROOT/shared/cache/x"; echo payload > "$AI_SANDBOX_ROOT/shared/npm/x"
+printf '      - "%s/shared/cache:/home/dev/.cache"\n' "$AI_SANDBOX_ROOT" >> "$dir/docker-compose.yml"
+out=$(bash "$REPO_ROOT/bin/ai/ai-sandbox-gc" </dev/null 2>&1)
+assert_contains "gc reports the still-mounted store as kept" "$out" "Kept: shared stores"
+assert_contains "gc names the sandbox holding it" "$out" "$(basename "$dir")"
+bash "$REPO_ROOT/bin/ai/ai-sandbox-gc" --yes >/dev/null 2>&1 || true
+assert_file    "gc keeps a store an old compose file mounts" "$AI_SANDBOX_ROOT/shared/cache/x"
+assert_no_file "gc removes a store nothing mounts"          "$AI_SANDBOX_ROOT/shared/npm/x"
+rm -rf "$AI_SANDBOX_ROOT/shared/cache"
+
 # Idempotence: with nothing left to do, migrate is silent.
 out=$(bash "$REPO_ROOT/bin/ai/ai-sandbox-migrate" 2>&1)
 assert_eq "migrate silent when nothing to do" "$out" ''

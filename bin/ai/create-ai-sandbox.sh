@@ -753,19 +753,24 @@ fi
 
 # Build the tooling notes from the feature set that is actually enabled, so the
 # agents are never told about tools that were not installed.
+HOST_SDKMAN="$HOME/.sdkman"      # the SDKMAN section below keys off the same path
 TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   (\`headroom wrap <tool>\`, \`headroom proxy --port 8787\`, \`headroom doctor\`, \`headroom mcp\`),
   or \`from headroom import compress\`. Use it to shrink large JSON payloads, logs or
   command output before they land in context.
 - \`semantic-docs\` -- local vector search over docs, notes, PDFs and daily tasks.
-- \`sdk\` -- SDKMAN. The JDKs and other toolchains come from the host read-only,
-  but the defaults are this sandbox's own: \`sdk default java <version>\` changes
-  this project only, not the host and not other sandboxes. \`sdk list java\` shows
-  what the host has; \`sdk install\` writes inside the sandbox.
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
 - \`sox\`/\`ffmpeg\` -- audio and video conversion.
 - ImageMagick 6."
+
+if [ -d "$HOST_SDKMAN" ]; then
+    TOOL_NOTES="${TOOL_NOTES}
+- \`sdk\` -- SDKMAN. The JDKs and other toolchains come from the host read-only,
+  but the defaults are this sandbox's own: \`sdk default java <version>\` changes
+  this project only, not the host and not other sandboxes. \`sdk list java\` shows
+  what the host has; \`sdk install\` writes inside the sandbox."
+fi
 
 if [ "$WITH_AUDIO" = "yes" ]; then
     TOOL_NOTES="${TOOL_NOTES}
@@ -852,22 +857,14 @@ fi
 
 step "Copying tool state into the sandbox"
 
-COMMON_EXCLUDES=(
-    --exclude='*Cache*' --exclude='*cache*' --exclude='BrowserMetrics*'
-    --exclude='Crashpad' --exclude='logs' --exclude='tmp'
-    # Shared between sandboxes now, so a per-project copy is pure duplication.
-    --exclude='extensions'
-    --exclude='downloads'
-    --exclude='claude-code'
-    --exclude='CachedExtensionVSIXs' --exclude='CachedData' --exclude='WebStorage'
-    # Host state a single-project sandbox has no use for: workspaceStorage holds
-    # the host's state for every workspace ever opened, and the browser profile's
-    # model stores regenerate on demand.
-    --exclude='workspaceStorage'
-    --exclude='Safe Browsing' --exclude='optimization_guide_model_store'
-    --exclude='WasmTtsEngine' --exclude='OnDeviceHeadSuggestModel'
-    --exclude='CertificateRevocation'
-)
+# The exclude list lives in ai-sandbox-lib.sh so that 'ai-sandbox-account
+# refresh' copies exactly what the seed copies.
+seed_rsync() {  # <path under $HOME> <path under $SANDBOX_DIR> [rsync flags...]
+    local host_rel=$1 sb_rel=$2 ex
+    shift 2
+    mapfile -t ex < <(ai_sandbox_seed_excludes "$host_rel")
+    safe_rsync -a "$@" "${ex[@]}" "$HOME/$host_rel/" "$SANDBOX_DIR/$sb_rel/"
+}
 
 if [ -f "$SANDBOX_DIR/.seeded" ]; then
     log "already seeded on $(cat "$SANDBOX_DIR/.seeded")"
@@ -877,35 +874,29 @@ else
     log "login made inside the sandbox survives."
 
     if [ -d "$HOME/.gemini" ]; then
-        safe_rsync -a --delete-excluded "${COMMON_EXCLUDES[@]}" \
-            --exclude='brain' --exclude='conversations' \
-            --exclude='browser_recordings' --exclude='html_artifacts' \
-            --exclude='history' --exclude='History*' \
-            --exclude='IndexedDB' --exclude='Service Worker' --exclude='GEMINI.md' \
-            "$HOME/.gemini/" "$SANDBOX_DIR/.gemini/"
+        seed_rsync .gemini .gemini --delete-excluded
         log ".gemini"
     fi
     if [ -d "$HOME/.antigravity" ]; then
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.antigravity/" "$SANDBOX_DIR/.antigravity/"
+        seed_rsync .antigravity .antigravity
         log ".antigravity"
     fi
     if [ -d "$HOME/.config/Antigravity" ]; then
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Antigravity/" "$SANDBOX_DIR/antigravity-data/"
+        seed_rsync .config/Antigravity antigravity-data
         log "Antigravity"
     fi
     if [ -d "$HOME/.config/Antigravity IDE" ]; then
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Antigravity IDE/" "$SANDBOX_DIR/antigravity-ide-data/"
+        seed_rsync '.config/Antigravity IDE' antigravity-ide-data
         log "Antigravity IDE"
     fi
     if [ -d "$HOME/.config/Claude" ]; then
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.config/Claude/" "$SANDBOX_DIR/claude-data/"
+        seed_rsync .config/Claude claude-data
         log "Claude Desktop"
     fi
     if [ -d "$HOME/.claude" ]; then
         # CLAUDE.md and this project's projects/ entry are bind-mounted live
         # further down, not copied; other projects' history stays on the host.
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" --exclude='CLAUDE.md' --exclude='projects' \
-            "$HOME/.claude/" "$SANDBOX_DIR/.claude/"
+        seed_rsync .claude .claude
         log ".claude"
     fi
 
@@ -918,7 +909,7 @@ else
     fi
 
     if [ -d "$HOME/.codex" ]; then
-        safe_rsync -a "${COMMON_EXCLUDES[@]}" "$HOME/.codex/" "$SANDBOX_DIR/.codex/"
+        seed_rsync .codex .codex
         log ".codex"
     fi
 
@@ -964,8 +955,7 @@ if [ -d "$IDEA_HOST_DIR" ]; then
     if [ ! -e "$SANDBOX_DIR/jetbrains-config" ]; then
         mkdir -p "$SANDBOX_DIR/jetbrains-config"
         if [ -d "$HOME/.config/JetBrains" ]; then
-            safe_rsync -a "${COMMON_EXCLUDES[@]}" \
-                "$HOME/.config/JetBrains/" "$SANDBOX_DIR/jetbrains-config/"
+            seed_rsync .config/JetBrains jetbrains-config
             log "settings and licence seeded from the host, once"
         fi
     else
@@ -1012,7 +1002,6 @@ fi
 # 'sdk install' inside a sandbox writes a real directory here and is untouched.
 # ---------------------------------------------------------------------------
 
-HOST_SDKMAN="$HOME/.sdkman"
 SDKMAN_FARM="$SANDBOX_DIR/sdkman"
 CONTAINER_SDKMAN_HOST="$CONTAINER_HOME/.sdkman-host"
 
@@ -2031,11 +2020,9 @@ BASHRC_FILE="$HOME/.bashrc"
 touch "$BASHRC_FILE"
 
 mkdir -p "$AI_SANDBOX_ROOT/bin"
-for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop ai-sandbox-restart \
-              ai-sandbox-attach ai-sandbox-rm ai-sandbox-migrate \
-              ai-sandbox-account ai-sandbox-gc ai-sandbox-extensions; do
+while IFS= read -r helper; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
-done
+done < <(ai_sandbox_helpers)
 # ai-sandbox-lib.sh is sourced, not run.
 chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 

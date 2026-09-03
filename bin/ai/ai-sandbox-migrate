@@ -16,10 +16,11 @@ if [ -f "$AI_SANDBOX_ROOT/config" ]; then
     # shellcheck disable=SC1091
     . "$AI_SANDBOX_ROOT/config"
     if [ -n "${DEV_TOOLS_DIR:-}" ] && [ -d "$DEV_TOOLS_DIR/bin/ai" ]; then
-        for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop \
-                      ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm \
-                      ai-sandbox-migrate ai-sandbox-account \
-                      ai-sandbox-gc ai-sandbox-extensions; do
+        # The source tree's lib knows about helpers this installed copy may
+        # predate, so take the list from there.
+        # shellcheck disable=SC1091
+        . "$DEV_TOOLS_DIR/bin/ai/ai-sandbox-lib.sh"
+        while IFS= read -r helper; do
             src="$DEV_TOOLS_DIR/bin/ai/$helper"
             dst="$AI_SANDBOX_ROOT/bin/$helper"
             [ -f "$src" ] || continue
@@ -32,10 +33,24 @@ if [ -f "$AI_SANDBOX_ROOT/config" ]; then
                 install -m 0755 "$src" "$dst.new.$$"
                 mv -f "$dst.new.$$" "$dst"
             fi
-        done
+        done < <(ai_sandbox_helpers)
         chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh" 2>/dev/null || true
     fi
 fi
+
+# .schema-version records the layout the last clean run left behind; a refused
+# or skipped sandbox keeps it unwritten so the state on disk is never
+# overstated. A store already at a NEWER schema than this script knows was
+# written by a newer dev-tools checkout, and the M-steps below would
+# reinterpret its layout with stale rules -- so refuse rather than guess.
+recorded=$(cat "$AI_SANDBOX_ROOT/.schema-version" 2>/dev/null || true)
+case $recorded in ''|*[!0-9]*) recorded=0 ;; esac
+if [ "$recorded" -gt "$AI_SANDBOX_SCHEMA_VERSION" ]; then
+    say "$AI_SANDBOX_ROOT is at schema $recorded; this ai-sandbox-migrate only knows $AI_SANDBOX_SCHEMA_VERSION."
+    say "  leaving it alone. Update dev-tools (or re-run create-ai-sandbox.sh from the newer checkout)."
+    exit 0
+fi
+pending=0
 
 # --- M1: rename legacy, basename-keyed sandboxes ---------------------------
 # 'working_dir:' is the absolute project path; the script has always written
@@ -61,6 +76,7 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
     if [ -z "$project" ]; then
         say "cannot determine the project for $(basename "$dir"); left unchanged."
         say "  (no readable working_dir: in $compose)"
+        pending=$((pending + 1))
         continue
     fi
 
@@ -73,6 +89,7 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
         say "cannot migrate $(basename "$dir"): $(basename "$target") already exists."
         say "  source $dir"
         say "  target $target"
+        pending=$((pending + 1))
         continue
     fi
 
@@ -81,10 +98,10 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
     # the container would destroy whatever the user is doing inside it -- which,
     # for the sandbox this very script may be running in, means killing the
     # session that invoked it. Refuse, and say how to proceed.
-    if command -v docker >/dev/null 2>&1 &&
-       [ "$(docker container inspect -f '{{.State.Running}}' "$(basename "$dir")" 2>/dev/null)" = "true" ]; then
+    if ai_sandbox_container_running "$(basename "$dir")"; then
         say "cannot migrate $(basename "$dir"): its container is running."
         say "  stop it first (ai-sandbox-stop in that project), then re-run."
+        pending=$((pending + 1))
         continue
     fi
 
@@ -113,15 +130,29 @@ done
 # The first sandbox to migrate donates its copy; later ones are reported, not
 # deleted. Rows whose third field is empty hold data that lives only in the
 # container's writable layer and has no per-project copy to lift.
+#
+# Same rule as M1: never touch a running sandbox. These directories are its
+# bind-mount sources, and moving one out from under a live container strands
+# the mount. Checked once per sandbox, and only if there is something to lift.
 duplicates=0
 for dir in "$AI_SANDBOX_ROOT"/*-agent; do
     [ -d "$dir" ] || continue
+    running=
     while IFS='|' read -r sub _ctr sb; do
         [ -n "$sub" ] && [ -n "$sb" ] || continue
         src="$dir/$sb"
         dst="$AI_SANDBOX_ROOT/shared/$sub"
         [ -d "$src" ] || continue
         [ -n "$(ls -A "$src" 2>/dev/null)" ] || continue
+        if [ -z "$running" ]; then
+            if ai_sandbox_container_running "$(basename "$dir")"; then running=yes; else running=no; fi
+        fi
+        if [ "$running" = yes ]; then
+            say "cannot lift $(basename "$dir")/$sb: its container is running."
+            say "  stop it first (ai-sandbox-stop in that project), then re-run."
+            pending=$((pending + 1))
+            continue
+        fi
         mkdir -p "$(dirname "$dst")"
         if [ ! -d "$dst" ] || [ -z "$(ls -A "$dst" 2>/dev/null)" ]; then
             rmdir "$dst" 2>/dev/null || true
@@ -149,5 +180,7 @@ if command -v docker >/dev/null 2>&1; then
     fi
 fi
 
-printf '%s\n' "$AI_SANDBOX_SCHEMA_VERSION" > "$AI_SANDBOX_ROOT/.schema-version"
+if [ "$pending" -eq 0 ]; then
+    printf '%s\n' "$AI_SANDBOX_SCHEMA_VERSION" > "$AI_SANDBOX_ROOT/.schema-version"
+fi
 exit 0
