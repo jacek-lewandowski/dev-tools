@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 proj="$tmp/work/p"; mkdir -p "$proj"
@@ -19,7 +19,7 @@ echo bulk > "$HOME/.antigravity/extensions/ext-a/package.json"
 echo bulk > "$HOME/.config/Antigravity IDE/CachedExtensionVSIXs/x.vsix"
 echo keep > "$HOME/.claude/.credentials.json"
 
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
 dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
 
 assert_eq "credentials still seeded" "$(cat "$dir/.claude/.credentials.json")" 'keep'

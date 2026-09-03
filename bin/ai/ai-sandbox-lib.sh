@@ -102,6 +102,7 @@ claude-downloads|.claude/downloads|.claude/downloads
 claude-desktop-versions|.config/Claude/claude-code|claude-data/claude-code
 ide-vsix|.config/Antigravity IDE/CachedExtensionVSIXs|antigravity-ide-data/CachedExtensionVSIXs
 ide-cacheddata|.config/Antigravity IDE/CachedData|antigravity-ide-data/CachedData
+jetbrains-plugins|.local/share/JetBrains|
 cache|.cache|
 npm|.npm|
 SHARED

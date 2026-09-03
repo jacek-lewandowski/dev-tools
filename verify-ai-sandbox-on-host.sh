@@ -3,7 +3,7 @@
 # sandbox. Phases A-B are read-only. Phase C onward MUTATES ~/.ai-sandbox.
 set -uo pipefail
 R="$HOME/.ai-sandbox"
-S="$(cd "$(dirname "$0")" && pwd)/bin/create-ai-sandbox.sh"
+S="$(cd "$(dirname "$0")" && pwd)/bin/ai/create-ai-sandbox.sh"
 hr() { printf '\n===== %s =====\n' "$*"; }
 
 hr "A. state before anything"

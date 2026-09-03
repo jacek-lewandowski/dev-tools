@@ -30,6 +30,28 @@ readonly EARTHLY_VERSION='v0.8.15'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
 readonly NODE_MAJOR='24'
 
+# Resource limits for the container. Docker imposes none by default, so a
+# runaway build or an Electron leak can take the whole host down with it.
+#   MEMORY_LIMIT      RAM the sandbox may use.
+#   MEMORY_SWAP_LIMIT RAM+swap ceiling. Equal to MEMORY_LIMIT means the
+#                     container gets no swap, so the limit is a real 4 GB rather
+#                     than 4 GB of RAM plus the 2x swap Docker would otherwise
+#                     allow -- which on a host whose swap is already full would
+#                     buy nothing but thrashing.
+#   SHM_SIZE          /dev/shm is a tmpfs inside the container's own cgroup, so
+#                     its pages count against MEMORY_LIMIT. Keeping it well
+#                     under the limit stops one large shm allocation from
+#                     OOM-killing the sandbox by itself.
+# The host's IntelliJ IDEA installation. Mounted read-only when it exists, so
+# the sandbox can run the IDE without being able to modify or update it, and
+# skipped entirely when it does not. Override for a different install path:
+#   IDEA_HOST_DIR=/opt/idea-2025.1 create-ai-sandbox.sh
+readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
+
+readonly MEMORY_LIMIT='4g'
+readonly MEMORY_SWAP_LIMIT='4g'
+readonly SHM_SIZE='1gb'
+
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
@@ -125,6 +147,22 @@ Layout under ~/.ai-sandbox:
 Mounted live from the host into every sandbox: ~/.gemini/GEMINI.md (the shared
 brain, also read as ~/.claude/CLAUDE.md), the Antigravity brain and
 conversations, and ~/.claude/projects. Edits there are real edits on the host.
+
+IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
+runnable inside the sandbox as 'idea'. Settings and the licence are copied from
+the host once, per project; plugins are shared between projects; indexes are per
+project. Being read-only, the IDE cannot update itself -- update it on the host.
+For a different install path, set IDEA_HOST_DIR in the environment.
+
+SDKMAN: the host's ~/.sdkman is mounted read-only, so its toolchains are shared
+and never duplicated, but each sandbox keeps its OWN default versions, taken
+from the host's when the sandbox is first created. Change one from inside with
+'sdk default java <version>'; to re-snapshot the host's, delete the sandbox's
+sdkman/candidates/<candidate>/current and re-run.
+
+Resources: the container is capped at 4 GB of RAM with no swap, and /dev/shm at
+1 GB, which counts against that cap. Adjust MEMORY_LIMIT, MEMORY_SWAP_LIMIT and
+SHM_SIZE at the top of this script; the cap applies from the next start.
 USAGE
 }
 
@@ -212,11 +250,11 @@ while [ -L "$SCRIPT_PATH" ]; do
     esac
 done
 SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
-DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 # Identity and path helpers, shared with the ai-sandbox-* commands so the two
 # can never compute a different id for the same project.
-# shellcheck source=bin/ai-sandbox-lib.sh
+# shellcheck source=bin/ai/ai-sandbox-lib.sh
 . "$SCRIPT_DIR/ai-sandbox-lib.sh"
 
 # ---------------------------------------------------------------------------
@@ -252,6 +290,9 @@ COMPOSE_FILE="$SANDBOX_DIR/docker-compose.yml"
 # a single-file bind mount would leave the container pinned to the old inode and
 # reading a stale cookie after any regeneration.
 XAUTH_DIR="$SANDBOX_DIR/x11auth"
+# Overrides for the two directives Ubuntu's xpra ships active and that cannot be
+# undone from the command line. See the generator further down.
+XPRA_CONF_DIR="$SANDBOX_DIR/xpra-conf"
 XAUTH_FILE="$XAUTH_DIR/Xauthority"
 CONTAINER_XAUTH="/run/sandbox-x11auth/Xauthority"
 
@@ -644,10 +685,21 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   or \`from headroom import compress\`. Use it to shrink large JSON payloads, logs or
   command output before they land in context.
 - \`semantic-docs\` -- local vector search over docs, notes, PDFs and daily tasks.
+- \`sdk\` -- SDKMAN. The JDKs and other toolchains come from the host read-only,
+  but the defaults are this sandbox's own: \`sdk default java <version>\` changes
+  this project only, not the host and not other sandboxes. \`sdk list java\` shows
+  what the host has; \`sdk install\` writes inside the sandbox.
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
 - \`parec\`/\`paplay\`, \`arecord\`/\`aplay\`, \`sox\`/\`ffmpeg\` -- audio capture, conversion, playback.
 - ImageMagick 6."
+
+if [ -d "$IDEA_HOST_DIR" ]; then
+    TOOL_NOTES="${TOOL_NOTES}
+- \`idea\` -- IntelliJ IDEA, mounted read-only from the host at
+  \`${IDEA_HOST_DIR}\`. Start it with \`idea &\`. Its settings, plugins and indexes
+  belong to this sandbox, and it picks up the SDKMAN JDKs under \`~/.sdkman\`."
+fi
 
 if [ "$WITH_DOCKER" = "yes" ]; then
     TOOL_NOTES="${TOOL_NOTES}
@@ -665,10 +717,10 @@ case "$DISPLAY_MODE" in
 esac
 
 SANDBOX_BLOCK="${MARKER_BEGIN}
-## AI sandbox environment (dev-tools/bin/create-ai-sandbox.sh)
+## AI sandbox environment (dev-tools/bin/ai/create-ai-sandbox.sh)
 
 This section applies only when you are running inside an ai-sandbox container
-created by \`dev-tools/bin/create-ai-sandbox.sh\` (Ubuntu 22.04, full CLI access
+created by \`dev-tools/bin/ai/create-ai-sandbox.sh\` (Ubuntu 22.04, full CLI access
 and passwordless sudo). It does not apply when running natively on the host.
 You can tell which you are in: inside the sandbox, \`/etc/ai-sandbox-release\` exists.
 
@@ -680,6 +732,8 @@ Environment notes:
 - ${DISPLAY_NOTE}
 - Networking is bridged, not host. The host's own services are reachable at
   \`host.docker.internal\`, not at \`localhost\`.
+- The container is capped at ${MEMORY_LIMIT} of RAM with no swap. Keep build and test
+  parallelism modest: an over-parallel build is OOM-killed, not merely slowed.
 - The project is mounted read-write at its real host path, so edits are real
   edits to the user's working tree. The rest of the host filesystem is not mounted.
 - Only explicitly passed-through serial/USB devices are visible under /dev.
@@ -797,6 +851,182 @@ chmod 600 "$SANDBOX_DIR/.claude.json"
 log "gcloud: isolated empty config at $SANDBOX_DIR/gcloud (log in inside the sandbox if needed)"
 
 # ---------------------------------------------------------------------------
+# IntelliJ IDEA
+#
+# The installation itself is the host's and is mounted read-only: the sandbox
+# runs the IDE but cannot modify or auto-update it. Everything IDEA writes is
+# under $HOME, split three ways because the three have different lifetimes:
+#
+#   ~/.config/JetBrains       settings, and the licence or JetBrains Account
+#                             token -- per sandbox, seeded from the host once so
+#                             the IDE comes up already activated.
+#   ~/.local/share/JetBrains  downloaded plugins -- bulk and identical for every
+#                             project, so it lives in the shared store.
+#   ~/.cache/JetBrains        indexes, logs, the system directory -- per sandbox,
+#                             never seeded. This one has to be per sandbox: it is
+#                             nested inside the SHARED ~/.cache mount, and two
+#                             IDEs indexing through one directory corrupt it.
+#
+# All three are mounts, so they survive the container being recreated, which
+# happens on every run of this script.
+# ---------------------------------------------------------------------------
+
+if [ -d "$IDEA_HOST_DIR" ]; then
+    step "IntelliJ IDEA"
+    log "installation $IDEA_HOST_DIR (read-only)"
+
+    # Existence is the marker: seeded once, then this sandbox's own. Deliberately
+    # not in ai_sandbox_seed_paths -- 'ai-sandbox-account reset' rm -rf's those,
+    # and an IDE licence is not an AI account.
+    if [ ! -e "$SANDBOX_DIR/jetbrains-config" ]; then
+        mkdir -p "$SANDBOX_DIR/jetbrains-config"
+        if [ -d "$HOME/.config/JetBrains" ]; then
+            safe_rsync -a "${COMMON_EXCLUDES[@]}" \
+                "$HOME/.config/JetBrains/" "$SANDBOX_DIR/jetbrains-config/"
+            log "settings and licence seeded from the host, once"
+        fi
+    else
+        log "settings are this sandbox's own; delete jetbrains-config to re-seed"
+    fi
+
+    # Plugins: one copy for every sandbox, filled from the host if still empty.
+    if [ -d "$HOME/.local/share/JetBrains" ] \
+       && [ -z "$(ls -A "$SHARED_DIR/jetbrains-plugins" 2>/dev/null)" ]; then
+        safe_rsync -a "${COMMON_EXCLUDES[@]}" \
+            "$HOME/.local/share/JetBrains/" "$SHARED_DIR/jetbrains-plugins/"
+        log "plugins seeded into the shared store ($(du -sh "$SHARED_DIR/jetbrains-plugins" 2>/dev/null | cut -f1))"
+    fi
+
+    # Created here, not by Docker: a missing bind source becomes a root-owned
+    # directory the IDE then cannot write to.
+    mkdir -p "$SANDBOX_DIR/jetbrains-cache"
+    log "run it with: ai-sandbox   then  idea &"
+fi
+
+# ---------------------------------------------------------------------------
+# SDKMAN
+#
+# The host's ~/.sdkman carries a couple of GB of toolchains, so it stays mounted
+# read-only and is never duplicated. What a sandbox does need to own is
+# 'candidates/<c>/current' -- SDKMAN's notion of "the default" -- so that
+# 'sdk default java 17.0.16-tem' in one project changes neither the host nor any
+# other project. A read-only mount cannot give that, because 'sdk default'
+# rewrites exactly that symlink.
+#
+# So the sandbox gets its own SDKMAN_DIR, built almost entirely out of symlinks:
+#
+#   <sandbox>/sdkman/
+#     bin,libexec,src,contrib -> ~/.sdkman-host/...      host machinery, ro
+#     etc/, var/, ext/, tmp/                             real, writable
+#     candidates/java/
+#       21.0.8-tem  -> ~/.sdkman-host/candidates/java/21.0.8-tem
+#       17.0.16-tem -> ...                               one per host version
+#       current     -> 21.0.8-tem                        real symlink, WRITABLE
+#
+# The link targets are container paths, so this tree dangles when read from the
+# host. That is deliberate: it is only ever resolved inside the sandbox, and it
+# keeps the sandbox directory at a few hundred kB rather than gigabytes.
+#
+# Version links are refreshed on every run, so a JDK installed on the host turns
+# up in sandboxes that already exist. 'current' is snapshotted once and then left
+# alone, because it is the per-project setting this whole arrangement is for.
+# 'sdk install' inside a sandbox writes a real directory here and is untouched.
+# ---------------------------------------------------------------------------
+
+HOST_SDKMAN="$HOME/.sdkman"
+SDKMAN_FARM="$SANDBOX_DIR/sdkman"
+CONTAINER_SDKMAN_HOST="$CONTAINER_HOME/.sdkman-host"
+
+sync_sdkman_farm() {
+    local part cdir vdir name version cur target seeded=0
+
+    mkdir -p "$SDKMAN_FARM/candidates" "$SDKMAN_FARM/etc" \
+             "$SDKMAN_FARM/var" "$SDKMAN_FARM/ext" "$SDKMAN_FARM/tmp"
+
+    # Linked, not copied, so a 'sdk selfupdate' on the host reaches every
+    # sandbox at once and none of them carries a second copy of libexec.
+    for part in bin libexec src contrib; do
+        [ -d "$HOST_SDKMAN/$part" ] && ln -sfn "$CONTAINER_SDKMAN_HOST/$part" "$SDKMAN_FARM/$part"
+    done
+
+    # Knobs a sandbox may legitimately change: seeded from the host, then its own.
+    # '||' rather than 'if' would make a host without etc/config fatal under set -e.
+    if [ ! -f "$SDKMAN_FARM/etc/config" ] && [ -f "$HOST_SDKMAN/etc/config" ]; then
+        cp -f "$HOST_SDKMAN/etc/config" "$SDKMAN_FARM/etc/config"
+    fi
+    [ -d "$HOST_SDKMAN/var" ] && safe_rsync -a --ignore-existing \
+        "$HOST_SDKMAN/var/" "$SDKMAN_FARM/var/"
+
+    for cdir in "$HOST_SDKMAN/candidates"/*; do
+        [ -d "$cdir" ] || continue
+        name=${cdir##*/}
+        mkdir -p "$SDKMAN_FARM/candidates/$name"
+
+        # One link per version the host has installed.
+        for vdir in "$cdir"/*; do
+            version=${vdir##*/}
+            [ "$version" = current ] && continue        # the default pointer, not a version
+            [ -d "$vdir" ] || continue
+            ln -sfn "$CONTAINER_SDKMAN_HOST/candidates/$name/$version" \
+                    "$SDKMAN_FARM/candidates/$name/$version"
+        done
+
+        # Retire links to versions the host has since removed. Symlinks only: a
+        # real directory here was installed inside the sandbox and is not ours.
+        for vdir in "$SDKMAN_FARM/candidates/$name"/*; do
+            version=${vdir##*/}
+            [ "$version" = current ] && continue
+            [ -L "$vdir" ] || continue
+            [ -d "$HOST_SDKMAN/candidates/$name/$version" ] || rm -f "$vdir"
+        done
+
+        cur="$SDKMAN_FARM/candidates/$name/current"
+        if [ ! -L "$cur" ]; then
+            # First sight of this candidate: start from the host's default.
+            target=$(readlink "$cdir/current" 2>/dev/null || true)
+            if [ -n "$target" ]; then
+                ln -sfn "${target##*/}" "$cur"
+                seeded=$((seeded + 1))
+            fi
+            continue
+        fi
+
+        # This sandbox's own default. Left as it is -- unless it has gone
+        # dangling, which would drop the candidate off PATH with no explanation.
+        target=$(readlink "$cur")
+        if [ ! -L "$SDKMAN_FARM/candidates/$name/$target" ] \
+           && [ ! -d "$SDKMAN_FARM/candidates/$name/$target" ]; then
+            warn "This sandbox's default $name ($target) is no longer installed on the host."
+            target=$(readlink "$cdir/current" 2>/dev/null || true)
+            if [ -n "$target" ]; then
+                ln -sfn "${target##*/}" "$cur"
+                log "  repointed $name -> ${target##*/} (the host's default)"
+            else
+                rm -f "$cur"
+                log "  dropped the $name default; set one with 'sdk default $name <version>'"
+            fi
+        fi
+    done
+
+    for cdir in "$SDKMAN_FARM/candidates"/*; do
+        [ -d "$cdir" ] || continue
+        target=$(readlink "$cdir/current" 2>/dev/null || true)
+        [ -n "$target" ] && log "  ${cdir##*/} = $target"
+    done
+    [ "$seeded" -gt 0 ] && log "snapshotted $seeded default(s) from the host; yours to change now"
+    return 0
+}
+
+if [ -d "$HOST_SDKMAN" ]; then
+    step "SDKMAN"
+    log "toolchains stay on the host, read-only; the defaults below are this sandbox's"
+    sync_sdkman_farm
+else
+    # shellcheck disable=SC2088  # literal text for display, not a path to expand
+    log "no ~/.sdkman on the host; SDKMAN will not be available in the sandbox"
+fi
+
+# ---------------------------------------------------------------------------
 # Build context
 # ---------------------------------------------------------------------------
 
@@ -882,6 +1112,17 @@ echo "== ai-sandbox status =="
 status "user"        "$(id -un) ($(id -u):$(id -g))"
 status "workdir"     "$PWD"
 status "hostname"    "$(hostname)"
+_human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || printf '%s' "$1"; }
+_mem_max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null \
+           || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo max)
+_mem_cur=$(cat /sys/fs/cgroup/memory.current 2>/dev/null \
+           || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || echo 0)
+case "$_mem_max" in
+    # cgroup v1 spells "no limit" as a huge number rather than "max".
+    max|''|9223372036854771712|18446744073709551615)
+        status "memory" "$(_human "$_mem_cur") used, NO LIMIT (re-run create-ai-sandbox.sh)" ;;
+    *)  status "memory" "$(_human "$_mem_cur") of $(_human "$_mem_max")" ;;
+esac
 status "display"     "${DISPLAY:-<none>}${WAYLAND_DISPLAY:+  wayland=$WAYLAND_DISPLAY}"
 if [ -n "${DISPLAY:-}" ]; then
     _d=${DISPLAY#*:}; _d=${_d%%.*}
@@ -902,6 +1143,32 @@ if [ -n "${DISPLAY:-}" ]; then
     fi
 fi
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
+if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
+    _idea=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('name',''),d.get('version',''))" \
+            "${SANDBOX_IDEA_HOME}/product-info.json" 2>/dev/null)
+    status "intellij idea" "${_idea:-mounted} at ${SANDBOX_IDEA_HOME} (run 'idea &')"
+    status "  its settings" "$( [ -w "$HOME/.config/JetBrains" ] && echo "writable, sandbox-local" || echo "NOT writable -- re-run create-ai-sandbox.sh" )"
+    # ~/.cache is one directory shared by every sandbox, so the index directory
+    # has to be a mount of its own nested inside it. Two IDEs indexing through
+    # one directory corrupt it, and that failure is slow and confusing, so check.
+    status "  its indexes" "$( findmnt -no TARGET "$HOME/.cache/JetBrains" >/dev/null 2>&1 \
+        && echo "own mount, not shared with other sandboxes" \
+        || echo "SHARING the ~/.cache mount -- re-run create-ai-sandbox.sh" )"
+else
+    status "intellij idea" "not mounted"
+fi
+if [ -d "$HOME/.sdkman/candidates" ]; then
+    _sdk=""
+    for _c in "$HOME"/.sdkman/candidates/*/current; do
+        [ -L "$_c" ] || continue
+        _n=${_c%/current}
+        _sdk="$_sdk ${_n##*/}=$(readlink "$_c")"
+    done
+    status "sdkman defaults" "${_sdk:- <none set>}  (this sandbox only)"
+    status "sdkman writable" "$( [ -w "$HOME/.sdkman/candidates/java" ] && echo "yes, 'sdk default' works here" || echo "NO -- re-run create-ai-sandbox.sh" )"
+else
+    status "sdkman" "not mounted"
+fi
 status "audio"        "$( [ -n "${PULSE_SERVER:-}" ] && pactl info >/dev/null 2>&1 && echo ok || echo unavailable )"
 serial=$(ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | tr '\n' ' ')
 status "serial ports" "${serial:-<none passed through>}"
@@ -930,6 +1197,44 @@ fi
 openbox >/tmp/openbox.log 2>&1 &
 echo "Started openbox on $DISPLAY."
 DESKTOP_EOF
+
+cat > "$BUILD_DIR/sandbox-idea" <<'IDEA_EOF'
+#!/bin/bash
+# Run the host's IntelliJ IDEA installation, which is mounted read-only.
+# The path is passed in by compose so this wrapper, which lives in the image
+# every project shares, does not hard-code it.
+set -u
+IDEA_HOME="${SANDBOX_IDEA_HOME:-/opt/idea-IU}"
+
+if [ ! -d "$IDEA_HOME" ]; then
+    echo "IntelliJ IDEA is not mounted at $IDEA_HOME." >&2
+    echo "The sandbox mounts it only when that path exists on the host." >&2
+    echo "Install it there, then re-run create-ai-sandbox.sh." >&2
+    exit 1
+fi
+
+# 2024.2 and later ship a native 'idea' launcher; older builds only idea.sh.
+launcher=""
+for candidate in "$IDEA_HOME/bin/idea" "$IDEA_HOME/bin/idea.sh"; do
+    [ -x "$candidate" ] && { launcher="$candidate"; break; }
+done
+if [ -z "$launcher" ]; then
+    echo "No launcher in $IDEA_HOME/bin -- looked for 'idea' and 'idea.sh'. Found:" >&2
+    ls "$IDEA_HOME/bin" 2>&1 | sed 's/^/    /' >&2
+    exit 1
+fi
+
+if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    echo "sandbox: no display -- the GUI will not start (headless commands still work)." >&2
+    echo "         Recreate the sandbox with a display: create-ai-sandbox.sh --display=xpra" >&2
+fi
+
+# The installation is read-only, so everything IDEA writes has to land in these.
+# They are bind mounts, so settings, plugins and indexes outlive the container.
+mkdir -p "$HOME/.config/JetBrains" "$HOME/.local/share/JetBrains" "$HOME/.cache/JetBrains"
+
+exec "$launcher" "$@"
+IDEA_EOF
 
 cat > "$BUILD_DIR/xdg-open" <<'XDGOPEN_EOF'
 #!/bin/bash
@@ -1125,9 +1430,13 @@ COPY sandbox-doctor   /usr/local/bin/sandbox-doctor
 COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
 COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY xdg-open         /usr/local/bin/xdg-open
+# IntelliJ IDEA is not installed in the image: this only launches the host's
+# read-only mount, so it is inert on a host that has none.
+COPY sandbox-idea     /usr/local/bin/idea
 RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
+                /usr/local/bin/idea \
     && install -d -m 1777 /tmp/.X11-unix \
     && echo "ai-sandbox" > /etc/ai-sandbox-release
 DOCKERFILE_EOF
@@ -1261,7 +1570,9 @@ services:
     hostname: "${PROJECT_NAME}-sandbox"
     restart: "no"
     init: true
-    shm_size: '4gb'
+    shm_size: '${SHM_SIZE}'
+    mem_limit: "${MEMORY_LIMIT}"
+    memswap_limit: "${MEMORY_SWAP_LIMIT}"
     # Bridged, not host, networking: the sandbox can reach the internet but not
     # every service bound to the host's loopback. The host itself is reachable
     # by name when deliberately needed.
@@ -1294,6 +1605,12 @@ cat <<COMPOSE_ENV
 COMPOSE_ENV
 printf '%s' "$DISPLAY_ENV_LINES"
 
+# The 'idea' wrapper is baked into the shared image, so it learns the path here
+# rather than having it hard-coded.
+if [ -d "$IDEA_HOST_DIR" ]; then
+    printf '      - "SANDBOX_IDEA_HOME=%s"\n' "$IDEA_HOST_DIR"
+fi
+
 cat <<'COMPOSE_ENVFILE'
     env_file:
       - .env
@@ -1305,8 +1622,6 @@ cat <<COMPOSE_VOLS
       - "${PROJECT_ABS_DIR}:${PROJECT_ABS_DIR}"
       # dev-tools helpers, read-only.
       - "${HOST_TOOLS_DIR}:${CONTAINER_HOME}/tools:ro"
-      # Toolchains managed by SDKMAN on the host, read-only.
-      - "${HOME}/.sdkman:${CONTAINER_HOME}/.sdkman:ro"
       - "${HOME}/.gitignore:${CONTAINER_HOME}/.gitignore"
       # Sandbox-local copies of tool state (logins, settings, extensions).
       - "${SANDBOX_DIR}/.gemini:${CONTAINER_HOME}/.gemini"
@@ -1332,6 +1647,22 @@ cat <<COMPOSE_VOLS
       - "${HOME}/.claude/projects:${CONTAINER_HOME}/.claude/projects"
 COMPOSE_VOLS
 
+if [ -d "$IDEA_HOST_DIR" ]; then
+    echo "      # IntelliJ IDEA: the host's installation read-only, plus this"
+    echo "      # sandbox's own settings and indexes. Plugins come from the"
+    echo "      # shared store below."
+    printf '      - "%s:%s:ro"\n' "$IDEA_HOST_DIR" "$IDEA_HOST_DIR"
+    printf '      - "%s/jetbrains-config:%s/.config/JetBrains"\n' "$SANDBOX_DIR" "$CONTAINER_HOME"
+    printf '      - "%s/jetbrains-cache:%s/.cache/JetBrains"\n' "$SANDBOX_DIR" "$CONTAINER_HOME"
+fi
+
+if [ -d "$HOST_SDKMAN" ]; then
+    echo "      # SDKMAN: the toolchains read-only from the host, and this"
+    echo "      # sandbox's own symlink farm carrying its own defaults."
+    printf '      - "%s:%s:ro"\n' "$HOST_SDKMAN" "$CONTAINER_SDKMAN_HOST"
+    printf '      - "%s:%s/.sdkman"\n' "$SDKMAN_FARM" "$CONTAINER_HOME"
+fi
+
 echo "      # Bulk assets shared by every sandbox."
 while IFS='|' read -r _sub _ctr _sb; do
     [ -n "$_sub" ] || continue
@@ -1346,6 +1677,49 @@ log "$COMPOSE_FILE"
 # Nested display launcher
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# xpra overrides
+#
+# xpra reads config from the application defaults, then /etc/xpra, then the
+# "user" config dirs, merging each DIRECTORY over the previous one with a whole
+# dict update. So a key set in a later directory REPLACES the earlier value --
+# which is the only way to undo a list-typed option, because --start and
+# --start-child APPEND to the config value on the command line instead of
+# replacing it. XPRA_USER_CONF_DIRS moves that last directory here, so this
+# sandbox gets the overrides without touching the user's own ~/.xpra.
+# ---------------------------------------------------------------------------
+
+if [ "$DISPLAY_MODE" = "xpra" ]; then
+    mkdir -p "$XPRA_CONF_DIR"
+    cat > "$XPRA_CONF_DIR/xpra.conf" <<'XPRACONF_EOF'
+# Generated by create-ai-sandbox.sh -- edits here are overwritten on the next run.
+# Read by xpra via XPRA_USER_CONF_DIRS, last and therefore winning.
+
+# Ubuntu's xpra ships /etc/xpra/conf.d/60_server.conf with
+#     start = /etc/X11/Xsession true
+# uncommented. Debian's Xsession treats its argument as the session program to
+# run; "true" is not a registered session, so it pops an xmessage error dialog
+# on the sandbox's display and then falls back to starting the host's DEFAULT X
+# session there -- a second window manager competing with xpra, plus its whole
+# process tree. /bin/true replaces it with a no-op.
+start = /bin/true
+start-child = /bin/true
+# start-child exits immediately by design, so make sure that cannot take the
+# server with it. (/etc/xpra already sets this; pinned because we rely on it.)
+exit-with-children = no
+
+# /etc/xpra/conf.d/40_client.conf ships 'desktop-scaling = auto'. auto scales by
+# PIXEL COUNT, not by DPI: its buckets are 3960x2160 -> 1.0 and 7680x4320 ->
+# 1.25, and the 5760x2560 virtual screen the launcher asks Xvfb for is
+# 14.7 Mpx, which lands in the second one. That is the 125%.
+# '1' is in xpra's TRUE_OPTIONS so it parses as exactly 1:1; 'off' also ends up
+# 1:1 but logs 'failed to parse scaling value' on the way.
+desktop-scaling = 1
+dpi = 96
+XPRACONF_EOF
+    log "xpra overrides: $XPRA_CONF_DIR/xpra.conf"
+fi
+
 cat > "$SANDBOX_DIR/start-display.sh" <<DISPLAYEOF
 #!/usr/bin/env bash
 # Start this sandbox's isolated display, if it needs one, and publish its socket
@@ -1358,6 +1732,7 @@ set -euo pipefail
 MODE="${DISPLAY_MODE}"
 NUM="${NESTED_DISPLAY_NUM}"
 XAUTH="${XAUTH_FILE}"
+XPRA_CONF="${XPRA_CONF_DIR}"
 SOCK_DIR="${X11_SOCKET_DIR}"
 LOG_DIR="${SANDBOX_DIR}"
 TITLE="ai-sandbox: ${PROJECT_NAME}"
@@ -1424,6 +1799,20 @@ if [ "$MODE" = "nested" ]; then
         fi
     fi
 else
+    # Everything below reads this sandbox's own xpra config, which is what
+    # neutralises '/etc/X11/Xsession true' and 'desktop-scaling = auto'.
+    export XPRA_USER_CONF_DIRS="$XPRA_CONF"
+    # Those overrides are silently inert on an xpra that does not know the
+    # variable, so confirm it really is reading the directory. 'showsetting'
+    # lists the config dirs it consults, on stderr.
+    if xpra showsetting start >"${LOG_DIR}/xpra-showsetting.log" 2>&1 \
+       && ! grep -qF "$XPRA_CONF" "${LOG_DIR}/xpra-showsetting.log"; then
+        echo "WARNING: this xpra ignored XPRA_USER_CONF_DIRS, so the Xsession error" >&2
+        echo "         dialog and the 125% scaling will come back. Comment out" >&2
+        echo "         'start = /etc/X11/Xsession true' in /etc/xpra/conf.d/60_server.conf" >&2
+        echo "         and 'desktop-scaling = auto' in /etc/xpra/conf.d/40_client.conf." >&2
+    fi
+
     # xpra: we start the X server ourselves so that it uses this sandbox's
     # private cookie, then point xpra at it with --use-display=yes. Letting xpra
     # spawn its own Xvfb would put the cookie somewhere we do not control.
@@ -1448,9 +1837,12 @@ else
         echo "Starting xpra server on :${NUM}..."
         started=no
         for subcmd in start seamless; do
+            # No --start/--start-child here: they append to the config value
+            # rather than replace it, so a command line cannot cancel what
+            # /etc/xpra sets. That is done in this sandbox's xpra.conf instead.
             for extra in "--systemd-run=no --notifications=no --mdns=no --pulseaudio=no --dbus-launch=no" ""; do
                 # shellcheck disable=SC2086
-                if xpra "$subcmd" ":${NUM}" --use-display=yes --daemon=yes --start-child="" $extra \
+                if xpra "$subcmd" ":${NUM}" --use-display=yes --daemon=yes $extra \
                         >>"${LOG_DIR}/xpra.log" 2>&1; then
                     started=yes; break
                 fi
@@ -1465,17 +1857,43 @@ else
         fi
     fi
 
-    # The viewer renders the forwarded windows on your real desktop, so it needs
-    # your normal display and cookie -- not the sandbox's.
-    if ! pgrep -f "xpra attach :${NUM}\b" >/dev/null 2>&1; then
-        echo "Attaching the xpra viewer..."
+    # Belt and braces over the xpra.conf above: these are ordinary scalar
+    # options, so the command line beats any config file on any xpra version,
+    # whether or not XPRA_USER_CONF_DIRS was understood. Probed rather than
+    # assumed, because an xpra that does not recognise a flag refuses to attach.
+    attach_opts=()
+    attach_help=$( { xpra attach --help || true; xpra --help || true; } 2>&1 )
+    for opt in --desktop-scaling=1 --dpi=96; do
+        case "$attach_help" in
+            *"${opt%%=*}"*) attach_opts+=("$opt") ;;
+        esac
+    done
+
+    attach_viewer() {
+        # The viewer renders the forwarded windows on your real desktop, so it
+        # needs your normal display and cookie -- not the sandbox's.
         ( if [ -n "$HOST_XAUTHORITY" ]; then
               export XAUTHORITY="$HOST_XAUTHORITY"
           else
               unset XAUTHORITY
           fi
-          exec xpra attach ":${NUM}" >>"${LOG_DIR}/xpra-attach.log" 2>&1 ) &
+          # Toolkit scaling in the host session would re-enlarge the viewer's own
+          # idea of the screen after desktop-scaling has been turned off.
+          unset GDK_SCALE GDK_DPI_SCALE QT_SCALE_FACTOR QT_AUTO_SCREEN_SCALE_FACTOR
+          exec xpra attach ":${NUM}" "$@" >>"${LOG_DIR}/xpra-attach.log" 2>&1 ) &
         sleep 1
+    }
+
+    if ! pgrep -f "xpra attach :${NUM}\b" >/dev/null 2>&1; then
+        echo "Attaching the xpra viewer..."
+        attach_viewer "${attach_opts[@]+"${attach_opts[@]}"}"
+        # A flag this xpra dislikes makes the viewer exit at once, and a sandbox
+        # with no windows at all is a worse failure than one at the wrong scale.
+        if [ "${#attach_opts[@]}" -gt 0 ] \
+           && ! pgrep -f "xpra attach :${NUM}\b" >/dev/null 2>&1; then
+            echo "The viewer rejected ${attach_opts[*]}; retrying without it." >&2
+            attach_viewer
+        fi
     fi
 fi
 
@@ -1496,6 +1914,7 @@ set -euo pipefail
 MODE="${DISPLAY_MODE}"
 NUM="${NESTED_DISPLAY_NUM}"
 export XAUTHORITY="${XAUTH_FILE}"
+export XPRA_USER_CONF_DIRS="${XPRA_CONF_DIR}"
 case "\$MODE" in
     nested)
         pkill -f "Xephyr :\${NUM}\\b" 2>/dev/null || true
@@ -1537,7 +1956,7 @@ log "$AI_SANDBOX_ROOT/bin"
 # The block below is deliberately trivial and stable: the helpers are real
 # files now, so an open shell picks up a new version without re-sourcing
 # anything, and this text should never need to change again.
-HELPERS='# Helpers for dev-tools/bin/create-ai-sandbox.sh live in ~/.ai-sandbox/bin.
+HELPERS='# Helpers for dev-tools/bin/ai/create-ai-sandbox.sh live in ~/.ai-sandbox/bin.
 case ":$PATH:" in
     *":$HOME/.ai-sandbox/bin:"*) ;;
     *) PATH="$HOME/.ai-sandbox/bin:$PATH" ;;
@@ -1629,6 +2048,7 @@ cat <<SUMMARY
   Sandbox files:      $SANDBOX_DIR
   Display mode:       $DISPLAY_MODE
   Rootless Docker:    $WITH_DOCKER
+  Memory limit:       $MEMORY_LIMIT RAM, no swap (/dev/shm $SHM_SIZE, counted against it)
 SUMMARY
 
 case "$DISPLAY_MODE" in

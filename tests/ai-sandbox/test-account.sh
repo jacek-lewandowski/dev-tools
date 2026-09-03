@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 proj="$tmp/work/p"; mkdir -p "$proj"
@@ -10,7 +10,7 @@ echo 'host-token'   > "$HOME/.claude/.credentials.json"
 echo '{"a":"host"}' > "$HOME/.claude.json"
 echo 'host-codex'   > "$HOME/.codex/auth.json"
 
-create() { bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true; }
+create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true; }
 create
 dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
 
@@ -37,7 +37,7 @@ assert_contains "compose mounts .codex" "$(cat "$dir/docker-compose.yml")" \
 assert_contains "image installs the codex CLI" \
     "$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")" '@openai/codex'
 
-acct() { ( cd "$proj" && bash "$REPO_ROOT/bin/ai-sandbox-account" "$@" 2>&1 ); }
+acct() { ( cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" "$@" 2>&1 ); }
 assert_contains "status names the sandbox" "$(acct status)" "$(ai_sandbox_project_id "$proj")"
 assert_contains "status reports seeding"   "$(acct status)" 'seeded'
 

@@ -15,12 +15,12 @@ say() { printf 'ai-sandbox: %s\n' "$*"; }
 if [ -f "$AI_SANDBOX_ROOT/config" ]; then
     # shellcheck disable=SC1091
     . "$AI_SANDBOX_ROOT/config"
-    if [ -n "${DEV_TOOLS_DIR:-}" ] && [ -d "$DEV_TOOLS_DIR/bin" ]; then
+    if [ -n "${DEV_TOOLS_DIR:-}" ] && [ -d "$DEV_TOOLS_DIR/bin/ai" ]; then
         for helper in ai-sandbox-lib.sh ai-sandbox ai-sandbox-stop \
                       ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm \
                       ai-sandbox-migrate ai-sandbox-account \
                       ai-sandbox-gc ai-sandbox-extensions; do
-            src="$DEV_TOOLS_DIR/bin/$helper"
+            src="$DEV_TOOLS_DIR/bin/ai/$helper"
             dst="$AI_SANDBOX_ROOT/bin/$helper"
             [ -f "$src" ] || continue
             if ! cmp -s "$src" "$dst"; then
