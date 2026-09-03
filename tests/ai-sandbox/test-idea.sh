@@ -20,11 +20,11 @@ case "$compose" in
 esac
 assert_no_file "and no settings directory is made" "$dir/jetbrains-config"
 assert_no_file "and no index directory is made"    "$dir/jetbrains-cache"
-# The shared plugins row is unconditional, like the .cache and .npm rows: an
+# The shared plugins row is unconditional, like every other shared row: an
 # empty directory mounted on a host with no IDE is inert, and keeping every row
 # in ai_sandbox_shared_mounts unconditional is what lets gc reason about them.
-assert_contains "the shared plugins row is still emitted, like .cache and .npm" \
-    "$compose" "shared/jetbrains-plugins:$HOME/.local/share/JetBrains"
+assert_contains "the shared plugins row is still emitted" \
+    "$compose" "shared/jetbrains-plugins:$HOME/.local/share/JetBrains:ro\""
 
 # --- a host with IDEA ------------------------------------------------------
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
@@ -52,15 +52,15 @@ assert_contains "the wrapper is told where it is" "$compose" \
 # Settings per sandbox, plugins shared, indexes per sandbox.
 assert_contains "settings are per sandbox"  "$compose" \
     "\"$dir/jetbrains-config:$HOME/.config/JetBrains\""
-assert_contains "plugins come from the shared store" "$compose" \
-    "shared/jetbrains-plugins:$HOME/.local/share/JetBrains"
+assert_contains "plugins come from the shared store, read-only" "$compose" \
+    "shared/jetbrains-plugins:$HOME/.local/share/JetBrains:ro\""
 assert_contains "indexes are per sandbox"   "$compose" \
     "\"$dir/jetbrains-cache:$HOME/.cache/JetBrains\""
 
-# ~/.cache is a SHARED mount; the index dir must be nested inside it, and Docker
+# The index dir is nested inside the per-sandbox ~/.cache mount, and Docker
 # applies the deeper mount last, so it wins.
-assert_contains "the shared ~/.cache mount is still there" "$compose" \
-    "shared/cache:$HOME/.cache"
+assert_contains "the per-sandbox ~/.cache mount is still there" "$compose" \
+    "\"$dir/cache:$HOME/.cache\""
 
 assert_eq "the licence is seeded from the host" \
     "$(cat "$dir/jetbrains-config/IntelliJIdea2025.1/idea.key")" 'LICENCE'
