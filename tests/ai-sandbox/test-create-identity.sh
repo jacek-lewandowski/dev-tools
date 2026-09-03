@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 # Called directly, not via $(), so the exports inside fake_home actually
 # reach this shell (and thus the create-ai-sandbox.sh child processes below).
@@ -12,7 +12,7 @@ proj="$tmp/work/dev-tools"
 mkdir -p "$proj"
 ( cd "$proj" && git init -q . && git config user.email t@e && git config user.name t )
 
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 \
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 \
     || { echo "script failed:"; cat "$tmp/out"; }
 
 id=$(ai_sandbox_project_id "$proj")
@@ -37,7 +37,7 @@ assert_contains "compose keeps the real project path" \
 # Two projects with the same basename must land in different directories.
 proj2="$tmp/play/dev-tools"
 mkdir -p "$proj2"
-bash "$REPO_ROOT/bin/create-ai-sandbox.sh" --display=none --no-start "$proj2" >>"$tmp/out" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" >>"$tmp/out" 2>&1 || true
 id2=$(ai_sandbox_project_id "$proj2")
 assert_file "second same-named project gets its own dir" "$AI_SANDBOX_ROOT/${id2}-agent"
 

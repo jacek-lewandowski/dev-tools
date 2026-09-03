@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-. "$REPO_ROOT/bin/ai-sandbox-lib.sh"
+. "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 assert_eq "slug lowercases"            "$(ai_sandbox_slug 'DevTools')"     'devtools'
 assert_eq "slug replaces separators"   "$(ai_sandbox_slug 'my_project')"   'my-project'
