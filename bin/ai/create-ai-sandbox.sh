@@ -60,6 +60,8 @@ DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
+WITH_AUDIO="no"         # host sound socket and devices, microphone included
+WITH_AUDIO_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
 PROJECT_ARG=""
@@ -104,6 +106,11 @@ Options:
                    keeps its own image store inside the container, costing disk
                    per sandbox.
   --no-docker      Undo a remembered --with-docker.
+  --audio          Share the host's PulseAudio/PipeWire socket and ALSA devices
+                   with the sandbox. Off by default: the socket carries capture
+                   as well as playback, so anything in the sandbox could record
+                   from your microphone. Remembered.
+  --no-audio       Undo a remembered --audio.
   --rebuild        Force a no-cache rebuild of the image. That image is
                    shared by every project, so other sandboxes pick up the new
                    one on their next start.
@@ -173,6 +180,8 @@ for arg in "$@"; do
         --display=*)  DISPLAY_MODE="${arg#*=}"; DISPLAY_MODE_EXPLICIT="yes" ;;
         --with-docker) WITH_DOCKER="yes"; WITH_DOCKER_EXPLICIT="yes" ;;
         --no-docker)   WITH_DOCKER="no";  WITH_DOCKER_EXPLICIT="yes" ;;
+        --audio)       WITH_AUDIO="yes"; WITH_AUDIO_EXPLICIT="yes" ;;
+        --no-audio)    WITH_AUDIO="no";  WITH_AUDIO_EXPLICIT="yes" ;;
         --rebuild)    FORCE_REBUILD="yes" ;;
         --no-start)   NO_START="yes" ;;
         -h|--help)    usage; exit 0 ;;
@@ -182,18 +191,24 @@ for arg in "$@"; do
 done
 
 # Last-one-wins would silently pick a Docker setting the user did not intend.
-seen_with="no"; seen_without="no"
+seen_with="no"; seen_without="no"; seen_audio="no"; seen_noaudio="no"
 for arg in "$@"; do
     case "$arg" in
         --with-docker) seen_with="yes" ;;
         --no-docker)   seen_without="yes" ;;
+        --audio)       seen_audio="yes" ;;
+        --no-audio)    seen_noaudio="yes" ;;
     esac
 done
 if [ "$seen_with" = "yes" ] && [ "$seen_without" = "yes" ]; then
     echo "Pass --with-docker or --no-docker, not both." >&2
     exit 2
 fi
-unset seen_with seen_without
+if [ "$seen_audio" = "yes" ] && [ "$seen_noaudio" = "yes" ]; then
+    echo "Pass --audio or --no-audio, not both." >&2
+    exit 2
+fi
+unset seen_with seen_without seen_audio seen_noaudio
 
 case "$DISPLAY_MODE" in
     auto|wayland|xpra|nested|host|none) ;;
@@ -379,6 +394,13 @@ if [ "$WITH_DOCKER_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
         0) WITH_DOCKER="no" ;;
     esac
 fi
+if [ "$WITH_AUDIO_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
+    STORED_AUDIO=$(sed -n 's/^SANDBOX_WITH_AUDIO=//p' "$ENV_FILE" | tail -n 1)
+    case "$STORED_AUDIO" in
+        1) WITH_AUDIO="yes"; log "keeping host audio (pass --no-audio to drop it)" ;;
+        0) WITH_AUDIO="no" ;;
+    esac
+fi
 
 # The uid suffix keeps two host users sharing one Docker daemon from fighting
 # over a single tag, since the image bakes in USER_ID.
@@ -415,16 +437,48 @@ if [ "$DISPLAY_MODE" = "auto" ]; then
 fi
 log "mode: $DISPLAY_MODE"
 
-# NESTED_DISPLAY is derived from the project id so it is stable across runs
-# and distinct per sandbox, even for two projects sharing a basename.
-NESTED_DISPLAY_NUM=$(( 100 + $(printf '%s' "$PROJECT_ID" | cksum | cut -d' ' -f1) % 80 ))
-
 # The container gets its own /tmp/.X11-unix containing exactly one socket: a hard
 # link to this sandbox's Xephyr socket. A directory (rather than a single-socket
 # bind) means a restarted Xephyr is picked up without recreating the container,
 # and the sandbox never sees the host's other X sockets. It lives inside
 # /tmp/.X11-unix so that the hard link is guaranteed to be on the same filesystem.
 X11_SOCKET_DIR="/tmp/.X11-unix/.ai-sandbox-${CONTAINER_NAME}"
+
+# The display number is allocated once and remembered in .env. The first
+# candidate is derived from the project id, but that formula has only 80 slots,
+# and two sandboxes on one number do not share a display: the second finds a
+# server it cannot authenticate to, because each has its own cookie. So skip
+# every number another sandbox has recorded (or, for one created before numbers
+# were recorded, would derive) and every socket some other X server holds.
+display_num_default() {
+    printf '%s' "$(( 100 + $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 80 ))"
+}
+NESTED_DISPLAY_NUM=""
+if [ -f "$ENV_FILE" ]; then
+    NESTED_DISPLAY_NUM=$(sed -n 's/^SANDBOX_DISPLAY_NUM=//p' "$ENV_FILE" | tail -n 1)
+    case "$NESTED_DISPLAY_NUM" in *[!0-9]*) NESTED_DISPLAY_NUM="" ;; esac
+fi
+if [ -z "$NESTED_DISPLAY_NUM" ]; then
+    declare -A CLAIMED_DISPLAY=()
+    for other_env in "$AI_SANDBOX_ROOT"/*-agent/.env; do
+        other_dir=${other_env%/.env}
+        [ -f "$other_env" ] && [ "$other_dir" != "$SANDBOX_DIR" ] || continue
+        n=$(sed -n 's/^SANDBOX_DISPLAY_NUM=//p' "$other_env" | tail -n 1)
+        other_id=${other_dir##*/}; other_id=${other_id%-agent}
+        case "$n" in ""|*[!0-9]*) n=$(display_num_default "$other_id") ;; esac
+        CLAIMED_DISPLAY[$n]=1
+    done
+    first=$(display_num_default "$PROJECT_ID")
+    for (( n = first; n < first + 900; n++ )); do
+        [ -n "${CLAIMED_DISPLAY[$n]:-}" ] && continue
+        if [ -e "/tmp/.X11-unix/X$n" ] && ! [ "/tmp/.X11-unix/X$n" -ef "$X11_SOCKET_DIR/X$n" ]; then
+            continue
+        fi
+        NESTED_DISPLAY_NUM=$n; break
+    done
+    [ -n "$NESTED_DISPLAY_NUM" ] || die "No free X display number between :$first and :$((first + 899))."
+    unset CLAIMED_DISPLAY other_env other_dir other_id n first
+fi
 
 DISPLAY_ENV_LINES=""
 DISPLAY_VOL_LINES=""
@@ -542,11 +596,18 @@ fi
 # Audio
 # ---------------------------------------------------------------------------
 
+# Opt-in only. The socket carries capture as well as playback, and neither
+# PulseAudio nor PipeWire's compatibility socket can restrict one client to
+# playback, so sharing it is sharing the microphone.
 PULSE_SOCKET_HOST="${XDG_RUNTIME_DIR:-/run/user/$HOST_UID}/pulse/native"
-if [ -S "$PULSE_SOCKET_HOST" ]; then
+if [ "$WITH_AUDIO" != "yes" ]; then
+    log "Audio: not shared (pass --audio to share the host's sound, microphone included)."
+elif [ -S "$PULSE_SOCKET_HOST" ]; then
     add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
     add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
-    log "Audio: PulseAudio/PipeWire socket shared."
+    log "Audio: PulseAudio/PipeWire socket shared (--audio)."
+else
+    warn "--audio, but there is no PulseAudio/PipeWire socket at $PULSE_SOCKET_HOST."
 fi
 
 # ---------------------------------------------------------------------------
@@ -617,7 +678,7 @@ shopt -u nullglob
 add_cgroup 'c 188:* rwm'    # ttyUSB
 add_cgroup 'c 166:* rwm'    # ttyACM
 
-if [ -d /dev/snd ] && [ "$DISPLAY_MODE" != "none" ]; then
+if [ "$WITH_AUDIO" = "yes" ] && [ -d /dev/snd ] && [ "$DISPLAY_MODE" != "none" ]; then
     add_vol '"/dev/snd:/dev/snd"'
     add_cgroup 'c 116:* rwm'
     log "audio: /dev/snd (ALSA)"
@@ -702,8 +763,13 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   what the host has; \`sdk install\` writes inside the sandbox.
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
-- \`parec\`/\`paplay\`, \`arecord\`/\`aplay\`, \`sox\`/\`ffmpeg\` -- audio capture, conversion, playback.
+- \`sox\`/\`ffmpeg\` -- audio and video conversion.
 - ImageMagick 6."
+
+if [ "$WITH_AUDIO" = "yes" ]; then
+    TOOL_NOTES="${TOOL_NOTES}
+- \`parec\`/\`paplay\`, \`arecord\`/\`aplay\` -- capture from and play to the host's sound devices."
+fi
 
 if [ -d "$IDEA_HOST_DIR" ]; then
     TOOL_NOTES="${TOOL_NOTES}
@@ -1540,7 +1606,9 @@ HOST_USER="$HOST_USER" \
 HOST_GIT_NAME="$HOST_GIT_NAME" \
 HOST_GIT_EMAIL="$HOST_GIT_EMAIL" \
 WITH_DOCKER="$WITH_DOCKER" \
+WITH_AUDIO="$WITH_AUDIO" \
 DISPLAY_MODE="$DISPLAY_MODE" \
+DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 python3 - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
@@ -1551,7 +1619,9 @@ managed = {
     "HOST_GIT_NAME": os.environ.get("HOST_GIT_NAME", ""),
     "HOST_GIT_EMAIL": os.environ.get("HOST_GIT_EMAIL", ""),
     "SANDBOX_WITH_DOCKER": "1" if os.environ.get("WITH_DOCKER") == "yes" else "0",
+    "SANDBOX_WITH_AUDIO": "1" if os.environ.get("WITH_AUDIO") == "yes" else "0",
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
+    "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
 }
 MARKER = "# Managed by create-ai-sandbox.sh"
 kept = [
