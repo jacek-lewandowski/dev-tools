@@ -701,7 +701,7 @@ fi
 
 step "Wiring the shared brain"
 
-mkdir -p "$HOME/.gemini" "$CLAUDE_PROJECT_DIR" "$HOME/.antigravity" \
+mkdir -p "$HOME/.gemini" "$CLAUDE_PROJECT_DIR" "$HOME/.antigravity" "$HOME/.antigravity-ide" \
          "$HOME/.config/Antigravity" "$HOME/.config/Antigravity IDE" "$HOME/.config/Claude" \
          "$HOME/.gemini/antigravity/brain" "$HOME/.gemini/antigravity/conversations" \
          "$HOME/.gemini/antigravity-ide/brain" "$HOME/.gemini/antigravity-ide/conversations"
@@ -862,6 +862,9 @@ seed_rsync() {  # <path under $HOME> <path under $SANDBOX_DIR> [rsync flags...]
 if [ -f "$SANDBOX_DIR/.seeded" ]; then
     log "already seeded on $(cat "$SANDBOX_DIR/.seeded")"
     log "this project's logins are left alone; 'ai-sandbox-account refresh' re-pulls the host's"
+    if [ ! -f "$SANDBOX_DIR/.antigravity-ide/argv.json" ] && [ -f "$SANDBOX_DIR/.antigravity/argv.json" ]; then
+        cp -a "$SANDBOX_DIR/.antigravity/argv.json" "$SANDBOX_DIR/.antigravity-ide/argv.json"
+    fi
 else
     log "seeding from the host, once. Later runs will not overwrite this, so a"
     log "login made inside the sandbox survives."
@@ -873,6 +876,13 @@ else
     if [ -d "$HOME/.antigravity" ]; then
         seed_rsync .antigravity .antigravity
         log ".antigravity"
+    fi
+    if [ -d "$HOME/.antigravity-ide" ]; then
+        seed_rsync .antigravity-ide .antigravity-ide
+        log ".antigravity-ide"
+    elif [ -d "$HOME/.antigravity" ]; then
+        seed_rsync .antigravity .antigravity-ide
+        log ".antigravity-ide (from .antigravity)"
     fi
     if [ -d "$HOME/.config/Antigravity" ]; then
         seed_rsync .config/Antigravity antigravity-data
@@ -1546,7 +1556,7 @@ RUN set -eux; \
         echo "${USER_NAME}:100000:65536" >> /etc/subuid; fi; \
     if ! grep -q "^${USER_NAME}:" /etc/subgid; then \
         echo "${USER_NAME}:100000:65536" >> /etc/subgid; fi; \
-    mkdir -p "${USER_HOME}/.config" "${USER_HOME}/.antigravity" \
+    mkdir -p "${USER_HOME}/.config" "${USER_HOME}/.antigravity" "${USER_HOME}/.antigravity-ide" \
              "${USER_HOME}/.gemini" "${USER_HOME}/.claude" \
              "${USER_HOME}/tools" "/run/user/${USER_ID}"; \
     chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}" "/run/user/${USER_ID}"; \
@@ -1691,6 +1701,7 @@ cat <<COMPOSE_VOLS
       # Sandbox-local copies of tool state (logins, settings, extensions).
       - "${SANDBOX_DIR}/.gemini:${CONTAINER_HOME}/.gemini"
       - "${SANDBOX_DIR}/.antigravity:${CONTAINER_HOME}/.antigravity"
+      - "${SANDBOX_DIR}/.antigravity-ide:${CONTAINER_HOME}/.antigravity-ide"
       - "${SANDBOX_DIR}/.claude:${CONTAINER_HOME}/.claude"
       - "${SANDBOX_DIR}/.claude.json:${CONTAINER_HOME}/.claude.json"
       - "${SANDBOX_DIR}/.codex:${CONTAINER_HOME}/.codex"
