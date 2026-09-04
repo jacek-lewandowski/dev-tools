@@ -10,10 +10,11 @@ proj="$tmp/work/p"; mkdir -p "$proj"
 # A host SDKMAN: two java versions with 21 as the default, one gradle with no
 # default set at all, and the machinery directories.
 SD="$HOME/.sdkman"
-mkdir -p "$SD/bin" "$SD/libexec" "$SD/src" "$SD/etc" "$SD/var" \
+mkdir -p "$SD/bin" "$SD/libexec" "$SD/src" "$SD/contrib" "$SD/etc" "$SD/var" \
          "$SD/candidates/java/21.0.8-tem/bin" "$SD/candidates/java/17.0.16-tem/bin" \
          "$SD/candidates/gradle/9.6.1/bin"
 echo 'init' > "$SD/bin/sdkman-init.sh"
+echo 'fn' > "$SD/src/sdkman-default.sh"
 echo 'sdkman_auto_answer=false' > "$SD/etc/config"
 echo '5.20.0' > "$SD/var/version"
 ln -s 21.0.8-tem "$SD/candidates/java/current"
@@ -43,9 +44,16 @@ if [ ! -L "$farm/candidates/gradle/current" ]; then _pass "no default invented f
 else _fail "no default invented for gradle" "current -> $(readlink "$farm/candidates/gradle/current")"; fi
 
 # Machinery is linked, not copied: no second copy of libexec per sandbox.
-for part in bin libexec src; do
+for part in bin libexec contrib; do
     assert_link "$part is linked to the host" "$farm/$part" "$HOME/.sdkman-host/$part"
 done
+# Except src: sdkman-init.sh finds its function files with 'find src -type f',
+# which sees nothing through a symlinked directory. Copied, and findable.
+TESTS_RUN=$((TESTS_RUN + 1))
+if [ -d "$farm/src" ] && [ ! -L "$farm/src" ]; then _pass "src is a real directory"
+else _fail "src is a real directory" "$(ls -ld "$farm/src" 2>&1)"; fi
+assert_eq "src functions are found the way sdkman-init.sh looks for them" \
+    "$(find "$farm/src" -type f -name 'sdkman-*.sh' | wc -l | tr -d ' ')" '1'
 # Writable state is real and seeded.
 assert_eq "etc/config seeded" "$(cat "$farm/etc/config")" 'sdkman_auto_answer=false'
 assert_eq "var seeded"        "$(cat "$farm/var/version")" '5.20.0'
@@ -71,16 +79,29 @@ case "$compose" in
 esac
 
 # --- second run: the sandbox's own default survives, versions re-sync -------
-ln -sfn 17.0.16-tem "$farm/candidates/java/current"     # as 'sdk default java 17' would
+# 'sdk default java 17' inside the container writes an absolute link, with the
+# container-side path -- which is also the host path, since the homes match.
+ln -sfn "$HOME/.sdkman/candidates/java/17.0.16-tem" "$farm/candidates/java/current"
+rm -rf "$farm/src"; ln -s "$HOME/.sdkman-host/src" "$farm/src"   # a farm from before the fix
+echo 'fn2' > "$SD/src/sdkman-current.sh"                # host sdkman updated itself
 mkdir -p "$SD/candidates/java/25.0.3-tem"               # host installs a new JDK
 rm -rf "$SD/candidates/java/21.0.8-tem"                 # and removes an old one
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out2" 2>&1 || true
 
 assert_eq "the sandbox default is not reset by a re-run" \
-    "$(readlink "$farm/candidates/java/current")" '17.0.16-tem'
+    "$(readlink "$farm/candidates/java/current")" "$HOME/.sdkman/candidates/java/17.0.16-tem"
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$(cat "$tmp/out2")" in
+    *"no longer installed"*) _fail "an absolute default is not mistaken for a dangling one" "$(grep 'no longer' "$tmp/out2")" ;;
+    *) _pass "an absolute default is not mistaken for a dangling one" ;;
+esac
 assert_link "a newly installed host version appears" \
     "$farm/candidates/java/25.0.3-tem" "$HOME/.sdkman-host/candidates/java/25.0.3-tem"
 assert_no_link "a removed host version is unlinked" "$farm/candidates/java/21.0.8-tem"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [ -d "$farm/src" ] && [ ! -L "$farm/src" ]; then _pass "a pre-fix src symlink is replaced by a copy"
+else _fail "a pre-fix src symlink is replaced by a copy" "$(ls -ld "$farm/src" 2>&1)"; fi
+assert_file "a re-run picks up new host src files" "$farm/src/sdkman-current.sh"
 
 # --- a default the host has deleted ----------------------------------------
 ln -sfn 25.0.3-tem "$farm/candidates/java/current"
