@@ -42,6 +42,15 @@ readonly NODE_MAJOR='24'
 #                     its pages count against MEMORY_LIMIT. Keeping it well
 #                     under the limit stops one large shm allocation from
 #                     OOM-killing the sandbox by itself.
+#   CPU_LIMIT         Derived: half as many cores as GB of RAM, so a 4g sandbox
+#                     sees two. Applied as a cpuset rather than a CPU quota,
+#                     because a quota is invisible to nproc, make -j, cargo,
+#                     Node and every other tool that sizes its parallelism by
+#                     core count: they would see the host's cores and build
+#                     straight into the memory cap. A cpuset changes what the
+#                     container can see, so nproc and the cap agree. The cores
+#                     themselves are chosen to spread sandboxes over the host
+#                     (see "CPU set" below).
 # The host's IntelliJ IDEA installation. Mounted read-only when it exists, so
 # the sandbox can run the IDE without being able to modify or update it, and
 # skipped entirely when it does not. Override for a different install path:
@@ -51,6 +60,18 @@ readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
 readonly MEMORY_LIMIT='4g'
 readonly MEMORY_SWAP_LIMIT='4g'
 readonly SHM_SIZE='1gb'
+
+mem_limit_gb() {
+    local n=${1%%[!0-9]*} unit=${1##*[0-9]}
+    case "$unit" in
+        g|G|gb|GB) echo "$n" ;;
+        m|M|mb|MB) echo $(( n / 1024 )) ;;
+        *) echo "MEMORY_LIMIT '$1' must end in g or m" >&2; exit 1 ;;
+    esac
+}
+CPU_LIMIT=$(( $(mem_limit_gb "$MEMORY_LIMIT") / 2 ))
+[ "$CPU_LIMIT" -ge 1 ] || CPU_LIMIT=1
+readonly CPU_LIMIT
 
 # ---------------------------------------------------------------------------
 # Options
@@ -167,11 +188,16 @@ SDKMAN: the host's ~/.sdkman is mounted read-only, so its toolchains are shared
 and never duplicated, but each sandbox keeps its OWN default versions, taken
 from the host's when the sandbox is first created. Change one from inside with
 'sdk default java <version>'; to re-snapshot the host's, delete the sandbox's
-sdkman/candidates/<candidate>/current and re-run.
+sdkman/candidates/<candidate>/current and re-run. The candidates are on PATH and
+JAVA_HOME is set in every shell, interactive or not, and 'sdk' works from
+scripts too (/usr/local/bin/sdk stands in for the shell function).
 
 Resources: the container is capped at 4 GB of RAM with no swap, and /dev/shm at
 1 GB, which counts against that cap. Adjust MEMORY_LIMIT, MEMORY_SWAP_LIMIT and
-SHM_SIZE at the top of this script; the cap applies from the next start.
+SHM_SIZE at the top of this script; the cap applies from the next start. CPUs
+follow the memory: half as many cores as GB of RAM, pinned as a cpuset so that
+'nproc' inside reports the same number. The cores are chosen to spread the
+sandboxes over the host and remembered in the sandbox's .env.
 USAGE
 }
 
@@ -474,6 +500,57 @@ if [ -z "$NESTED_DISPLAY_NUM" ]; then
     unset CLAIMED_DISPLAY other_env other_dir other_id n first
 fi
 
+# --- CPU set ---------------------------------------------------------------
+# Which CPU_LIMIT cores this sandbox is pinned to, remembered in .env like the
+# display number. Pinning to the same cores everywhere would stack every
+# sandbox onto 0-1 while the rest of the host idles, so each new one takes the
+# cores the fewest other sandboxes have claimed, lowest numbers first: two
+# sandboxes on a 16-core host share nothing, and on an oversubscribed host the
+# doubling-up is even. Re-allocated when the count no longer matches CPU_LIMIT
+# or the host has fewer cores than the recorded set names.
+HOST_CPUS=$(nproc 2>/dev/null || echo 1)
+CPUSET_WANT=$CPU_LIMIT
+[ "$CPUSET_WANT" -le "$HOST_CPUS" ] || CPUSET_WANT=$HOST_CPUS
+cpuset_valid() {
+    local set=$1 c count=0
+    case "$set" in ''|*[!0-9,]*|,*|*,|*,,*) return 1 ;; esac
+    IFS=, read -ra _ids <<< "$set"
+    for c in "${_ids[@]}"; do
+        [ "$c" -lt "$HOST_CPUS" ] || return 1
+        count=$((count + 1))
+    done
+    [ "$count" -eq "$CPUSET_WANT" ]
+}
+CPUSET=""
+[ -f "$ENV_FILE" ] && CPUSET=$(sed -n 's/^SANDBOX_CPUSET=//p' "$ENV_FILE" | tail -n 1)
+if ! cpuset_valid "$CPUSET"; then
+    declare -a CPU_LOAD=()
+    for (( c = 0; c < HOST_CPUS; c++ )); do CPU_LOAD[c]=0; done
+    for other_env in "$AI_SANDBOX_ROOT"/*-agent/.env; do
+        other_dir=${other_env%/.env}
+        [ -f "$other_env" ] && [ "$other_dir" != "$SANDBOX_DIR" ] || continue
+        IFS=, read -ra _ids <<< "$(sed -n 's/^SANDBOX_CPUSET=//p' "$other_env" | tail -n 1)"
+        for c in "${_ids[@]}"; do
+            case "$c" in ''|*[!0-9]*) continue ;; esac
+            [ "$c" -lt "$HOST_CPUS" ] && CPU_LOAD[c]=$((CPU_LOAD[c] + 1))
+        done
+    done
+    chosen=()
+    for (( k = 0; k < CPUSET_WANT; k++ )); do
+        best=-1
+        for (( c = 0; c < HOST_CPUS; c++ )); do
+            [ "${CPU_LOAD[c]}" -ge 0 ] || continue          # already chosen
+            if [ "$best" -lt 0 ] || [ "${CPU_LOAD[c]}" -lt "${CPU_LOAD[best]}" ]; then best=$c; fi
+        done
+        CPU_LOAD[best]=-1
+        chosen+=("$best")
+    done
+    CPUSET=$(printf '%s\n' "${chosen[@]}" | sort -n | paste -sd, -)
+    log "CPU set: cores $CPUSET of the host's $HOST_CPUS (${CPU_LIMIT} = ${MEMORY_LIMIT} / 2)"
+    unset CPU_LOAD chosen other_env other_dir best c k
+fi
+unset _ids
+
 DISPLAY_ENV_LINES=""
 DISPLAY_VOL_LINES=""
 
@@ -755,14 +832,19 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
 - \`sox\`/\`ffmpeg\` -- audio and video conversion.
-- ImageMagick 6."
+- ImageMagick 6.
+- \`sg\` (ast-grep) and \`comby\` -- structural search and replace.
+- \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
+- \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\` -- already installed; do not reinstall them."
 
 if [ -d "$HOST_SDKMAN" ]; then
     TOOL_NOTES="${TOOL_NOTES}
-- \`sdk\` -- SDKMAN. The JDKs and other toolchains come from the host read-only,
-  but the defaults are this sandbox's own: \`sdk default java <version>\` changes
-  this project only, not the host and not other sandboxes. \`sdk list java\` shows
-  what the host has; \`sdk install\` writes inside the sandbox."
+- \`sdk\` -- SDKMAN, and the only source of JDKs and other toolchains: \`java\` is
+  on PATH and JAVA_HOME is set in every shell, so never apt-get install a JDK.
+  \`ls ~/.sdkman/candidates/java\` lists the versions the host has; \`sdk default
+  java <version>\` switches this sandbox to one of them (the host and other
+  sandboxes keep theirs) and works from non-interactive shells too. \`sdk install\`
+  writes inside the sandbox."
 fi
 
 if [ "$WITH_AUDIO" = "yes" ]; then
@@ -808,8 +890,10 @@ Environment notes:
 - ${DISPLAY_NOTE}
 - Networking is bridged, not host. The host's own services are reachable at
   \`host.docker.internal\`, not at \`localhost\`.
-- The container is capped at ${MEMORY_LIMIT} of RAM with no swap. Keep build and test
-  parallelism modest: an over-parallel build is OOM-killed, not merely slowed.
+- The container is capped at ${MEMORY_LIMIT} of RAM with no swap and ${CPUSET_WANT} CPU core(s);
+  \`nproc\` reports that number and it is the ceiling for build and test
+  parallelism: an over-parallel build is OOM-killed, not merely slowed.
+  (\`free\` and /proc/cpuinfo describe the host, not this container.)
 - The project is mounted read-write at its real host path, so edits are real
   edits to the user's working tree. The only other host paths mounted are the
   shared AI rules file, the Antigravity brain and conversations, this project's
@@ -988,7 +1072,8 @@ fi
 # So the sandbox gets its own SDKMAN_DIR, built almost entirely out of symlinks:
 #
 #   <sandbox>/sdkman/
-#     bin,libexec,src,contrib -> ~/.sdkman-host/...      host machinery, ro
+#     bin,libexec,contrib -> ~/.sdkman-host/...          host machinery, ro
+#     src/                                               copied (find needs a real dir)
 #     etc/, var/, ext/, tmp/                             real, writable
 #     candidates/java/
 #       21.0.8-tem  -> ~/.sdkman-host/candidates/java/21.0.8-tem
@@ -1016,9 +1101,19 @@ sync_sdkman_farm() {
 
     # Linked, not copied, so a 'sdk selfupdate' on the host reaches every
     # sandbox at once and none of them carries a second copy of libexec.
-    for part in bin libexec src contrib; do
+    for part in bin libexec contrib; do
         [ -d "$HOST_SDKMAN/$part" ] && ln -sfn "$CONTAINER_SDKMAN_HOST/$part" "$SDKMAN_FARM/$part"
     done
+    # src is the exception: sdkman-init.sh loads its functions with
+    # 'find "$SDKMAN_DIR/src" -type f', and find does not descend into a
+    # symlinked starting point (nor match symlinked files). Behind a link, no
+    # function was ever defined -- 'sdk' did not exist and the candidates never
+    # reached PATH. It is 100 kB, so a real copy, refreshed on every run.
+    if [ -d "$HOST_SDKMAN/src" ]; then
+        [ -L "$SDKMAN_FARM/src" ] && rm -f "$SDKMAN_FARM/src"
+        mkdir -p "$SDKMAN_FARM/src"
+        safe_rsync -a --delete "$HOST_SDKMAN/src/" "$SDKMAN_FARM/src/"
+    fi
 
     # Knobs a sandbox may legitimately change: seeded from the host, then its own.
     # '||' rather than 'if' would make a host without etc/config fatal under set -e.
@@ -1064,7 +1159,10 @@ sync_sdkman_farm() {
 
         # This sandbox's own default. Left as it is -- unless it has gone
         # dangling, which would drop the candidate off PATH with no explanation.
-        target=$(readlink "$cur")
+        # 'sdk default' writes an absolute (container-side) link, not a bare
+        # version, so judge it by its last component or every choice made
+        # inside the sandbox would look dangling from the host and be undone.
+        target=$(readlink "$cur"); target=${target##*/}
         if [ ! -L "$SDKMAN_FARM/candidates/$name/$target" ] \
            && [ ! -d "$SDKMAN_FARM/candidates/$name/$target" ]; then
             warn "This sandbox's default $name ($target) is no longer installed on the host."
@@ -1082,7 +1180,7 @@ sync_sdkman_farm() {
     for cdir in "$SDKMAN_FARM/candidates"/*; do
         [ -d "$cdir" ] || continue
         target=$(readlink "$cdir/current" 2>/dev/null || true)
-        [ -n "$target" ] && log "  ${cdir##*/} = $target"
+        [ -n "$target" ] && log "  ${cdir##*/} = ${target##*/}"
     done
     [ "$seeded" -gt 0 ] && log "snapshotted $seeded default(s) from the host; yours to change now"
     return 0
@@ -1194,6 +1292,9 @@ case "$_mem_max" in
         status "memory" "$(_human "$_mem_cur") used, NO LIMIT (re-run create-ai-sandbox.sh)" ;;
     *)  status "memory" "$(_human "$_mem_cur") of $(_human "$_mem_max")" ;;
 esac
+_cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null \
+          || cat /sys/fs/cgroup/cpuset/cpuset.effective_cpus 2>/dev/null || echo '?')
+status "cpus"        "$(nproc) (host cores $_cpuset)"
 status "display"     "${DISPLAY:-<none>}${WAYLAND_DISPLAY:+  wayland=$WAYLAND_DISPLAY}"
 if [ -n "${DISPLAY:-}" ]; then
     _d=${DISPLAY#*:}; _d=${_d%%.*}
@@ -1237,9 +1338,15 @@ if [ -d "$HOME/.sdkman/candidates" ]; then
     done
     status "sdkman defaults" "${_sdk:- <none set>}  (this sandbox only)"
     status "sdkman writable" "$( [ -w "$HOME/.sdkman/candidates/java" ] && echo "yes, 'sdk default' works here" || echo "NO -- re-run create-ai-sandbox.sh" )"
+    # Checked in a fresh non-interactive shell: that is the kind agents get.
+    status "java (bash -c)" "$( bash -c 'command -v java >/dev/null 2>&1 && java -version 2>&1 | head -1 || echo "NOT on PATH -- is /etc/ai-sandbox-env.sh sourced?"' )"
+    status "JAVA_HOME"     "$( bash -c 'echo "${JAVA_HOME:-<unset>}"' )"
 else
     status "sdkman" "not mounted"
 fi
+status "comby"        "$(comby -version 2>/dev/null || echo 'BROKEN -- rebuild the image (missing shared library?)')"
+status "ast-grep"     "$(sg --version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
+status "pnpm / yarn"  "$(pnpm --version 2>/dev/null || echo '?') / $(yarn --version 2>/dev/null || echo '?')  (corepack)"
 status "audio"        "$( [ -n "${PULSE_SERVER:-}" ] && pactl info >/dev/null 2>&1 && echo ok || echo unavailable )"
 serial=$(ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | tr '\n' ' ')
 status "serial ports" "${serial:-<none passed through>}"
@@ -1332,19 +1439,15 @@ cat > "$BUILD_DIR/sandbox-bashrc.sh" <<'BASHRC_EOF'
 # shellcheck shell=bash
 # ai-sandbox interactive shell setup.
 
-# Environment recorded by the entrypoint (D-Bus, DISPLAY, DOCKER_HOST).
-# shellcheck disable=SC1090
-[ -r "/run/user/$(id -u)/sandbox-env.sh" ] && . "/run/user/$(id -u)/sandbox-env.sh"
-
-export CI=true
-export PLAYWRIGHT_HTML_REPORT=none
-# PYTHONPATH is set by compose so that 'python3 -m tools.<name>' resolves the
-# read-only tools mount; keep a fallback for shells started without it.
-[ -n "${PYTHONPATH:-}" ] || export PYTHONPATH="$HOME"
-
-# SDKMAN, mounted from the host.
+# Everything a non-interactive shell needs too (PATH, SDKMAN, the entrypoint's
+# environment) lives in /etc/ai-sandbox-env.sh, so it is defined once.
 # shellcheck disable=SC1091
-[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ] && . "$HOME/.sdkman/bin/sdkman-init.sh"
+. /etc/ai-sandbox-env.sh
+
+# The 'sdk' shell function and its completion, for interactive use. Everywhere
+# else /usr/local/bin/sdk stands in for it.
+# shellcheck disable=SC1091
+[ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ] && . "$SDKMAN_DIR/bin/sdkman-init.sh"
 
 # Git identity is passed in from the host; only set it once.
 if [ -n "${HOST_GIT_NAME:-}" ] && [ -z "$(git config --global user.name || true)" ]; then
@@ -1360,6 +1463,76 @@ _sandbox_git_branch() {
 }
 export PS1='\[\033[01;33m\][sandbox]\[\033[00m\] \[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[01;35m\]$(_sandbox_git_branch)\[\033[00m\]\$ '
 BASHRC_EOF
+
+# Environment for EVERY shell. Agents never get an interactive one: 'ai-sandbox
+# <cmd>' runs 'bash -lc', which reads /etc/profile.d but stops in .bashrc at
+# Ubuntu's interactivity guard, and a bare 'bash -c' reads only BASH_ENV. So
+# whatever lived in .bashrc alone was invisible to them: 'java' looked "not
+# installed" and got apt-installed instead of taken from SDKMAN. This file is
+# reached from all three directions (profile.d symlink, BASH_ENV, .bashrc) and
+# therefore has to be idempotent, silent and POSIX sh.
+cat > "$BUILD_DIR/sandbox-env.sh" <<'ENVFILE_EOF'
+# shellcheck shell=sh
+# ai-sandbox environment, for interactive and non-interactive shells alike.
+# Sourced via /etc/profile.d (login shells), BASH_ENV (non-interactive bash)
+# and .bashrc (interactive shells). Keep it idempotent, silent and POSIX.
+
+# Environment recorded by the entrypoint (D-Bus, DISPLAY, DOCKER_HOST).
+# shellcheck disable=SC1090
+[ -r "/run/user/$(id -u)/sandbox-env.sh" ] && . "/run/user/$(id -u)/sandbox-env.sh"
+
+export CI=true
+export PLAYWRIGHT_HTML_REPORT=none
+# PYTHONPATH is set by compose so that 'python3 -m tools.<name>' resolves the
+# read-only tools mount; keep a fallback for shells started without it.
+[ -n "${PYTHONPATH:-}" ] || export PYTHONPATH="$HOME"
+
+# SDKMAN: the sandbox's own farm of defaults (see create-ai-sandbox.sh). This
+# is what sdkman-init.sh does to PATH, without the shell functions, so that
+# 'java', 'gradle' and friends resolve in scripts and agent shells too.
+export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"
+if [ -d "$SDKMAN_DIR/candidates" ]; then
+    for _sdk_bin in "$SDKMAN_DIR"/candidates/*/current/bin; do
+        [ -d "$_sdk_bin" ] || continue
+        case ":$PATH:" in
+            *":$_sdk_bin:"*) ;;
+            *) PATH="$_sdk_bin:$PATH" ;;
+        esac
+    done
+    unset _sdk_bin
+    export PATH
+    if [ -d "$SDKMAN_DIR/candidates/java/current" ]; then
+        export JAVA_HOME="$SDKMAN_DIR/candidates/java/current"
+    fi
+fi
+ENVFILE_EOF
+
+# 'sdk' is a shell function that only interactive shells define. Agents run
+# 'bash -c' and subprocesses, where it does not exist -- so they gave up on
+# SDKMAN and apt-installed a JDK. This wrapper makes the command work from
+# anywhere; interactive shells still get the real function, which shadows it.
+cat > "$BUILD_DIR/sandbox-sdk" <<'SDK_EOF'
+#!/bin/bash
+# Non-interactive stand-in for SDKMAN's 'sdk' shell function.
+export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"
+if [ ! -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]; then
+    echo "sdk: SDKMAN is not available in this sandbox (the host has no ~/.sdkman)." >&2
+    exit 1
+fi
+# These only change the shell they run in, which here would be this wrapper.
+case "${1:-}" in
+    use) echo "sdk: 'sdk use' only affects the current interactive shell." >&2
+         echo "     To change this sandbox's default: sdk default ${2:-<candidate>} ${3:-<version>}" >&2
+         exit 1 ;;
+    env) if [ $# -eq 1 ]; then
+             echo "sdk: 'sdk env' only affects the current interactive shell; 'sdk env install' works here." >&2
+             exit 1
+         fi ;;
+esac
+# shellcheck disable=SC1091
+. "$SDKMAN_DIR/bin/sdkman-init.sh"
+sdk "$@"
+SDK_EOF
 
 # --- Dockerfile ------------------------------------------------------------
 
@@ -1428,6 +1601,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xdg-utils dbus-x11 xauth fonts-liberation \
         claude-desktop antigravity google-cloud-cli cloudflared gh nodejs \
         ffmpeg imagemagick sox libsox-fmt-all \
+        libev4 libpcre3 libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/* \
     && dbus-uuidgen > /etc/machine-id
 
@@ -1444,9 +1618,24 @@ RUN npm install -g --force \
         @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
     && npm cache clean --force
 
+# pnpm and yarn through corepack, so a project's 'packageManager' field is
+# honoured and nobody has to 'corepack enable' by hand. The cache is a shared
+# location (chowned to the sandbox user below) rather than root's ~/.cache, or
+# the versions warmed here would be invisible at run time.
+ENV COREPACK_HOME=/usr/local/share/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN set -eux; \
+    command -v corepack >/dev/null || npm install -g corepack; \
+    corepack enable; \
+    corepack prepare pnpm@latest yarn@stable --activate; \
+    npm cache clean --force
+
+# The release binary is dynamically linked: without libev4 (and libpcre3,
+# libsqlite3-0, all installed above) it dies with a loader error on first use.
 RUN set -eux; \
     wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
-    chmod +x /usr/local/bin/comby
+    chmod +x /usr/local/bin/comby; \
+    comby -version
 
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
@@ -1500,6 +1689,8 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 COPY sandbox-doctor   /usr/local/bin/sandbox-doctor
 COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
 COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
+COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
+COPY sandbox-sdk      /usr/local/bin/sdk
 COPY xdg-open         /usr/local/bin/xdg-open
 # IntelliJ IDEA is not installed in the image: this only launches the host's
 # read-only mount, so it is inert on a host that has none.
@@ -1507,9 +1698,26 @@ COPY sandbox-idea     /usr/local/bin/idea
 RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
-                /usr/local/bin/idea \
+                /usr/local/bin/idea /usr/local/bin/sdk \
+    && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
     && install -d -m 1777 /tmp/.X11-unix \
     && echo "ai-sandbox" > /etc/ai-sandbox-release
+
+# Non-interactive 'bash -c' reads nothing but BASH_ENV; login shells get the
+# same file through /etc/profile.d, interactive ones through .bashrc. See the
+# comment on sandbox-env.sh in create-ai-sandbox.sh.
+ENV BASH_ENV=/etc/ai-sandbox-env.sh
+
+# Fail the build, not the agent, when a tool is broken -- comby's binary
+# missing a shared library, or the corepack shims not resolving.
+RUN set -eux; \
+    comby -version; \
+    sg --version; \
+    node --version; \
+    pnpm --version; \
+    yarn --version; \
+    firebase --version; \
+    python3 -c 'import headroom'
 DOCKERFILE_EOF
 
 if [ "$WITH_DOCKER" = "yes" ]; then
@@ -1559,7 +1767,7 @@ RUN set -eux; \
     mkdir -p "${USER_HOME}/.config" "${USER_HOME}/.antigravity" "${USER_HOME}/.antigravity-ide" \
              "${USER_HOME}/.gemini" "${USER_HOME}/.claude" \
              "${USER_HOME}/tools" "/run/user/${USER_ID}"; \
-    chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}" "/run/user/${USER_ID}"; \
+    chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}" "/run/user/${USER_ID}" "${COREPACK_HOME}"; \
     chmod 700 "/run/user/${USER_ID}"; \
     echo '. /etc/ai-sandbox-bashrc.sh' >> "${USER_HOME}/.bashrc"
 
@@ -1602,6 +1810,7 @@ WITH_DOCKER="$WITH_DOCKER" \
 WITH_AUDIO="$WITH_AUDIO" \
 DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
+CPUSET="$CPUSET" \
 python3 - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
@@ -1615,6 +1824,7 @@ managed = {
     "SANDBOX_WITH_AUDIO": "1" if os.environ.get("WITH_AUDIO") == "yes" else "0",
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
+    "SANDBOX_CPUSET": os.environ.get("CPUSET", ""),
 }
 MARKER = "# Managed by create-ai-sandbox.sh"
 kept = [
@@ -1648,6 +1858,8 @@ services:
     shm_size: '${SHM_SIZE}'
     mem_limit: "${MEMORY_LIMIT}"
     memswap_limit: "${MEMORY_SWAP_LIMIT}"
+    # Half as many cores as GB of RAM, as a cpuset so that nproc agrees.
+    cpuset: "${CPUSET}"
     # Bridged, not host, networking: the sandbox can reach the internet but not
     # every service bound to the host's loopback. The host itself is reachable
     # by name when deliberately needed.
@@ -2131,6 +2343,7 @@ cat <<SUMMARY
   Display mode:       $DISPLAY_MODE
   Rootless Docker:    $WITH_DOCKER
   Memory limit:       $MEMORY_LIMIT RAM, no swap (/dev/shm $SHM_SIZE, counted against it)
+  CPU limit:          $CPUSET_WANT core(s): host cores $CPUSET (nproc inside agrees)
 SUMMARY
 
 case "$DISPLAY_MODE" in

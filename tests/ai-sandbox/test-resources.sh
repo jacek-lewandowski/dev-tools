@@ -27,6 +27,31 @@ esac
 assert_contains "the shared brain states the cap" "$(cat "$HOME/.gemini/GEMINI.md")" \
     "capped at 4g of RAM with no swap"
 
+# --- CPUs: half the GB of RAM, as a cpuset so nproc inside agrees ------------
+host_cpus=$(nproc)
+want=2; [ "$want" -le "$host_cpus" ] || want=$host_cpus
+expect_first=$(seq -s, 0 $((want - 1)))
+assert_contains "compose pins a cpuset"            "$compose" "cpuset: \"$expect_first\""
+assert_contains "the set is remembered in .env"    "$(cat "$dir/.env")" "SANDBOX_CPUSET=$expect_first"
+assert_contains "the shared brain states the CPUs" "$(cat "$HOME/.gemini/GEMINI.md")" \
+    "and $want CPU core(s)"
+assert_contains "doctor reports cpus" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'status "cpus"'
+# A second sandbox must not stack onto the same cores while others are idle.
+proj2="$tmp/work/q"; mkdir -p "$proj2"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" >"$tmp/out.q" 2>&1 || true
+dir2="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj2")-agent"
+if [ "$host_cpus" -ge 4 ]; then
+    assert_contains "a second sandbox gets the next idle cores" \
+        "$(cat "$dir2/docker-compose.yml")" 'cpuset: "2,3"'
+fi
+# Re-running keeps the allocation; a stale or malformed one is replaced.
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out.re" 2>&1 || true
+assert_contains "a re-run keeps the cpuset" "$(cat "$dir/docker-compose.yml")" "cpuset: \"$expect_first\""
+sed -i 's/^SANDBOX_CPUSET=.*/SANDBOX_CPUSET=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64/' "$dir/.env"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out.re2" 2>&1 || true
+assert_contains "a set of the wrong size is re-allocated" "$(cat "$dir/docker-compose.yml")" "cpuset: \"$expect_first\""
+rm -rf "$dir2"
+
 doctor="$AI_SANDBOX_ROOT/image/build/sandbox-doctor"
 assert_file "sandbox-doctor generated" "$doctor"
 assert_contains "doctor reports memory" "$(cat "$doctor")" 'status "memory"'
