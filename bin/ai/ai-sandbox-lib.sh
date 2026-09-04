@@ -210,6 +210,7 @@ ai_sandbox_state_dirs() {
     cat <<'DIRS'
 .gemini
 .antigravity
+.antigravity-ide
 .claude
 .claude/projects
 .codex
@@ -231,6 +232,7 @@ ai_sandbox_seed_paths() {
     cat <<'SEED'
 .gemini|.gemini
 .antigravity|.antigravity
+.antigravity-ide|.antigravity-ide
 .claude|.claude
 .codex|.codex
 .config/Antigravity|antigravity-data

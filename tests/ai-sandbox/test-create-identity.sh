@@ -50,6 +50,10 @@ assert_file "host-side project entry is created so docker does not make it root-
 # breaks rm -rf on .claude (account reset, ai-sandbox-rm) and sibling entries.
 assert_file "sandbox-side .claude/projects is pre-created so docker does not make it root-owned" \
             "$dir/.claude/projects"
+assert_file "sandbox-side .antigravity-ide is pre-created so docker does not make it root-owned" \
+            "$dir/.antigravity-ide"
+assert_contains "compose mounts .antigravity-ide" \
+                "$(cat "$dir/docker-compose.yml")" "\"$dir/.antigravity-ide:$HOME/.antigravity-ide\""
 
 # Two projects with the same basename must land in different directories.
 proj2="$tmp/play/dev-tools"
