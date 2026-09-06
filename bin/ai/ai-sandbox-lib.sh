@@ -89,7 +89,8 @@ ai_sandbox_build_hash() {
 # shared copy instead of carrying its own.
 #
 # Sandboxes are NOT one trust domain. Everything here is executable code -- IDE
-# extensions, JetBrains plugins, Claude Code and Claude Desktop binaries -- so
+# extensions, JetBrains plugins, Claude Code and Claude Desktop binaries, the
+# agent skills every agent loads and follows -- so
 # it is mounted READ-ONLY into every sandbox and written only by the host:
 # create-ai-sandbox.sh syncs the host's own copy in on every run, and
 # ai-sandbox-extensions installs what the host does not have. A compromised
@@ -108,11 +109,17 @@ ai_sandbox_build_hash() {
 # has no per-project copy on disk -- migration and gc skip those rows rather
 # than hunting for a directory that never existed.
 #
-# These are nested bind mounts inside the per-project mounts. Docker orders
-# mounts by destination depth, which is what makes the nesting work;
+# Most of these are nested bind mounts inside the per-project mounts. Docker
+# orders mounts by destination depth, which is what makes the nesting work;
 # ~/.claude/projects has relied on that since before this change.
+#
+# agent-skills is ~/.agents, where the skills CLI keeps the one real copy of
+# every shared skill; ~/.claude/skills/<name>, ~/.codex/skills/<name> and the
+# like are relative symlinks into it. The seed copies those symlinks as
+# symlinks, so without this mount every shared skill dangles in the sandbox.
 ai_sandbox_shared_mounts() {
     cat <<'SHARED'
+agent-skills|.agents|
 antigravity-extensions|.antigravity/extensions|.antigravity/extensions
 antigravity-ide-extensions|.antigravity-ide/extensions|
 claude-downloads|.claude/downloads|.claude/downloads

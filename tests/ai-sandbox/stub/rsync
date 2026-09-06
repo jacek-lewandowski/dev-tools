@@ -54,6 +54,13 @@ for src in sources:
                 continue
             cur_target = target_base if rel == '.' else os.path.join(target_base, rel)
             os.makedirs(cur_target, exist_ok=True)
+            # rsync -a copies a symlink as a symlink, whether it points at a
+            # file, a directory or nothing at all. os.walk lists a link to a
+            # directory under dirs and never descends it, so lift those out
+            # here and let the file loop below recreate them.
+            linked = [d for d in dirs if os.path.islink(os.path.join(root, d))]
+            dirs[:] = [d for d in dirs if d not in linked]
+            files = files + linked
             for f in files:
                 f_rel = f if rel == '.' else os.path.join(rel, f)
                 if should_exclude(f_rel):
@@ -62,7 +69,9 @@ for src in sources:
                 if ignore_existing and os.path.exists(dst_file):
                     continue
                 try:
-                    shutil.copy2(os.path.join(root, f), dst_file)
+                    if os.path.lexists(dst_file):
+                        os.remove(dst_file)
+                    shutil.copy2(os.path.join(root, f), dst_file, follow_symlinks=False)
                 except Exception:
                     pass
     else:

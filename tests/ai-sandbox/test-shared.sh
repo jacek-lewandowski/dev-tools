@@ -18,6 +18,12 @@ echo bulk > "$HOME/.claude/downloads/cli"
 echo bulk > "$HOME/.antigravity/extensions/ext-a/package.json"
 echo bulk > "$HOME/.config/Antigravity IDE/CachedExtensionVSIXs/x.vsix"
 echo keep > "$HOME/.claude/.credentials.json"
+# Shared agent skills, as the skills CLI lays them out: one copy under
+# ~/.agents/skills and a relative symlink from every agent's own skills dir.
+mkdir -p "$HOME/.agents/skills/find-skills" "$HOME/.claude/skills" "$HOME/.codex/skills"
+echo skill > "$HOME/.agents/skills/find-skills/SKILL.md"
+ln -s ../../.agents/skills/find-skills "$HOME/.claude/skills/find-skills"
+ln -s ../../.agents/skills/find-skills "$HOME/.codex/skills/find-skills"
 mkdir -p "$HOME/.gemini/config/plugins"
 echo '{"mcpServers":{}}' > "$HOME/.gemini/config/mcp_config.json"
 
@@ -32,7 +38,7 @@ assert_no_file "extensions not copied"       "$dir/.antigravity/extensions"
 assert_no_file "vsix cache not copied"       "$dir/antigravity-ide-data/CachedExtensionVSIXs"
 
 for d in antigravity-extensions antigravity-ide-extensions claude-downloads \
-         claude-desktop-versions ide-vsix jetbrains-plugins; do
+         claude-desktop-versions ide-vsix jetbrains-plugins agent-skills; do
     assert_file "shared/$d exists" "$AI_SANDBOX_ROOT/shared/$d"
 done
 
@@ -47,7 +53,19 @@ assert_eq "vsix cache synced from the host" \
 assert_eq "extensions synced from the host" \
     "$(cat "$AI_SANDBOX_ROOT/shared/antigravity-extensions/ext-a/package.json")" 'bulk'
 
+# ~/.agents is where the shared skills actually live; the per-agent entries
+# are only symlinks into it, so without it every one of them dangles inside
+# the sandbox.
+assert_eq "agent skills synced from the host" \
+    "$(cat "$AI_SANDBOX_ROOT/shared/agent-skills/skills/find-skills/SKILL.md")" 'skill'
+assert_link "claude skill symlink seeded as a symlink" \
+    "$dir/.claude/skills/find-skills" '../../.agents/skills/find-skills'
+assert_link "codex skill symlink seeded as a symlink" \
+    "$dir/.codex/skills/find-skills" '../../.agents/skills/find-skills'
+
 compose=$(cat "$dir/docker-compose.yml")
+assert_contains "agent skills mounted from shared at ~/.agents, read-only" "$compose" \
+    "shared/agent-skills:$HOME/.agents:ro\""
 assert_contains "ide extensions mounted from shared, read-only" "$compose" \
     "shared/antigravity-ide-extensions:$HOME/.antigravity-ide/extensions:ro\""
 assert_contains "downloads mounted from shared, read-only" "$compose" \
