@@ -166,8 +166,9 @@ Layout under ~/.ai-sandbox:
                             Seeded from the host once, then never overwritten,
                             so each project can hold a different Claude, Codex
                             or Gemini account.
-  shared/                   IDE extensions, plugins and CLI builds, synced from
-                            the host and read-only in every sandbox.
+  shared/                   IDE extensions, plugins, CLI builds and the agent
+                            skills under ~/.agents, synced from the host and
+                            read-only in every sandbox.
   image/                    build context and stamp for the one image every
                             project shares.
   bin/                      the ai-sandbox-* commands listed above.
