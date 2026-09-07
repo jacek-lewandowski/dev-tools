@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+#
+# ai-sync -- Synchronize AI shared brain, skills, memory, vector DB,
+# console configurations (Claude & Gemini / agy), and curated artifacts
+# with remote cloud storage (Google Drive) via rclone.
+#
+# Additive by default: files are copied and overwritten, never deleted.
+# --delete turns the directory steps into true mirrors, and everything a
+# mirror removes or overwrites is moved to a timestamped trash, not destroyed.
+#
+set -euo pipefail
+
+DEFAULT_REMOTE="${AI_SYNC_REMOTE:-gdrive:AI_Sync}"
+REMOTE="$DEFAULT_REMOTE"
+LOCAL_TRASH="${AI_SYNC_TRASH:-$HOME/.ai-sync-trash}"
+TRASH_STAMP="$(date +%Y%m%d-%H%M%S)"
+DRY_RUN=""
+VERBOSE=""
+DELETE=""
+STATUS_MODE=""
+ACTION=""
+
+# ANSI Colors
+CLR_RESET="\033[0m"
+CLR_BOLD="\033[1m"
+CLR_BLUE="\033[34m"
+CLR_GREEN="\033[32m"
+CLR_YELLOW="\033[33m"
+CLR_RED="\033[31m"
+CLR_CYAN="\033[36m"
+
+log_info()    { printf "${CLR_BLUE}${CLR_BOLD}==>${CLR_RESET} %s\n" "$*"; }
+log_step()    { printf "  ${CLR_CYAN}•${CLR_RESET} %s\n" "$*"; }
+log_skip()    { printf "    ${CLR_YELLOW}-${CLR_RESET} %s\n" "$*"; }
+log_success() { printf "${CLR_GREEN}${CLR_BOLD}✓${CLR_RESET} %s\n" "$*"; }
+log_warn()    { printf "${CLR_YELLOW}${CLR_BOLD}!${CLR_RESET} %s\n" "$*"; }
+log_err()     { printf "${CLR_RED}${CLR_BOLD}✗${CLR_RESET} %s\n" "$*" >&2; }
+
+usage() {
+    cat <<'USAGE'
+Usage: ai-sync <action> [options]
+
+Actions:
+  push              Export & backup local AI state to Google Drive
+  pull              Import & restore AI state from Google Drive
+  status | check    Dry-run preview; add push (default) or pull to pick the direction
+  help              Display this help message
+
+Options:
+  -r, --remote <target>   rclone remote path (default: gdrive:AI_Sync or $AI_SYNC_REMOTE)
+  -D, --delete            Mirror mode: also delete files missing on the source side.
+                          Deleted and overwritten files are moved to a trash folder
+                          ($REMOTE/.trash/<stamp> on push, ~/.ai-sync-trash/<stamp> on pull).
+  -n, --dry-run           Perform trial run with no real changes
+  -v, --verbose           Show detailed output from rclone
+  -h, --help              Show this help message
+
+Without --delete every step is additive: files are added or overwritten, never removed.
+
+Components Synchronized:
+  1. Shared Brain & Rules   (~/.gemini/GEMINI.md, ~/.gemini/config/{AGENTS.md,config.json,mcp_config.json})
+  2. Skills & Plugins       (~/.agents, ~/.gemini/config/{skills,plugins}, ~/.gemini/skills, ~/.claude/skills,
+                             ~/.claude/plugins/{installed_plugins,known_marketplaces}.json)
+  3. Vector Database        (~/.gemini/semantic_docs_db - LanceDB semantic search)
+  4. Knowledge Items        (~/.gemini/antigravity-ide/knowledge, ~/.gemini/antigravity/knowledge)
+  5. Claude Code Memory     (~/.claude/settings.json, ~/.claude/projects/**/memory/**)
+  6. Gemini Console (agy)   (~/.gemini/antigravity/{antigravity_state.pbtxt,annotations,prompting}, ~/.antigravity/argv.json)
+  7. Brain Artifacts        (Curated *.md and *.metadata.json from ~/.gemini/antigravity-ide/brain/ and agy/brain/)
+
+Security & Safety:
+  - ~/.claude.json is NEVER touched.
+  - Auth tokens & credentials (.credentials.json, google_accounts.json) are NEVER uploaded.
+  - Config files are scanned for token-like values before push; a hit aborts the push
+    (set AI_SYNC_ALLOW_SECRETS=1 to override).
+  - Symlinks are preserved (stored as .rclonelink files on the remote).
+  - Video recordings (*.webp), screenshots (*.png, *.jpg), raw session traces and scratchpads are skipped.
+
+USAGE
+}
+
+# Parse options
+while [ $# -gt 0 ]; do
+    case "$1" in
+        push|pull|help)
+            ACTION="$1"
+            shift
+            ;;
+        status|check)
+            STATUS_MODE="1"
+            DRY_RUN="--dry-run"
+            shift
+            ;;
+        -r|--remote)
+            REMOTE="${2:-}"
+            [ -n "$REMOTE" ] || { log_err "Option --remote requires an argument."; exit 1; }
+            shift 2
+            ;;
+        -D|--delete)
+            DELETE="1"
+            shift
+            ;;
+        -n|--dry-run)
+            DRY_RUN="--dry-run"
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE="-v"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            log_err "Unknown argument: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [ -n "$STATUS_MODE" ] && [ -z "$ACTION" ]; then
+    ACTION="push"
+fi
+
+if [ -z "$ACTION" ] || [ "$ACTION" = "help" ]; then
+    usage
+    [ "$ACTION" = "help" ] && exit 0
+    exit 1
+fi
+
+# Preflight checks
+command -v rclone >/dev/null 2>&1 || {
+    log_err "rclone is not installed. Install it with: curl https://rclone.org/install.sh | sudo bash"
+    log_err "(the distribution package 'sudo apt install rclone' works too, but is usually years old)"
+    exit 1
+}
+
+if [[ "$REMOTE" == *:* ]]; then
+    remote_prefix="${REMOTE%%:*}"
+    if ! rclone listremotes | grep -qx "${remote_prefix}:"; then
+        log_warn "Remote '$remote_prefix:' is not configured in rclone."
+        log_warn "Run 'rclone config' to create a Google Drive remote (name it '${remote_prefix}')."
+        log_warn "Available remotes:"
+        rclone listremotes | sed 's/^/    /' || true
+        exit 1
+    fi
+fi
+
+# Sync helpers
+#
+# All rclone calls pass --links so symlinked skills survive the round trip
+# instead of being silently skipped (rclone's default, with exit code 0).
+run_rclone() {
+    local verb="$1"; shift
+    local cmd=(rclone "$verb" --links)
+    [ -n "$DRY_RUN" ] && cmd+=("$DRY_RUN")
+    [ -n "$VERBOSE" ] && cmd+=("$VERBOSE")
+    cmd+=("$@")
+    "${cmd[@]}"
+}
+
+# Always additive: used for single files and for filtered subsets, where a
+# mirror would wipe everything the filter leaves out on the destination.
+run_rclone_copy() {
+    run_rclone copy "$@"
+}
+
+# Mirror a directory. Additive copy unless --delete; then a real sync whose
+# deletions and overwrites land in trash_dir instead of vanishing.
+run_rclone_mirror() {
+    local src="$1" dst="$2" trash_dir="$3"; shift 3
+    if [ -n "$DELETE" ]; then
+        run_rclone sync --backup-dir "$trash_dir" "$src" "$dst" "$@"
+    else
+        run_rclone copy "$src" "$dst" "$@"
+    fi
+}
+
+# Missing local components are skipped with a note; a failing rclone still
+# aborts the run through set -e, which is why these are not `A && B || C`.
+push_file() {
+    if [ -f "$1" ]; then run_rclone_copy "$1" "$REMOTE/$2"
+    else log_skip "not present locally: $1"; fi
+}
+push_copy() {
+    local src="$1" rel="$2"; shift 2
+    if [ -d "$src" ]; then run_rclone_copy "$src" "$REMOTE/$rel" "$@"
+    else log_skip "not present locally: $src"; fi
+}
+push_mirror() {
+    local src="$1" rel="$2"
+    if [ -d "$src" ]; then run_rclone_mirror "$src" "$REMOTE/$rel" "$REMOTE/.trash/$TRASH_STAMP/$rel"
+    else log_skip "not present locally: $src"; fi
+}
+
+# One listing of the remote replaces a dozen per-path probes, and lets a
+# missing component be skipped explicitly while real errors still propagate.
+REMOTE_INDEX=""
+load_remote_index() {
+    if ! REMOTE_INDEX="$(rclone lsf -R --max-depth 2 "$REMOTE" 2>&1)"; then
+        log_err "Cannot list $REMOTE (nothing pushed yet, or rclone/auth problem):"
+        printf '%s\n' "$REMOTE_INDEX" | sed 's/^/    /' >&2
+        exit 1
+    fi
+}
+remote_has() { printf '%s\n' "$REMOTE_INDEX" | grep -qx -e "$1" -e "$1/"; }
+
+pull_file() {
+    if remote_has "$1"; then run_rclone_copy "$REMOTE/$1" "$2"
+    else log_skip "not on remote: $1"; fi
+}
+pull_copy() {
+    local rel="$1" dst="$2"; shift 2
+    if remote_has "$rel"; then run_rclone_copy "$REMOTE/$rel" "$dst" "$@"
+    else log_skip "not on remote: $rel"; fi
+}
+pull_mirror() {
+    if remote_has "$1"; then run_rclone_mirror "$REMOTE/$1" "$2" "$LOCAL_TRASH/$TRASH_STAMP/$1"
+    else log_skip "not on remote: $1"; fi
+}
+
+# The usage text promises that credentials never leave the machine. The files
+# below are where MCP servers and Claude Code keep API keys when they have any,
+# so the promise has to be checked against their content, not assumed.
+SECRET_PATTERN='(api[_-]?key|token|secret|password|bearer)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}|sk-ant-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|ya29\.[0-9A-Za-z_-]{20,}|xox[abpr]-[0-9A-Za-z-]{10,}'
+scan_for_secrets() {
+    local hits=0 f
+    for f in "$@"; do
+        [ -f "$f" ] || continue
+        if grep -qEi "$SECRET_PATTERN" "$f"; then
+            hits=1
+            log_err "Token-like value in $f:"
+            grep -nEio "$SECRET_PATTERN" "$f" | sed -E 's/^([0-9]+):(api[_-]?key|token|secret|password|bearer)?.*$/      line \1: \2<redacted>/I' >&2
+        fi
+    done
+    if [ "$hits" -ne 0 ]; then
+        if [ -n "${AI_SYNC_ALLOW_SECRETS:-}" ]; then
+            log_warn "AI_SYNC_ALLOW_SECRETS is set - uploading anyway."
+        else
+            log_err "Refusing to push. Remove the value or set AI_SYNC_ALLOW_SECRETS=1 to override."
+            exit 1
+        fi
+    fi
+}
+
+BRAIN_FILTERS=(
+    --filter "- .system_generated/**"
+    --filter "- browser/**"
+    --filter "- scratch/**"
+    --filter "- *.webp"
+    --filter "- *.png"
+    --filter "- *.jpg"
+    --filter "+ *.md"
+    --filter "+ *.metadata.json"
+    --filter "- *"
+)
+
+do_push() {
+    log_info "Pushing AI brain, skills, memories and configurations to: ${REMOTE}"
+    [ -n "$DRY_RUN" ] && log_warn "DRY-RUN mode enabled - no files will be changed."
+    [ -n "$DELETE" ] && log_warn "MIRROR mode - remote files missing locally go to $REMOTE/.trash/$TRASH_STAMP"
+
+    log_step "Scanning configuration files for credentials..."
+    scan_for_secrets \
+        "$HOME/.gemini/GEMINI.md" \
+        "$HOME/.gemini/config/AGENTS.md" \
+        "$HOME/.gemini/config/config.json" \
+        "$HOME/.gemini/config/mcp_config.json" \
+        "$HOME/.claude/settings.json" \
+        "$HOME/.claude/plugins/installed_plugins.json" \
+        "$HOME/.claude/plugins/known_marketplaces.json" \
+        "$HOME/.gemini/antigravity/antigravity_state.pbtxt" \
+        "$HOME/.antigravity/argv.json"
+
+    # 1. Shared Brain & Global Rules
+    log_step "Shared Brain & Global Rules..."
+    push_file "$HOME/.gemini/GEMINI.md"               shared-brain
+    push_file "$HOME/.gemini/config/AGENTS.md"        shared-brain
+    push_file "$HOME/.gemini/config/config.json"      shared-brain
+    push_file "$HOME/.gemini/config/mcp_config.json"  shared-brain
+
+    # 2. Skills & Customizations
+    log_step "Skills & Customizations..."
+    push_mirror "$HOME/.agents"                skills/agents
+    push_mirror "$HOME/.gemini/config/skills"  skills/gemini-config-skills
+    push_mirror "$HOME/.gemini/config/plugins" skills/gemini-config-plugins
+    push_mirror "$HOME/.gemini/skills"         skills/gemini-skills
+    push_mirror "$HOME/.claude/skills"         skills/claude-skills
+    # Plugin caches and marketplace clones are re-fetched from these two files.
+    push_file "$HOME/.claude/plugins/installed_plugins.json"  claude/plugins
+    push_file "$HOME/.claude/plugins/known_marketplaces.json" claude/plugins
+
+    # 3. Vector Database (Semantic Docs / LanceDB)
+    log_step "Vector Database (Semantic Docs)..."
+    push_mirror "$HOME/.gemini/semantic_docs_db" semantic_docs_db
+
+    # 4. Long-Term Knowledge Items
+    log_step "Long-Term Knowledge Items..."
+    push_mirror "$HOME/.gemini/antigravity-ide/knowledge" knowledge/ide
+    push_mirror "$HOME/.gemini/antigravity/knowledge"     knowledge/agy
+
+    # 5. Claude Code Memory & Settings (Strictly excluding .claude.json, credentials and chat traces)
+    log_step "Claude Code Memories & Settings..."
+    push_file "$HOME/.claude/settings.json" claude
+    # Only memory folders across projects, completely skipping heavy .jsonl chat logs
+    push_copy "$HOME/.claude/projects" claude/projects \
+        --filter "+ **/memory/**" \
+        --filter "- *"
+
+    # 6. Gemini Console (agy) & CLI State
+    log_step "Gemini Console (agy) State..."
+    push_file   "$HOME/.gemini/antigravity/antigravity_state.pbtxt" gemini-console
+    push_mirror "$HOME/.gemini/antigravity/annotations"             gemini-console/annotations
+    push_mirror "$HOME/.gemini/antigravity/prompting"               gemini-console/prompting
+    push_file   "$HOME/.antigravity/argv.json"                      gemini-console
+
+    # 7. Curated Brain Artifacts (Markdown & Metadata only, no video/screenshots/system traces)
+    log_step "Curated Brain Artifacts..."
+    push_copy "$HOME/.gemini/antigravity-ide/brain" brain-artifacts/ide "${BRAIN_FILTERS[@]}"
+    push_copy "$HOME/.gemini/antigravity/brain"     brain-artifacts/agy "${BRAIN_FILTERS[@]}"
+
+    log_success "Push completed to $REMOTE"
+}
+
+do_pull() {
+    log_info "Pulling AI brain, skills, memories and configurations from: ${REMOTE}"
+    [ -n "$DRY_RUN" ] && log_warn "DRY-RUN mode enabled - no files will be changed."
+    [ -n "$DELETE" ] && log_warn "MIRROR mode - local files missing on the remote go to $LOCAL_TRASH/$TRASH_STAMP"
+
+    load_remote_index
+
+    # 1. Shared Brain & Global Rules
+    log_step "Restoring Shared Brain & Global Rules..."
+    mkdir -p "$HOME/.gemini/config"
+    pull_file shared-brain/GEMINI.md        "$HOME/.gemini"
+    pull_file shared-brain/AGENTS.md        "$HOME/.gemini/config"
+    pull_file shared-brain/config.json      "$HOME/.gemini/config"
+    pull_file shared-brain/mcp_config.json  "$HOME/.gemini/config"
+
+    # Claude Code reads the same rules file through this symlink.
+    mkdir -p "$HOME/.claude"
+    if [ -f "$HOME/.gemini/GEMINI.md" ] && [ ! -e "$HOME/.claude/CLAUDE.md" ]; then
+        ln -sfn "$HOME/.gemini/GEMINI.md" "$HOME/.claude/CLAUDE.md"
+    fi
+
+    # 2. Skills & Customizations
+    log_step "Restoring Skills & Customizations..."
+    mkdir -p "$HOME/.agents" "$HOME/.gemini/config/skills" "$HOME/.gemini/config/plugins" \
+             "$HOME/.gemini/skills" "$HOME/.claude/skills" "$HOME/.claude/plugins"
+    pull_mirror skills/agents                "$HOME/.agents"
+    pull_mirror skills/gemini-config-skills  "$HOME/.gemini/config/skills"
+    pull_mirror skills/gemini-config-plugins "$HOME/.gemini/config/plugins"
+    pull_mirror skills/gemini-skills         "$HOME/.gemini/skills"
+    pull_mirror skills/claude-skills         "$HOME/.claude/skills"
+    pull_copy   claude/plugins               "$HOME/.claude/plugins"
+
+    # 3. Vector Database (Semantic Docs / LanceDB)
+    log_step "Restoring Vector Database (Semantic Docs)..."
+    mkdir -p "$HOME/.gemini/semantic_docs_db"
+    pull_mirror semantic_docs_db "$HOME/.gemini/semantic_docs_db"
+
+    # 4. Long-Term Knowledge Items
+    log_step "Restoring Long-Term Knowledge Items..."
+    mkdir -p "$HOME/.gemini/antigravity-ide/knowledge" "$HOME/.gemini/antigravity/knowledge"
+    pull_mirror knowledge/ide "$HOME/.gemini/antigravity-ide/knowledge"
+    pull_mirror knowledge/agy "$HOME/.gemini/antigravity/knowledge"
+
+    # 5. Claude Code Memory & Settings
+    log_step "Restoring Claude Code Memories & Settings..."
+    mkdir -p "$HOME/.claude/projects"
+    pull_file claude/settings.json "$HOME/.claude"
+    pull_copy claude/projects      "$HOME/.claude/projects"
+
+    # 6. Gemini Console (agy) & CLI State
+    log_step "Restoring Gemini Console (agy) State..."
+    mkdir -p "$HOME/.gemini/antigravity/annotations" "$HOME/.gemini/antigravity/prompting" "$HOME/.antigravity"
+    pull_file   gemini-console/antigravity_state.pbtxt "$HOME/.gemini/antigravity"
+    pull_file   gemini-console/argv.json               "$HOME/.antigravity"
+    pull_mirror gemini-console/annotations             "$HOME/.gemini/antigravity/annotations"
+    pull_mirror gemini-console/prompting               "$HOME/.gemini/antigravity/prompting"
+
+    # 7. Curated Brain Artifacts
+    log_step "Restoring Curated Brain Artifacts..."
+    mkdir -p "$HOME/.gemini/antigravity-ide/brain" "$HOME/.gemini/antigravity/brain"
+    pull_copy brain-artifacts/ide "$HOME/.gemini/antigravity-ide/brain"
+    pull_copy brain-artifacts/agy "$HOME/.gemini/antigravity/brain"
+
+    log_success "Pull completed from $REMOTE"
+}
+
+case "$ACTION" in
+    push) do_push ;;
+    pull) do_pull ;;
+    *)    usage; exit 1 ;;
+esac
