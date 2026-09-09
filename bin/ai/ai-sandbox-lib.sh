@@ -8,6 +8,10 @@
 
 AI_SANDBOX_ROOT="${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}"
 AI_SANDBOX_SCHEMA_VERSION=2
+# How many sandboxes may run at once. Each is capped at 6 GB of RAM with no
+# swap (MEMORY_LIMIT in create-ai-sandbox.sh), so this is what a host carries
+# without its own desktop being squeezed out.
+AI_SANDBOX_MAX_RUNNING=3
 
 # Lowercase, replace every non-alphanumeric with '-', collapse runs, trim both
 # ends. Trimming the trailing end matters: 'foo.' would otherwise yield 'foo-',
@@ -152,6 +156,28 @@ HELPERS
 ai_sandbox_container_running() {
     command -v docker >/dev/null 2>&1 || return 1
     [ "$(docker container inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
+}
+
+# False, with the running sandboxes listed on stderr, when starting NAME would
+# put more than AI_SANDBOX_MAX_RUNNING sandboxes on the host. NAME itself never
+# counts, so a restart can always reclaim its own slot; nor does any container
+# without a sandbox directory under AI_SANDBOX_ROOT, because the cap is about
+# sandboxes, not about Docker at large. Every path that runs 'compose up' must
+# call this first, and a restart must call it before 'compose down'.
+ai_sandbox_check_capacity() {
+    local self=$1 n running=()
+    command -v docker >/dev/null 2>&1 || return 0
+    while IFS= read -r n; do
+        [ -n "$n" ] && [ "$n" != "$self" ] && [ -d "$AI_SANDBOX_ROOT/$n" ] || continue
+        running+=("$n")
+    done < <(docker ps --format '{{.Names}}' 2>/dev/null)
+    [ "${#running[@]}" -lt "$AI_SANDBOX_MAX_RUNNING" ] && return 0
+    {
+        echo "Cannot start $self: $AI_SANDBOX_MAX_RUNNING sandboxes are already running, which is the limit."
+        echo "Running: ${running[*]}"
+        echo "Stop one first, with 'ai-sandbox-stop' from its project directory."
+    } >&2
+    return 1
 }
 
 # rsync '--exclude=' arguments for copying the host's <path under $HOME> into

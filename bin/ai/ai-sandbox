@@ -20,6 +20,7 @@ if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
     "$AI_SANDBOX_DIR/start-display.sh" || exit 1
 fi
 if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null)" != "true" ]; then
+    ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
     echo "Starting $AI_SANDBOX_NAME..."
     ai_sandbox_compose up -d || exit 1
 fi

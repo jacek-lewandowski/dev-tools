@@ -34,16 +34,16 @@ readonly NODE_MAJOR='24'
 # runaway build or an Electron leak can take the whole host down with it.
 #   MEMORY_LIMIT      RAM the sandbox may use.
 #   MEMORY_SWAP_LIMIT RAM+swap ceiling. Equal to MEMORY_LIMIT means the
-#                     container gets no swap, so the limit is a real 4 GB rather
-#                     than 4 GB of RAM plus the 2x swap Docker would otherwise
+#                     container gets no swap, so the limit is a real 6 GB rather
+#                     than 6 GB of RAM plus the 2x swap Docker would otherwise
 #                     allow -- which on a host whose swap is already full would
 #                     buy nothing but thrashing.
 #   SHM_SIZE          /dev/shm is a tmpfs inside the container's own cgroup, so
 #                     its pages count against MEMORY_LIMIT. Keeping it well
 #                     under the limit stops one large shm allocation from
 #                     OOM-killing the sandbox by itself.
-#   CPU_LIMIT         Derived: half as many cores as GB of RAM, so a 4g sandbox
-#                     sees two. Applied as a cpuset rather than a CPU quota,
+#   CPU_LIMIT         Derived: half as many cores as GB of RAM, so a 6g sandbox
+#                     sees three. Applied as a cpuset rather than a CPU quota,
 #                     because a quota is invisible to nproc, make -j, cargo,
 #                     Node and every other tool that sizes its parallelism by
 #                     core count: they would see the host's cores and build
@@ -51,14 +51,16 @@ readonly NODE_MAJOR='24'
 #                     container can see, so nproc and the cap agree. The cores
 #                     themselves are chosen to spread sandboxes over the host
 #                     (see "CPU set" below).
+# How many sandboxes may run at once is AI_SANDBOX_MAX_RUNNING in
+# ai-sandbox-lib.sh, sized to these limits.
 # The host's IntelliJ IDEA installation. Mounted read-only when it exists, so
 # the sandbox can run the IDE without being able to modify or update it, and
 # skipped entirely when it does not. Override for a different install path:
 #   IDEA_HOST_DIR=/opt/idea-2025.1 create-ai-sandbox.sh
 readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
 
-readonly MEMORY_LIMIT='4g'
-readonly MEMORY_SWAP_LIMIT='4g'
+readonly MEMORY_LIMIT='6g'
+readonly MEMORY_SWAP_LIMIT='6g'
 readonly SHM_SIZE='1gb'
 
 mem_limit_gb() {
@@ -193,12 +195,14 @@ sdkman/candidates/<candidate>/current and re-run. The candidates are on PATH and
 JAVA_HOME is set in every shell, interactive or not, and 'sdk' works from
 scripts too (/usr/local/bin/sdk stands in for the shell function).
 
-Resources: the container is capped at 4 GB of RAM with no swap, and /dev/shm at
+Resources: the container is capped at 6 GB of RAM with no swap, and /dev/shm at
 1 GB, which counts against that cap. Adjust MEMORY_LIMIT, MEMORY_SWAP_LIMIT and
 SHM_SIZE at the top of this script; the cap applies from the next start. CPUs
 follow the memory: half as many cores as GB of RAM, pinned as a cpuset so that
 'nproc' inside reports the same number. The cores are chosen to spread the
-sandboxes over the host and remembered in the sandbox's .env.
+sandboxes over the host and remembered in the sandbox's .env. At most three
+sandboxes run at once (AI_SANDBOX_MAX_RUNNING in ai-sandbox-lib.sh): starting a
+fourth is refused, with the running ones listed, until one is stopped.
 USAGE
 }
 
@@ -2286,6 +2290,9 @@ if [ "$NO_START" = "yes" ]; then
     log "Configuration written. Start it with: ai-sandbox"
     exit 0
 fi
+
+# Before the image build: a full host should cost a message, not a build.
+ai_sandbox_check_capacity "$CONTAINER_NAME" || exit 1
 
 # The display must exist before the container starts: Docker creates any missing
 # bind-mount source itself, as root, which would then block Xephyr from binding.

@@ -12,8 +12,8 @@ dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
 compose=$(cat "$dir/docker-compose.yml")
 
 # Docker imposes no memory limit unless asked, so these must be present.
-assert_contains "compose caps memory"        "$compose" 'mem_limit: "4g"'
-assert_contains "compose forbids swap"       "$compose" 'memswap_limit: "4g"'
+assert_contains "compose caps memory"        "$compose" 'mem_limit: "6g"'
+assert_contains "compose forbids swap"       "$compose" 'memswap_limit: "6g"'
 # /dev/shm is charged to the container's cgroup: at the old 4gb it could reach
 # the whole limit on its own.
 assert_contains "shm is well under the cap"  "$compose" "shm_size: '1gb'"
@@ -25,11 +25,11 @@ esac
 
 # The agents inside need to know the ceiling exists, or they parallelise into it.
 assert_contains "the shared brain states the cap" "$(cat "$HOME/.gemini/GEMINI.md")" \
-    "capped at 4g of RAM with no swap"
+    "capped at 6g of RAM with no swap"
 
 # --- CPUs: half the GB of RAM, as a cpuset so nproc inside agrees ------------
 host_cpus=$(nproc)
-want=2; [ "$want" -le "$host_cpus" ] || want=$host_cpus
+want=3; [ "$want" -le "$host_cpus" ] || want=$host_cpus
 expect_first=$(seq -s, 0 $((want - 1)))
 assert_contains "compose pins a cpuset"            "$compose" "cpuset: \"$expect_first\""
 assert_contains "the set is remembered in .env"    "$(cat "$dir/.env")" "SANDBOX_CPUSET=$expect_first"
@@ -40,9 +40,9 @@ assert_contains "doctor reports cpus" "$(cat "$AI_SANDBOX_ROOT/image/build/sandb
 proj2="$tmp/work/q"; mkdir -p "$proj2"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" >"$tmp/out.q" 2>&1 || true
 dir2="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj2")-agent"
-if [ "$host_cpus" -ge 4 ]; then
+if [ "$host_cpus" -ge 6 ]; then
     assert_contains "a second sandbox gets the next idle cores" \
-        "$(cat "$dir2/docker-compose.yml")" 'cpuset: "2,3"'
+        "$(cat "$dir2/docker-compose.yml")" 'cpuset: "3,4,5"'
 fi
 # Re-running keeps the allocation; a stale or malformed one is replaced.
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out.re" 2>&1 || true
