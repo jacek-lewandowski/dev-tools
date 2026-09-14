@@ -177,6 +177,10 @@ run_rclone_mirror() {
     fi
 }
 
+# True once 'ai-knowledge init' has run on this host: the global rules then live
+# in a git repository and ~/.gemini/GEMINI.md is a symlink to their render.
+knowledge_owns_brain() { [ -f "${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}/knowledge/config" ]; }
+
 # Missing local components are skipped with a note; a failing rclone still
 # aborts the run through set -e, which is why these are not `A && B || C`.
 push_file() {
@@ -275,7 +279,13 @@ do_push() {
 
     # 1. Shared Brain & Global Rules
     log_step "Shared Brain & Global Rules..."
-    push_file "$HOME/.gemini/GEMINI.md"               shared-brain
+    # Once ai-knowledge owns the global rules, GEMINI.md is a rendered symlink
+    # and git is its transport; syncing it here would clobber the render.
+    if knowledge_owns_brain; then
+        log_skip "GEMINI.md is owned by the knowledge repository (ai-knowledge); not synced"
+    else
+        push_file "$HOME/.gemini/GEMINI.md"           shared-brain
+    fi
     push_file "$HOME/.gemini/config/AGENTS.md"        shared-brain
     push_file "$HOME/.gemini/config/config.json"      shared-brain
     push_file "$HOME/.gemini/config/mcp_config.json"  shared-brain
@@ -333,7 +343,11 @@ do_pull() {
     # 1. Shared Brain & Global Rules
     log_step "Restoring Shared Brain & Global Rules..."
     mkdir -p "$HOME/.gemini/config"
-    pull_file shared-brain/GEMINI.md        "$HOME/.gemini"
+    if knowledge_owns_brain; then
+        log_skip "GEMINI.md is owned by the knowledge repository (ai-knowledge); not synced"
+    else
+        pull_file shared-brain/GEMINI.md    "$HOME/.gemini"
+    fi
     pull_file shared-brain/AGENTS.md        "$HOME/.gemini/config"
     pull_file shared-brain/config.json      "$HOME/.gemini/config"
     pull_file shared-brain/mcp_config.json  "$HOME/.gemini/config"
