@@ -13,6 +13,13 @@ AI_SANDBOX_SCHEMA_VERSION=2
 # without its own desktop being squeezed out.
 AI_SANDBOX_MAX_RUNNING=3
 
+# The shared knowledge repository (see ai-knowledge). Configured when the config
+# file exists; every knowledge feature is inert otherwise.
+AI_KNOWLEDGE_ROOT="$AI_SANDBOX_ROOT/knowledge"
+AI_KNOWLEDGE_CONFIG="$AI_KNOWLEDGE_ROOT/config"
+AI_KNOWLEDGE_RENDER="$AI_SANDBOX_ROOT/shared/knowledge"
+ai_knowledge_configured() { [ -f "$AI_KNOWLEDGE_CONFIG" ]; }
+
 # Lowercase, replace every non-alphanumeric with '-', collapse runs, trim both
 # ends. Trimming the trailing end matters: 'foo.' would otherwise yield 'foo-',
 # and 'foo-' + '-' + hash is a double dash, which Docker rejects in a
@@ -147,6 +154,7 @@ ai-sandbox-rm
 ai-sandbox-migrate
 ai-sandbox-account
 ai-sandbox-gc
+ai-knowledge
 ai-sandbox-extensions
 HELPERS
 }
