@@ -62,11 +62,23 @@ It commits, pushes `main`, and renders (see step 4 of "How it works"). From now 
 `--integrator` names the project whose sandbox is the integrator. Its clone sits on
 `main` instead of a proposals branch.
 
-### 4. Start or recreate the sandboxes
+### 4. Recreate every existing sandbox
 
-Start each sandbox (`ai-sandbox`, `ai-sandbox-restart`) or re-run
-`create-ai-sandbox.sh`. The sandbox's clone is created on the first sync. Nothing
-else is required per project.
+Re-run `create-ai-sandbox.sh <project>` for each sandbox that existed before the
+init. The knowledge mounts live in the sandbox's compose file, and only
+`create-ai-sandbox.sh` rewrites that file. A plain `ai-sandbox` or
+`ai-sandbox-restart` runs the sync and creates the clone on the host, but the
+container keeps its old mounts: no `~/knowledge`, and the live `GEMINI.md` mount
+now points through the host symlink at the render, read-write. Inside such a
+sandbox the `propose-rule` skill reports the repository as not configured.
+
+Check from the host with `ai-knowledge status <project>` and
+
+```bash
+grep -c knowledge ~/.ai-sandbox/<project-id>-agent/docker-compose.yml
+```
+
+which is 0 until the sandbox has been recreated.
 
 ### 5. Second computer
 
