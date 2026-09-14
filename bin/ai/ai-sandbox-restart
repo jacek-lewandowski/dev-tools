@@ -5,6 +5,11 @@ ai_sandbox_require_ctx || exit 1
 # Before 'down': a refused restart must leave the sandbox running, not stopped.
 ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
 ai_sandbox_compose down
+# Knowledge sync before the container comes up, so the rules it reads are the
+# current main and its proposals reach the remote. Never blocks the start.
+if ai_knowledge_configured; then
+    "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-knowledge" sync "$AI_SANDBOX_PROJECT" || true
+fi
 if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
     "$AI_SANDBOX_DIR/start-display.sh" || exit 1
 fi

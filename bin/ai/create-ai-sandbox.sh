@@ -158,6 +158,10 @@ Commands on the host (installed into ~/.ai-sandbox/bin, put on your PATH):
   ai-sandbox-migrate    bring ~/.ai-sandbox up to the current layout; runs
                         automatically before every start
   ai-sandbox-rm         remove this project's sandbox and its credentials
+  ai-knowledge          init <url> [--integrator DIR] | sync | render | status |
+                        proposals -- the shared knowledge repository (global
+                        rules, roles, own skills), read-only in every sandbox,
+                        proposed to through the sandbox's clone at ~/knowledge
 
 Commands inside the sandbox:
   sandbox-doctor        report what is and is not working
@@ -826,6 +830,16 @@ if [ -f "$LEGACY_BRAIN" ] && [ ! -L "$LEGACY_BRAIN" ]; then
     log "Retired legacy brain file -> ${LEGACY_BRAIN##*/}.superseded (Antigravity never read it)"
 fi
 
+# Shared knowledge repository: when configured, the rendered main branch is what
+# the tools read, and the sandbox gets its own clone. All network git runs here,
+# on the host, and never blocks the start.
+KNOWLEDGE="no"
+if ai_knowledge_configured; then
+    step "Shared knowledge repository"
+    "$SCRIPT_DIR/ai-knowledge" sync "$PROJECT_ABS_DIR" || warn "knowledge sync reported a problem; see above"
+    KNOWLEDGE="yes"
+fi
+
 # Build the tooling notes from the feature set that is actually enabled, so the
 # agents are never told about tools that were not installed.
 HOST_SDKMAN="$HOME/.sdkman"      # the SDKMAN section below keys off the same path
@@ -879,6 +893,17 @@ case "$DISPLAY_MODE" in
     none)    DISPLAY_NOTE="There is no display. Do not try to start GUI applications." ;;
 esac
 
+KNOWLEDGE_NOTE=""
+if [ "$KNOWLEDGE" = "yes" ]; then
+KNOWLEDGE_NOTE="
+Shared knowledge: the global rules and roles you read are rendered read-only from
+a private git repository. Your own clone of it is at ~/knowledge, on the branch
+\`proposals/<project-id>\` (the integrator sandbox is on main). To propose a generic
+rule, use the \`propose-rule\` skill: commit only under proposals/<project-id>/ and
+never push; the host syncs the clone on every sandbox start.
+"
+fi
+
 SANDBOX_BLOCK="${MARKER_BEGIN}
 ## AI sandbox environment (dev-tools/bin/ai/create-ai-sandbox.sh)
 
@@ -907,10 +932,17 @@ Environment notes:
   rest of the host filesystem is not mounted.
 - Only explicitly passed-through serial ports are visible under /dev. No other
   host USB device is reachable: /dev/bus/usb is not mounted.
-
+${KNOWLEDGE_NOTE}
 Double-check what you are doing, and whether it addresses the request, before acting.
 ${MARKER_END}"
 
+if [ "$KNOWLEDGE" = "yes" ]; then
+    # The rules file is rendered from the knowledge repository. The block lives
+    # beside the checkout and the render appends it; it never enters the repository.
+    printf '%s\n' "$SANDBOX_BLOCK" > "$AI_KNOWLEDGE_ROOT/sandbox-environment.md"
+    "$SCRIPT_DIR/ai-knowledge" render >/dev/null || warn "knowledge render failed; see above"
+    log "Updated the ai-sandbox block in $AI_KNOWLEDGE_ROOT/sandbox-environment.md (rendered into GLOBAL.md)"
+else
 SANDBOX_BLOCK="$SANDBOX_BLOCK" python3 - "$SHARED_BRAIN" "$MARKER_BEGIN" "$MARKER_END" <<'PYEOF'
 import os, re, sys
 path, begin, end = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -923,6 +955,7 @@ with open(path, "w", encoding="utf-8") as f:
     f.write((content + "\n\n" if content else "") + block + "\n")
 PYEOF
 log "Updated the ai-sandbox block in ~/.gemini/GEMINI.md"
+fi
 
 # The previous version generated a .agentrules file in every project. Neither
 # Claude Code nor Antigravity reads that filename, and it claimed the agent was
@@ -1319,6 +1352,7 @@ if [ -n "${DISPLAY:-}" ]; then
         status "X server" "NOT reachable -- $(printf '%s' "$_err" | head -1)"
     fi
 fi
+status "knowledge"   "$( [ -f "$HOME/knowledge/.sync-status" ] && cat "$HOME/knowledge/.sync-status" || echo "not configured (host: ai-knowledge init <url>)" )"
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
 if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
     _idea=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('name',''),d.get('version',''))" \
@@ -1930,10 +1964,33 @@ cat <<COMPOSE_VOLS
       # time, and a shared copy would let one sandbox feed code to another.
       - "${SANDBOX_DIR}/cache:${CONTAINER_HOME}/.cache"
       - "${SANDBOX_DIR}/npm:${CONTAINER_HOME}/.npm"
+COMPOSE_VOLS
+
+if [ "$KNOWLEDGE" = "yes" ]; then
+cat <<COMPOSE_KNOWLEDGE
+      # Shared knowledge: the rendered main branch of the knowledge repository,
+      # read-only, at every path the tools read global rules and roles from.
+      - "${SHARED_DIR}/knowledge/GLOBAL.md:${CONTAINER_HOME}/.gemini/GEMINI.md:ro"
+      - "${SHARED_DIR}/knowledge/GLOBAL.md:${CONTAINER_HOME}/.claude/CLAUDE.md:ro"
+      - "${SHARED_DIR}/knowledge/GLOBAL.md:${CONTAINER_HOME}/.codex/AGENTS.md:ro"
+      - "${SHARED_DIR}/knowledge/claude/agents:${CONTAINER_HOME}/.claude/agents:ro"
+      - "${SHARED_DIR}/knowledge/gemini/agents:${CONTAINER_HOME}/.gemini/agents:ro"
+      - "${SHARED_DIR}/knowledge/codex/agents:${CONTAINER_HOME}/.codex/agents:ro"
+      # This sandbox's own clone of the knowledge repository, read-write, on its
+      # proposals branch (main for the integrator). It holds no credentials, so
+      # it can commit but never fetch or push: the host does that on every start.
+      - "${SANDBOX_DIR}/knowledge:${CONTAINER_HOME}/knowledge"
+COMPOSE_KNOWLEDGE
+else
+cat <<COMPOSE_BRAIN
       # The shared brain: one file, read by Antigravity as GEMINI.md and by
       # Claude Code as CLAUDE.md, live on the host and in every sandbox.
       - "${HOME}/.gemini/GEMINI.md:${CONTAINER_HOME}/.gemini/GEMINI.md"
       - "${HOME}/.gemini/GEMINI.md:${CONTAINER_HOME}/.claude/CLAUDE.md"
+COMPOSE_BRAIN
+fi
+
+cat <<COMPOSE_VOLS
       # Live-shared Antigravity brain and conversations. ~/.gemini/config is
       # deliberately NOT here: it holds mcp_config.json and plugins/, which the
       # host's Antigravity executes, so it is seeded per sandbox instead.
@@ -2339,6 +2396,11 @@ fi
 step "Starting $CONTAINER_NAME"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
 
+if [ "$KNOWLEDGE" = "yes" ]; then
+    BRAIN_SUMMARY="$AI_KNOWLEDGE_RENDER/GLOBAL.md  (rendered from the knowledge repository; ~/knowledge is this sandbox's clone)"
+else
+    BRAIN_SUMMARY="~/.gemini/GEMINI.md  (~/.claude/CLAUDE.md is a symlink to it)"
+fi
 step "Ready"
 cat <<SUMMARY
   Shell:              ai-sandbox           (run 'source ~/.bashrc' first, this once)
@@ -2346,7 +2408,7 @@ cat <<SUMMARY
                       GUI apps included -- 'antigravity2-ide &'. Open as many as
                       you like; each 'ai-sandbox' is a separate shell.
   One-shot command:   ai-sandbox sandbox-doctor
-  Shared brain:       ~/.gemini/GEMINI.md  (~/.claude/CLAUDE.md is a symlink to it)
+  Shared brain:       ${BRAIN_SUMMARY}
   Sandbox files:      $SANDBOX_DIR
   Display mode:       $DISPLAY_MODE
   Rootless Docker:    $WITH_DOCKER
