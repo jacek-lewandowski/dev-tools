@@ -15,5 +15,94 @@ ai_knowledge_configured && r=yes || r=no
 assert_eq "not configured without the config file" "$r" no
 assert_contains "ai-knowledge is an installed helper" "$(ai_sandbox_helpers)" "ai-knowledge"
 
+git config --global user.email t@example.com; git config --global user.name t
+git config --global init.defaultBranch main
+export AI_KNOWLEDGE_GIT_TIMEOUT=20
+knowledge() { bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
+
+remote="$tmp/remote.git"; git init -q --bare "$remote"
+mkdir -p "$HOME/.gemini" "$HOME/.claude"
+printf '# Rules\n\n- be brief\n\n<!-- BEGIN dev-tools:ai-sandbox-environment -->\nsandbox block\n<!-- END dev-tools:ai-sandbox-environment -->\n' > "$HOME/.gemini/GEMINI.md"
+integ="$tmp/work/dev-tools"; mkdir -p "$integ"; git -C "$integ" init -q
+proj="$tmp/work/p"; mkdir -p "$proj"; git -C "$proj" init -q
+
+# --- init seeds an empty remote and wires the host
+knowledge init "file://$remote" --integrator "$integ" >"$tmp/init.out" 2>&1 || cat "$tmp/init.out"
+assert_file "config written" "$AI_KNOWLEDGE_CONFIG"
+assert_contains "remote recorded" "$(cat "$AI_KNOWLEDGE_CONFIG")" "REMOTE=file://$remote"
+assert_contains "integrator recorded" "$(cat "$AI_KNOWLEDGE_CONFIG")" "INTEGRATOR=$integ"
+assert_eq "main seeded on the remote" "$(git -C "$remote" ls-tree --name-only main | LC_ALL=C sort | tr '\n' ' ')" "README.md decisions.md proposals roles rules skills "
+assert_eq "global rules taken from GEMINI.md without the sandbox block" \
+    "$(git -C "$remote" show main:rules/global.md | tr -d '\n')" '# Rules- be brief'
+assert_link "host GEMINI.md points at the render" "$HOME/.gemini/GEMINI.md" "$AI_KNOWLEDGE_RENDER/GLOBAL.md"
+assert_file "host GEMINI.md backed up" "$(ls "$HOME"/.gemini/GEMINI.md.pre-ai-knowledge.* 2>/dev/null | head -1)"
+assert_contains "GLOBAL.md rendered" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "- be brief"
+assert_file "claude role rendered" "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md"
+assert_file "gemini role rendered" "$AI_KNOWLEDGE_RENDER/gemini/agents/planner.md"
+assert_contains "antigravity role rendered with model_decision" \
+    "$(cat "$AI_KNOWLEDGE_RENDER/antigravity/rules/planner.md")" "trigger: model_decision"
+assert_contains "codex role rendered as toml" "$(cat "$AI_KNOWLEDGE_RENDER/codex/agents/planner.toml")" 'developer_instructions = '
+assert_link "host claude agent symlink" "$HOME/.claude/agents/planner.md" "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md"
+assert_file "own skill copied into ~/.agents" "$HOME/.agents/skills/propose-rule/SKILL.md"
+assert_file "own skill copied into the shared store" "$AI_SANDBOX_ROOT/shared/agent-skills/skills/propose-rule/SKILL.md"
+assert_link "host claude skill symlink" "$HOME/.claude/skills/propose-rule" "../../.agents/skills/propose-rule"
+
+# --- sync creates a project sandbox clone on its proposals branch
+pid=$(ai_sandbox_project_id "$proj"); pdir=$(ai_sandbox_dir_for "$proj"); mkdir -p "$pdir"
+knowledge sync "$proj" >"$tmp/sync1.out" 2>&1 || cat "$tmp/sync1.out"
+clone="$pdir/knowledge"
+assert_eq "clone on its proposals branch" "$(git -C "$clone" branch --show-current)" "proposals/$pid"
+assert_eq "proposals branch pushed" "$(git -C "$remote" rev-parse "proposals/$pid")" "$(git -C "$clone" rev-parse HEAD)"
+assert_contains "status ok" "$(cat "$clone/.sync-status")" "ok"
+assert_file "mount target CLAUDE.md pre-created" "$pdir/.claude/CLAUDE.md"
+assert_file "mount target AGENTS.md pre-created" "$pdir/.codex/AGENTS.md"
+assert_file "mount target agents dir pre-created" "$pdir/.gemini/agents"
+assert_link "sandbox claude skill symlink" "$pdir/.claude/skills/propose-rule" "../../.agents/skills/propose-rule"
+assert_link "sandbox codex skill symlink" "$pdir/.codex/skills/propose-rule" "../../.agents/skills/propose-rule"
+
+# --- an in-scope proposal is pushed; out of scope is refused; dirty is skipped
+mkdir -p "$clone/proposals/$pid"; echo 'scope: global' > "$clone/proposals/$pid/2026-09-14-test.md"
+git -C "$clone" add -A; git -C "$clone" commit -qm "proposal: test"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "proposal pushed" "$(git -C "$remote" ls-tree -r --name-only "proposals/$pid" -- "proposals/$pid/")" "proposals/$pid/2026-09-14-test.md"
+echo hacked >> "$clone/rules/global.md"; git -C "$clone" commit -qam "escape"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_contains "out-of-scope change refused" "$(cat "$clone/.sync-status")" "refused"
+assert_eq "remote branch untouched by the refused push" \
+    "$(git -C "$remote" show "proposals/$pid:rules/global.md" | grep -c hacked)" 0
+git -C "$clone" reset -q --hard HEAD~1
+echo wip > "$clone/proposals/$pid/wip.md"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_contains "dirty tree skipped" "$(cat "$clone/.sync-status")" "skipped"
+rm "$clone/proposals/$pid/wip.md"
+
+# --- the integrator sees the branch, edits main, closes the proposal
+idir=$(ai_sandbox_dir_for "$integ"); mkdir -p "$idir"
+knowledge sync "$integ" >/dev/null 2>&1
+iclone="$idir/knowledge"
+assert_eq "integrator clone on main" "$(git -C "$iclone" branch --show-current)" main
+assert_contains "integrator has the proposals branch locally" "$(git -C "$iclone" branch --list 'proposals/*')" "proposals/$pid"
+assert_eq "proposals listing" "$(knowledge proposals --repo "$iclone")" "proposals/$pid proposals/$pid/2026-09-14-test.md"
+echo '- be kind' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: kindness"
+git -C "$iclone" checkout -q "proposals/$pid"; git -C "$iclone" rm -q "proposals/$pid/2026-09-14-test.md"
+git -C "$iclone" commit -qm "proposal: test integrated"; git -C "$iclone" checkout -q main
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "main pushed" "$(git -C "$remote" rev-parse main)" "$(git -C "$iclone" rev-parse main)"
+assert_eq "proposal branch pushed" "$(git -C "$remote" rev-parse "proposals/$pid")" "$(git -C "$iclone" rev-parse "proposals/$pid")"
+assert_contains "render follows main" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "- be kind"
+
+# --- the project sandbox picks up both on its next sync
+knowledge sync "$proj" >/dev/null 2>&1
+assert_no_file "closed proposal removed locally" "$clone/proposals/$pid/2026-09-14-test.md"
+assert_contains "main merged into the branch" "$(cat "$clone/rules/global.md")" "- be kind"
+assert_contains "status ok after round trip" "$(cat "$clone/.sync-status")" "ok"
+
+# --- offline is a status, not a failure
+mv "$remote" "$remote.away"
+knowledge sync "$proj" >/dev/null 2>&1; rc=$?
+assert_eq "offline sync exits 0" "$rc" 0
+assert_contains "offline status" "$(cat "$clone/.sync-status")" "offline"
+mv "$remote.away" "$remote"
+
 rm -rf "$tmp"
 finish
