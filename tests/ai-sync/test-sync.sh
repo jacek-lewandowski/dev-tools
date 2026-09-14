@@ -79,5 +79,19 @@ assert_contains "the location is reported" "$(cat "$tmp/out")" "mcp_config.json"
 rc=$(AI_SYNC_ALLOW_SECRETS=1 run push)
 assert_eq "the override lets the push through" "$rc" 0
 
+# --- once the knowledge repository owns GEMINI.md, ai-sync leaves it alone
+echo '{}' > "$HOME/.gemini/config/mcp_config.json"   # back to a secret-free home
+export RCLONE_STUB_INDEX="$tmp/index"
+mkdir -p "$HOME/.ai-sandbox/knowledge"; echo 'REMOTE=x' > "$HOME/.ai-sandbox/knowledge/config"
+rc=$(run push)
+assert_eq "push still succeeds with knowledge configured" "$rc" 0
+assert_eq "GEMINI.md not pushed when git owns it" "$(transfers | grep -c GEMINI.md)" 0
+assert_contains "the skip is announced" "$(cat "$tmp/out")" "knowledge repository"
+printf 'shared-brain/\nshared-brain/GEMINI.md\n' > "$RCLONE_STUB_INDEX"
+rc=$(run pull)
+assert_eq "pull still succeeds with knowledge configured" "$rc" 0
+assert_eq "GEMINI.md not pulled when git owns it" "$(transfers | grep -c GEMINI.md)" 0
+rm "$HOME/.ai-sandbox/knowledge/config"
+
 rm -rf "$tmp"
 finish
