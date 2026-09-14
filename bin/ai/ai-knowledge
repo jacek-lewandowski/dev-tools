@@ -1,0 +1,499 @@
+#!/usr/bin/env bash
+# ai-knowledge -- the host side of the shared knowledge repository.
+#
+# One private git repository holds the global, project-independent knowledge:
+# rules/global.md, roles/<name>.md, skills/<name>/ and decisions.md. Every
+# sandbox reads a rendered copy of its main branch read-only, and proposes
+# changes through its own clone on a branch proposals/<project-id>. The
+# integrator sandbox's clone is on main and carries every proposals branch.
+#
+# No sandbox has git credentials, so every fetch, merge and push happens here,
+# before a sandbox starts. A sync never fails a start: whatever goes wrong is
+# written to <clone>/.sync-status, which sandbox-doctor shows.
+#
+#   ai-knowledge init <remote-url> [--integrator DIR]  configure; seed an empty remote; render
+#   ai-knowledge sync [PROJECT_DIR]                     main + render, then this project's clone
+#   ai-knowledge render                                 render main into the shared store
+#   ai-knowledge status [PROJECT_DIR]                   config and the last sync status
+#   ai-knowledge proposals [--repo DIR]                 list proposal files across proposals/* branches
+set -euo pipefail
+HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+# set -e ends the script on any unguarded failure; without this it would do so
+# silently and leave a stale .sync-status behind.
+trap 'printf "!! ai-knowledge: unexpected error at line %s\n" "$LINENO" >&2' ERR
+. "$HERE/ai-sandbox-lib.sh"
+
+KNOWLEDGE_MAIN="$AI_KNOWLEDGE_ROOT/main"
+# create-ai-sandbox.sh writes the generated "AI sandbox environment" block here
+# instead of into GEMINI.md; the render appends it to rules/global.md.
+KNOWLEDGE_ENV_BLOCK="$AI_KNOWLEDGE_ROOT/sandbox-environment.md"
+GIT_TIMEOUT="${AI_KNOWLEDGE_GIT_TIMEOUT:-60}"
+ENV_BEGIN='<!-- BEGIN dev-tools:ai-sandbox-environment -->'
+ENV_END='<!-- END dev-tools:ai-sandbox-environment -->'
+
+log()  { printf '  %s\n' "$*"; }
+warn() { printf '!! %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    sed -n '2,/^set -/{/^set -/d;s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
+}
+
+# Network git only: a hung remote must not hold up a sandbox start.
+git_net() { timeout "$GIT_TIMEOUT" git "$@"; }
+
+REMOTE=""; INTEGRATOR=""
+read_config() { sed -n "s/^$1=//p" "$AI_KNOWLEDGE_CONFIG" | head -1; }
+load_config() {
+    ai_knowledge_configured || die "not configured; run: ai-knowledge init <remote-url> [--integrator DIR]"
+    REMOTE=$(read_config REMOTE); INTEGRATOR=$(read_config INTEGRATOR)
+    [ -n "$REMOTE" ] || die "no REMOTE in $AI_KNOWLEDGE_CONFIG"
+}
+
+# The seed lives in the dev-tools checkout, not beside the installed copy of
+# this helper; create-ai-sandbox.sh records that checkout in $AI_SANDBOX_ROOT/config.
+seed_dir() {
+    local dev_tools=""
+    [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
+    if [ -n "$dev_tools" ] && [ -d "$dev_tools/bin/ai/knowledge-seed" ]; then
+        printf '%s\n' "$dev_tools/bin/ai/knowledge-seed"
+    elif [ -d "$HERE/knowledge-seed" ]; then
+        printf '%s\n' "$HERE/knowledge-seed"
+    else
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+cmd_init() {
+    local remote="" integrator="" out
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --integrator)   [ $# -ge 2 ] || die "--integrator needs a directory"
+                            integrator=$(ai_sandbox_project_root "$2") || die "not a directory: $2"; shift 2 ;;
+            --integrator=*) integrator=$(ai_sandbox_project_root "${1#*=}") || die "not a directory: ${1#*=}"; shift ;;
+            -h|--help)      usage; exit 0 ;;
+            -*)             die "unknown option: $1" ;;
+            *)              remote=$1; shift ;;
+        esac
+    done
+    [ -n "$remote" ] || die "usage: ai-knowledge init <remote-url> [--integrator DIR]"
+    command -v git   >/dev/null 2>&1 || die "git is required"
+    command -v rsync >/dev/null 2>&1 || die "rsync is required"
+
+    mkdir -p "$AI_KNOWLEDGE_ROOT" "$AI_SANDBOX_ROOT/shared"
+    printf 'REMOTE=%s\nINTEGRATOR=%s\n' "$remote" "$integrator" > "$AI_KNOWLEDGE_CONFIG"
+    log "config: $AI_KNOWLEDGE_CONFIG"
+    REMOTE=$remote; INTEGRATOR=$integrator
+
+    if [ ! -d "$KNOWLEDGE_MAIN/.git" ]; then
+        rm -rf "$KNOWLEDGE_MAIN"
+        if ! out=$(git_net clone -q "$remote" "$KNOWLEDGE_MAIN" 2>&1); then
+            rm -f "$AI_KNOWLEDGE_CONFIG"
+            die "cannot clone $remote: $out"
+        fi
+        log "cloned $remote -> $KNOWLEDGE_MAIN"
+    fi
+    if ! git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        seed_main
+    fi
+    git -C "$KNOWLEDGE_MAIN" checkout -q main 2>/dev/null \
+        || warn "$remote has no 'main' branch; ai-knowledge follows main only"
+    cmd_render
+    log "done. Sandboxes pick the knowledge up on their next start."
+}
+
+# An empty remote gets the seed directory plus the host's current global rules
+# as rules/global.md, minus the block create-ai-sandbox.sh generates, which the
+# render appends again from its own file.
+seed_main() {
+    local seed src identity=()
+    seed=$(seed_dir) || die "cannot find bin/ai/knowledge-seed (is DEV_TOOLS_DIR recorded in $AI_SANDBOX_ROOT/config?)"
+    log "seeding the empty repository from $seed"
+    rsync -a --exclude=.gitkeep "$seed/" "$KNOWLEDGE_MAIN/"
+    mkdir -p "$KNOWLEDGE_MAIN/rules"
+    src="$HOME/.gemini/GEMINI.md"
+    [ -L "$src" ] && src=$(readlink -f "$src")
+    if [ -s "$src" ]; then
+        SRC="$src" DST="$KNOWLEDGE_MAIN/rules/global.md" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 - <<'PYEOF'
+import os, re
+text = open(os.environ["SRC"], encoding="utf-8").read()
+pattern = re.compile(r"\n*" + re.escape(os.environ["ENV_BEGIN"]) + r".*?" + re.escape(os.environ["ENV_END"]) + r"\n*", re.DOTALL)
+text = pattern.sub("\n", text).strip("\n")
+open(os.environ["DST"], "w", encoding="utf-8").write(text + "\n")
+PYEOF
+        log "rules/global.md taken from ~/.gemini/GEMINI.md"
+    else
+        printf '# Global rules\n\nRules every agent follows in every project. Keep them generic.\n' \
+            > "$KNOWLEDGE_MAIN/rules/global.md"
+    fi
+    git -C "$KNOWLEDGE_MAIN" symbolic-ref HEAD refs/heads/main
+    git -C "$KNOWLEDGE_MAIN" add -A
+    git -C "$KNOWLEDGE_MAIN" config user.email >/dev/null 2>&1 \
+        || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
+    git -C "$KNOWLEDGE_MAIN" "${identity[@]+"${identity[@]}"}" commit -qm "chore: seed the knowledge repository"
+    if git_net -C "$KNOWLEDGE_MAIN" push -q -u origin main 2>/dev/null; then
+        log "pushed main to $REMOTE"
+    else
+        warn "seeded locally but could not push to $REMOTE; run 'ai-knowledge sync' when online"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# main checkout and render
+# ---------------------------------------------------------------------------
+
+# The canonical checkout only ever fast-forwards; nobody edits it by hand.
+sync_main() {
+    [ -d "$KNOWLEDGE_MAIN/.git" ] || { warn "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"; return 1; }
+    if git_net -C "$KNOWLEDGE_MAIN" fetch -q origin 2>/dev/null; then
+        git -C "$KNOWLEDGE_MAIN" merge -q --ff-only origin/main >/dev/null 2>&1 \
+            || warn "$KNOWLEDGE_MAIN is not a fast-forward of origin/main; it is never edited by hand, so repair it with: git -C $KNOWLEDGE_MAIN reset --hard origin/main"
+    else
+        warn "cannot reach $REMOTE; rendering the last fetched main"
+    fi
+}
+
+cmd_render() {
+    [ -d "$KNOWLEDGE_MAIN" ] || die "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"
+    command -v python3 >/dev/null 2>&1 || die "python3 is required"
+    mkdir -p "$AI_SANDBOX_ROOT/shared" "$AI_KNOWLEDGE_RENDER"
+    local tmp
+    tmp=$(mktemp -d "$AI_SANDBOX_ROOT/shared/.knowledge-render.XXXXXX")
+    python3 - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
+import os, re, shutil, sys
+main, out, env_block = sys.argv[1:4]
+
+def read(path):
+    return open(path, encoding="utf-8").read()
+
+def frontmatter(text):
+    m = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.DOTALL)
+    if not m:
+        return {}, text
+    meta = {}
+    for line in m.group(1).splitlines():
+        if ":" in line and not line.startswith((" ", "\t")):
+            key, value = line.split(":", 1)
+            meta[key.strip()] = value.strip()
+    return meta, m.group(2)
+
+def toml_string(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+# Every directory is a bind-mount source: a missing one would be created by
+# Docker, root-owned, so they exist even when empty.
+for d in ("claude/agents", "gemini/agents", "antigravity/rules", "codex/agents", "skills"):
+    os.makedirs(os.path.join(out, d), exist_ok=True)
+
+parts = []
+rules = os.path.join(main, "rules", "global.md")
+if os.path.isfile(rules):
+    parts.append(read(rules).rstrip("\n"))
+if os.path.isfile(env_block):
+    parts.append(read(env_block).rstrip("\n"))
+with open(os.path.join(out, "GLOBAL.md"), "w", encoding="utf-8") as f:
+    f.write("\n\n".join(parts) + "\n")
+
+roles = os.path.join(main, "roles")
+if os.path.isdir(roles):
+    for fn in sorted(os.listdir(roles)):
+        if not fn.endswith(".md") or fn.lower() == "readme.md":
+            continue
+        text = read(os.path.join(roles, fn))
+        if not text.endswith("\n"):
+            text += "\n"
+        meta, body = frontmatter(text)
+        name = meta.get("name") or fn[:-3]
+        description = meta.get("description", "")
+        body = body.strip("\n") + "\n"
+        # Claude Code subagents and Gemini CLI agents read the canonical format as is.
+        for d in ("claude/agents", "gemini/agents"):
+            with open(os.path.join(out, d, name + ".md"), "w", encoding="utf-8") as f:
+                f.write(text)
+        # Antigravity has no agent types; a model-decision rule with the role's
+        # description is the closest thing, for projects that link it in.
+        with open(os.path.join(out, "antigravity/rules", name + ".md"), "w", encoding="utf-8") as f:
+            f.write("---\ntrigger: model_decision\ndescription: %s\n---\n\n%s" % (description, body))
+        # Codex custom agents are TOML; registering them in config.toml is left
+        # to the user until the format is verified against an installed Codex.
+        with open(os.path.join(out, "codex/agents", name + ".toml"), "w", encoding="utf-8") as f:
+            f.write("name = %s\ndescription = %s\ndeveloper_instructions = '''\n%s'''\n"
+                    % (toml_string(name), toml_string(description), body.replace("'''", "'' '")))
+
+skills = os.path.join(main, "skills")
+if os.path.isdir(skills):
+    for fn in sorted(os.listdir(skills)):
+        src = os.path.join(skills, fn)
+        if os.path.isdir(src) and os.path.isfile(os.path.join(src, "SKILL.md")):
+            shutil.copytree(src, os.path.join(out, "skills", fn))
+PYEOF
+    # In place: GLOBAL.md is bind-mounted as a file into running containers, and
+    # a replaced inode would be invisible to them until they restart.
+    rsync -a --delete --inplace "$tmp/" "$AI_KNOWLEDGE_RENDER/"
+    rm -rf "$tmp"
+    wire_host
+    log "rendered $KNOWLEDGE_MAIN -> $AI_KNOWLEDGE_RENDER"
+}
+
+# The host reads the same knowledge as the sandboxes: its GEMINI.md (and through
+# the existing symlink, CLAUDE.md) points at the render, its Claude Code agents
+# are the rendered roles, and own skills sit beside the third-party ones.
+wire_host() {
+    local render="$AI_KNOWLEDGE_RENDER" brain="$HOME/.gemini/GEMINI.md" ts f name
+    mkdir -p "$HOME/.gemini" "$HOME/.claude/agents" "$HOME/.agents/skills"
+    if [ -e "$brain" ] && [ ! -L "$brain" ]; then
+        ts=$(date +%Y%m%d%H%M%S)
+        mv "$brain" "$brain.pre-ai-knowledge.$ts"
+        log "backed up the hand-maintained ~/.gemini/GEMINI.md -> GEMINI.md.pre-ai-knowledge.$ts"
+    fi
+    [ "$(readlink "$brain" 2>/dev/null)" = "$render/GLOBAL.md" ] || ln -sfn "$render/GLOBAL.md" "$brain"
+
+    for f in "$HOME"/.claude/agents/*.md; do
+        [ -L "$f" ] || continue
+        case "$(readlink "$f")" in
+            "$render"/claude/agents/*) [ -e "$f" ] || rm -f "$f" ;;
+        esac
+    done
+    for f in "$render"/claude/agents/*.md; do
+        [ -f "$f" ] || continue
+        ln -sfn "$f" "$HOME/.claude/agents/$(basename "$f")"
+    done
+
+    # The one real copy of an own skill goes where the skills CLI keeps
+    # third-party ones, and into the shared store every sandbox mounts.
+    for f in "$render"/skills/*/; do
+        [ -d "$f" ] || continue
+        name=$(basename "$f")
+        rsync -a --delete "$f" "$HOME/.agents/skills/$name/"
+        mkdir -p "$AI_SANDBOX_ROOT/shared/agent-skills/skills"
+        rsync -a --delete "$f" "$AI_SANDBOX_ROOT/shared/agent-skills/skills/$name/"
+    done
+    link_skills_into "$HOME"
+}
+
+# Relative symlinks from each tool's skills directory into ~/.agents/skills,
+# exactly as the skills CLI lays out third-party skills. BASE is $HOME on the
+# host or a sandbox directory, whose .claude/.codex/.gemini are the container's.
+# A tool whose directory does not exist is left alone, and so is a real
+# directory of the same name: that is a local skill, not ours to replace.
+link_skills_into() {
+    local base=$1 f name d p
+    for f in "$AI_KNOWLEDGE_RENDER"/skills/*/; do
+        [ -d "$f" ] || continue
+        name=$(basename "$f")
+        for d in .claude .codex .gemini; do
+            [ -d "$base/$d" ] || continue
+            p="$base/$d/skills/$name"
+            if [ -d "$p" ] && [ ! -L "$p" ]; then continue; fi
+            mkdir -p "$base/$d/skills"
+            ln -sfn "../../.agents/skills/$name" "$p"
+        done
+    done
+}
+
+# Every knowledge mount target inside the sandbox directory must exist before
+# 'compose up', or Docker creates it root-owned.
+prepare_targets() {
+    local sb=$1 f
+    mkdir -p "$sb/.gemini/agents" "$sb/.claude/agents" "$sb/.codex/agents"
+    for f in .gemini/GEMINI.md .claude/CLAUDE.md .codex/AGENTS.md; do
+        [ -e "$sb/$f" ] || : > "$sb/$f" 2>/dev/null || true
+    done
+}
+
+# ---------------------------------------------------------------------------
+# per-sandbox clone
+# ---------------------------------------------------------------------------
+
+CLONE=""
+MAIN_PUSHED="no"   # set when the integrator sync advanced origin/main
+set_status() {
+    printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$*" > "$CLONE/.sync-status"
+    log "$*"
+}
+
+# <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the
+# caller: every outcome is one line in .sync-status.
+sync_clone() {
+    local sb=$1 id=$2 role=$3 branch="proposals/$2" out note="" current b
+    CLONE="$sb/knowledge"
+
+    if [ ! -d "$CLONE/.git" ]; then
+        rm -rf "$CLONE"
+        if ! out=$(git_net clone -q "$REMOTE" "$CLONE" 2>&1); then
+            warn "cannot clone $REMOTE into $CLONE: $out"
+            return 0
+        fi
+        if [ "$role" = integrator ]; then
+            git -C "$CLONE" checkout -q main
+        elif git -C "$CLONE" show-ref -q --verify "refs/remotes/origin/$branch"; then
+            git -C "$CLONE" checkout -q -B "$branch" "origin/$branch"
+        else
+            git -C "$CLONE" checkout -q -B "$branch" origin/main
+        fi
+        log "cloned $REMOTE -> $CLONE ($(git -C "$CLONE" branch --show-current))"
+    fi
+    grep -qx '.sync-status' "$CLONE/.git/info/exclude" 2>/dev/null \
+        || printf '.sync-status\n' >> "$CLONE/.git/info/exclude"
+
+    if [ -n "$(git -C "$CLONE" status --porcelain)" ]; then
+        set_status "skipped: uncommitted changes in ~/knowledge; commit them and start the sandbox again"
+        return 0
+    fi
+    if ! git_net -C "$CLONE" fetch -q origin 2>/dev/null; then
+        set_status "offline: cannot reach $REMOTE; working from the last fetch"
+        return 0
+    fi
+
+    current=$(git -C "$CLONE" branch --show-current)
+    case $role in
+        proposals)
+            if [ "$current" != "$branch" ]; then
+                set_status "skipped: ~/knowledge is on '$current', expected $branch"
+                return 0
+            fi
+            # The integrator closes proposals by committing on this branch, so its
+            # remote state merges first, then main.
+            if git -C "$CLONE" show-ref -q --verify "refs/remotes/origin/$branch" \
+               && ! git -C "$CLONE" merge -q --no-edit "origin/$branch" >/dev/null 2>&1; then
+                git -C "$CLONE" merge --abort 2>/dev/null || true
+                set_status "conflict: origin/$branch does not merge into ~/knowledge; resolve inside the sandbox"
+                return 0
+            fi
+            if git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main \
+               && ! git -C "$CLONE" merge -q --no-edit origin/main >/dev/null 2>&1; then
+                git -C "$CLONE" merge --abort 2>/dev/null || true
+                set_status "conflict: main does not merge into $branch; resolve inside the sandbox"
+                return 0
+            fi
+            # A proposals branch may differ from main only under its own directory.
+            out=$(git -C "$CLONE" diff --name-only origin/main...HEAD | grep -v "^proposals/$id/" || true)
+            if [ -n "$out" ]; then
+                set_status "refused: $branch changes files outside proposals/$id/ ($(printf '%s' "$out" | tr '\n' ' ')); revert them"
+                return 0
+            fi
+            if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$(git -C "$CLONE" rev-parse -q --verify "origin/$branch" 2>/dev/null || true)" ]; then
+                if ! out=$(git_net -C "$CLONE" push -q origin "HEAD:refs/heads/$branch" 2>&1); then
+                    set_status "push failed: $(printf '%s' "$out" | tail -1)"
+                    return 0
+                fi
+            fi
+            set_status "ok: $branch is in sync with $REMOTE"
+            ;;
+        integrator)
+            if [ "$current" != main ]; then
+                set_status "skipped: ~/knowledge is on '$current', expected main"
+                return 0
+            fi
+            if ! git -C "$CLONE" merge -q --ff-only origin/main >/dev/null 2>&1; then
+                set_status "diverged: main is not a fast-forward of origin/main; merge origin/main inside the sandbox"
+                return 0
+            fi
+            # Local proposals branches follow the remote fast-forward only. One the
+            # integrator committed on while the sandbox also pushed is reported,
+            # never forced either way; git refuses that update on its own.
+            git_net -C "$CLONE" fetch -q origin 'refs/heads/proposals/*:refs/heads/proposals/*' >/dev/null 2>&1 || true
+            while IFS= read -r b; do
+                [ -n "$b" ] || continue
+                git -C "$CLONE" merge-base --is-ancestor "origin/$b" "$b" 2>/dev/null || note="$note $b"
+            done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+            if [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse origin/main)" ]; then
+                if ! out=$(git_net -C "$CLONE" push -q origin main 2>&1); then
+                    set_status "push failed for main: $(printf '%s' "$out" | tail -1)"
+                    return 0
+                fi
+                MAIN_PUSHED="yes"
+            fi
+            # A pattern refspec that matches nothing pushes nothing, without error.
+            if ! git_net -C "$CLONE" push -q origin 'refs/heads/proposals/*:refs/heads/proposals/*' >/dev/null 2>&1; then
+                set_status "ok: main pushed; not pushed because they diverged from the remote (merge origin/<branch> inside the sandbox):$note"
+                return 0
+            fi
+            set_status "ok: main and $(git -C "$CLONE" for-each-ref 'refs/heads/proposals/*' | wc -l | tr -d ' ') proposals branch(es) in sync with $REMOTE"
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+cmd_sync() {
+    if ! ai_knowledge_configured; then
+        log "knowledge repository not configured (ai-knowledge init <remote-url>); nothing to do"
+        return 0
+    fi
+    load_config
+    sync_main || return 0
+    cmd_render
+    [ $# -gt 0 ] || return 0
+
+    local project sb id role=proposals
+    project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
+    sb=$(ai_sandbox_dir_for "$project")
+    id=$(ai_sandbox_project_id "$project")
+    if [ ! -d "$sb" ]; then
+        log "no sandbox directory for $project yet; its clone is created by create-ai-sandbox.sh"
+        return 0
+    fi
+    if [ -n "$INTEGRATOR" ] && [ "$INTEGRATOR" = "$project" ]; then role=integrator; fi
+    prepare_targets "$sb"
+    link_skills_into "$sb"
+    sync_clone "$sb" "$id" "$role"
+    # The integrator just advanced main: render it now rather than on the next start.
+    if [ "$MAIN_PUSHED" = yes ]; then
+        sync_main && cmd_render
+    fi
+}
+
+cmd_status() {
+    if ! ai_knowledge_configured; then echo "not configured"; return 0; fi
+    load_config
+    printf 'remote:      %s\nintegrator:  %s\nmain:        %s\nrender:      %s\n' \
+        "$REMOTE" "${INTEGRATOR:-<none>}" \
+        "$(git -C "$KNOWLEDGE_MAIN" rev-parse --short HEAD 2>/dev/null || echo none)" \
+        "$AI_KNOWLEDGE_RENDER"
+    local project sb
+    project=$(ai_sandbox_project_root "${1:-$PWD}") || return 0
+    sb=$(ai_sandbox_dir_for "$project")
+    printf 'project:     %s\nclone:       %s\nlast sync:   %s\n' \
+        "$project" "$sb/knowledge" "$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)"
+}
+
+# For the integrator: '<branch> <path>' per open proposal file, across every
+# local proposals/* branch. Inside a sandbox the clone is ~/knowledge; on the
+# host it is the canonical main checkout unless --repo says otherwise.
+cmd_proposals() {
+    local repo="" b
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo)   [ $# -ge 2 ] || die "--repo needs a directory"; repo=$2; shift 2 ;;
+            --repo=*) repo=${1#*=}; shift ;;
+            *)        die "unknown argument: $1" ;;
+        esac
+    done
+    if [ -z "$repo" ]; then
+        if [ -d "$HOME/knowledge/.git" ]; then repo="$HOME/knowledge"; else repo="$KNOWLEDGE_MAIN"; fi
+    fi
+    [ -d "$repo/.git" ] || die "no git repository at $repo"
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        git -C "$repo" ls-tree -r --name-only "$b" -- proposals/ \
+            | { grep '\.md$' || true; } | { grep -v '/README\.md$' || true; } | sed "s|^|$b |"
+    done < <(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+}
+
+case "${1:-}" in
+    init)      shift; cmd_init "$@" ;;
+    sync)      shift; cmd_sync "$@" ;;
+    render)    cmd_render ;;
+    status)    shift; cmd_status "$@" ;;
+    proposals) shift; cmd_proposals "$@" ;;
+    -h|--help|help) usage ;;
+    '')        usage >&2; exit 2 ;;
+    *)         die "unknown command: $1 (try: ai-knowledge --help)" ;;
+esac
