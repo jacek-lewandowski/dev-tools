@@ -71,7 +71,11 @@ else is required per project.
 ### 5. Second computer
 
 Repeat steps 1 to 3 with the same remote URL. Proposal branches are keyed by
-project id (slug plus path hash), so two machines never share a branch.
+project id, a slug plus a hash of the absolute project path. Two machines holding
+the project at different paths get different branches. At the same path they share
+one branch, which works because the host merges the remote branch into the clone
+before every push; only two commits to the same proposal file between syncs end in
+a `conflict` status.
 
 ### Commands
 
@@ -118,10 +122,17 @@ under `proposals/<project-id>/`.
 ### 3. Sync on every sandbox start
 
 `create-ai-sandbox.sh`, `ai-sandbox` and `ai-sandbox-restart` run
-`ai-knowledge sync <project>` before `compose up`. Network git runs under a
+`ai-knowledge sync <project>` before `compose up`. Network git runs
+non-interactively (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode=yes`) and under a
 timeout (60 s, `AI_KNOWLEDGE_GIT_TIMEOUT`). No step fails the start. The outcome
 is one line in `<clone>/.sync-status`, shown by `sandbox-doctor` and
 `ai-knowledge status`.
+
+When a fetch or push fails, for example because the ssh key needs a passphrase
+and no agent holds it, the sync carries on with the last fetched refs and ends
+with the commands to run by hand on the host, in order: the fetches, then
+`ai-knowledge sync <project>`, then the pushes. The status line says `offline`
+and whether a push is pending.
 
 1. Fetch the canonical `main` and fast-forward it. Offline: keep the last state.
 2. Render and wire the host (step 4).
@@ -154,12 +165,16 @@ The clone is created from the remote on first use and checked out on
 `main`. Every sync then:
 
 1. Stops with `skipped` if the working tree has uncommitted changes.
-2. Stops with `offline` if the fetch fails.
+2. Fetches. On failure it records the manual fetch command and continues.
 3. Merges `origin/proposals/<project-id>`, then `origin/main`. A conflict aborts
    the merge with `conflict`; it is resolved inside the sandbox.
 4. Checks that the branch differs from `origin/main` only under
    `proposals/<project-id>/`. Anything else is `refused` and not pushed.
-5. Pushes the branch, fast-forward only. Status `ok`.
+5. Pushes the branch, fast-forward only. Status `ok`, or `offline` with the
+   manual push command when the remote is unreachable.
+
+A clone made by hand with `git clone` is picked up by the next sync, which
+creates the proposals branch.
 
 ### 6. Integrator clone
 
@@ -171,7 +186,8 @@ The integrator's clone is on `main` and holds a local branch for every
 2. Fetches every `proposals/*` branch into a local branch of the same name,
    fast-forward only.
 3. Pushes `main` and every local `proposals/*` branch without force. A proposals
-   branch that diverged from the remote is reported and left alone.
+   branch that diverged from the remote is reported and left alone. Offline, the
+   pushes are listed as manual commands instead.
 4. If `main` advanced, re-renders immediately.
 
 ### 7. Container mounts

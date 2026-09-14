@@ -97,12 +97,41 @@ assert_no_file "closed proposal removed locally" "$clone/proposals/$pid/2026-09-
 assert_contains "main merged into the branch" "$(cat "$clone/rules/global.md")" "- be kind"
 assert_contains "status ok after round trip" "$(cat "$clone/.sync-status")" "ok"
 
-# --- offline is a status, not a failure
+# --- offline is a status, not a failure, and the manual commands are printed
 mv "$remote" "$remote.away"
-knowledge sync "$proj" >/dev/null 2>&1; rc=$?
+knowledge sync "$proj" >"$tmp/offline.out" 2>&1; rc=$?
 assert_eq "offline sync exits 0" "$rc" 0
 assert_contains "offline status" "$(cat "$clone/.sync-status")" "offline"
+assert_contains "manual fetch of main printed" "$(cat "$tmp/offline.out")" "git -C $AI_KNOWLEDGE_ROOT/main fetch origin"
+assert_contains "manual fetch of the clone printed" "$(cat "$tmp/offline.out")" "git -C $clone fetch origin"
+assert_contains "manual sync printed" "$(cat "$tmp/offline.out")" "ai-knowledge sync $proj"
+assert_eq "no push printed when nothing is pending" "$(grep -c 'git -C .* push ' "$tmp/offline.out")" 0
+mkdir -p "$clone/proposals/$pid"; echo 'scope: global' > "$clone/proposals/$pid/2026-09-14-offline.md"
+git -C "$clone" add -A; git -C "$clone" commit -qm "proposal: offline"
+knowledge sync "$proj" >"$tmp/offline2.out" 2>&1
+assert_contains "pending push printed when offline" "$(cat "$tmp/offline2.out")" \
+    "git -C $clone push origin HEAD:refs/heads/proposals/$pid"
+assert_contains "offline status names the pending push" "$(cat "$clone/.sync-status")" "push"
+# the integrator gets its own list
+knowledge sync "$integ" >"$tmp/offline3.out" 2>&1
+assert_contains "integrator manual fetch printed" "$(cat "$tmp/offline3.out")" "git -C $iclone fetch origin"
 mv "$remote.away" "$remote"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "pending proposal pushed once online" \
+    "$(git -C "$remote" ls-tree -r --name-only "proposals/$pid" -- "proposals/$pid/" | grep -c offline)" 1
+assert_contains "status ok again once online" "$(cat "$clone/.sync-status")" "ok"
+
+# --- a manually cloned repository is put on its branch by the next sync
+manual="$tmp/work/m"; mkdir -p "$manual"; git -C "$manual" init -q
+mid=$(ai_sandbox_project_id "$manual"); mdir=$(ai_sandbox_dir_for "$manual"); mkdir -p "$mdir"
+mv "$remote" "$remote.away"
+knowledge sync "$manual" >"$tmp/manual.out" 2>&1
+assert_contains "manual clone printed" "$(cat "$tmp/manual.out")" "git clone file://$remote $mdir/knowledge"
+mv "$remote.away" "$remote"
+git clone -q "file://$remote" "$mdir/knowledge"
+knowledge sync "$manual" >/dev/null 2>&1
+assert_eq "manual clone moved onto its proposals branch" "$(git -C "$mdir/knowledge" branch --show-current)" "proposals/$mid"
+assert_contains "manual clone status ok" "$(cat "$mdir/knowledge/.sync-status")" "ok"
 
 # --- create-ai-sandbox.sh mounts the render read-only and the clone read-write
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/create.out" 2>&1 || cat "$tmp/create.out"

@@ -39,8 +39,41 @@ usage() {
     sed -n '2,/^set -/{/^set -/d;s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
 }
 
-# Network git only: a hung remote must not hold up a sandbox start.
-git_net() { timeout "$GIT_TIMEOUT" git "$@"; }
+# Network git only: a hung remote must not hold up a sandbox start. Nothing
+# here can answer a prompt, so git and ssh are told not to ask: an ssh key with
+# a passphrase and no agent then fails at once instead of hanging until the
+# timeout, and the failure is reported with the command to run by hand.
+git_net() {
+    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
+        timeout "$GIT_TIMEOUT" git "$@"
+}
+
+# Every network failure is remembered with its manual equivalent; print_hints
+# shows them once, at the end, in the order they have to run.
+NET_REASON=""; HINT_FETCH=(); HINT_PUSH=()
+net_failed() {   # <exit code> <captured output>
+    local rc=$1 out=$2 line
+    if [ "$rc" -eq 124 ]; then
+        NET_REASON="timed out after ${GIT_TIMEOUT}s"
+    else
+        # git's access errors end with generic advice; the fatal:/ssh line says why.
+        line=$(printf '%s' "$out" | grep -m1 -E 'fatal:|ssh:|Permission denied|Host key|Could not|Connection|error:')
+        [ -n "$line" ] || line=$(printf '%s' "$out" | grep -v '^\s*$' | head -1)
+        NET_REASON=${line:-"exit code $rc"}
+    fi
+}
+print_hints() {   # [project dir]
+    [ ${#HINT_FETCH[@]} -gt 0 ] || [ ${#HINT_PUSH[@]} -gt 0 ] || return 0
+    local c
+    warn "network git failed: $NET_REASON"
+    warn "This runs without a terminal, so an ssh key that needs a passphrase (and no agent) or a"
+    warn "credential prompt cannot be answered here. Run these on the host, in this order:"
+    for c in "${HINT_FETCH[@]+"${HINT_FETCH[@]}"}"; do printf '     %s\n' "$c" >&2; done
+    if [ ${#HINT_FETCH[@]} -gt 0 ]; then
+        printf '     ai-knowledge sync%s\n' "${1:+ $1}" >&2
+    fi
+    for c in "${HINT_PUSH[@]+"${HINT_PUSH[@]}"}"; do printf '     %s\n' "$c" >&2; done
+}
 
 REMOTE=""; INTEGRATOR=""
 read_config() { sed -n "s/^$1=//p" "$AI_KNOWLEDGE_CONFIG" | head -1; }
@@ -69,7 +102,7 @@ seed_dir() {
 # ---------------------------------------------------------------------------
 
 cmd_init() {
-    local remote="" integrator="" out
+    local remote="" integrator="" out rc
     while [ $# -gt 0 ]; do
         case $1 in
             --integrator)   [ $# -ge 2 ] || die "--integrator needs a directory"
@@ -91,9 +124,14 @@ cmd_init() {
 
     if [ ! -d "$KNOWLEDGE_MAIN/.git" ]; then
         rm -rf "$KNOWLEDGE_MAIN"
-        if ! out=$(git_net clone -q "$remote" "$KNOWLEDGE_MAIN" 2>&1); then
+        rc=0; out=$(git_net clone -q "$remote" "$KNOWLEDGE_MAIN" 2>&1) || rc=$?
+        if [ "$rc" -ne 0 ]; then
             rm -f "$AI_KNOWLEDGE_CONFIG"
-            die "cannot clone $remote: $out"
+            net_failed "$rc" "$out"
+            warn "cannot clone $remote: $NET_REASON"
+            warn "Run on the host, then repeat the init:"
+            printf '     git clone %s %s\n' "$remote" "$KNOWLEDGE_MAIN" >&2
+            exit 1
         fi
         log "cloned $remote -> $KNOWLEDGE_MAIN"
     fi
@@ -103,6 +141,7 @@ cmd_init() {
     git -C "$KNOWLEDGE_MAIN" checkout -q main 2>/dev/null \
         || warn "$remote has no 'main' branch; ai-knowledge follows main only"
     cmd_render
+    print_hints
     log "done. Sandboxes pick the knowledge up on their next start."
 }
 
@@ -135,10 +174,14 @@ PYEOF
     git -C "$KNOWLEDGE_MAIN" config user.email >/dev/null 2>&1 \
         || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
     git -C "$KNOWLEDGE_MAIN" "${identity[@]+"${identity[@]}"}" commit -qm "chore: seed the knowledge repository"
-    if git_net -C "$KNOWLEDGE_MAIN" push -q -u origin main 2>/dev/null; then
+    local rc=0 out
+    out=$(git_net -C "$KNOWLEDGE_MAIN" push -q -u origin main 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
         log "pushed main to $REMOTE"
     else
-        warn "seeded locally but could not push to $REMOTE; run 'ai-knowledge sync' when online"
+        net_failed "$rc" "$out"
+        warn "seeded locally but could not push to $REMOTE"
+        HINT_PUSH+=("git -C $KNOWLEDGE_MAIN push -u origin main")
     fi
 }
 
@@ -149,11 +192,17 @@ PYEOF
 # The canonical checkout only ever fast-forwards; nobody edits it by hand.
 sync_main() {
     [ -d "$KNOWLEDGE_MAIN/.git" ] || { warn "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"; return 1; }
-    if git_net -C "$KNOWLEDGE_MAIN" fetch -q origin 2>/dev/null; then
+    local rc=0 out
+    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q origin 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        net_failed "$rc" "$out"
+        warn "cannot fetch $REMOTE; rendering the last fetched main"
+        HINT_FETCH+=("git -C $KNOWLEDGE_MAIN fetch origin")
+    fi
+    # A manual fetch lands here on the next sync, so the merge runs either way.
+    if git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
         git -C "$KNOWLEDGE_MAIN" merge -q --ff-only origin/main >/dev/null 2>&1 \
             || warn "$KNOWLEDGE_MAIN is not a fast-forward of origin/main; it is never edited by hand, so repair it with: git -C $KNOWLEDGE_MAIN reset --hard origin/main"
-    else
-        warn "cannot reach $REMOTE; rendering the last fetched main"
     fi
 }
 
@@ -319,23 +368,19 @@ set_status() {
 # <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the
 # caller: every outcome is one line in .sync-status.
 sync_clone() {
-    local sb=$1 id=$2 role=$3 branch="proposals/$2" out note="" current b
+    local sb=$1 id=$2 role=$3 branch="proposals/$2" out rc note="" current b net=yes
     CLONE="$sb/knowledge"
 
     if [ ! -d "$CLONE/.git" ]; then
         rm -rf "$CLONE"
-        if ! out=$(git_net clone -q "$REMOTE" "$CLONE" 2>&1); then
-            warn "cannot clone $REMOTE into $CLONE: $out"
+        rc=0; out=$(git_net clone -q "$REMOTE" "$CLONE" 2>&1) || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            net_failed "$rc" "$out"
+            warn "cannot clone $REMOTE into $CLONE: $NET_REASON"
+            HINT_FETCH+=("git clone $REMOTE $CLONE")
             return 0
         fi
-        if [ "$role" = integrator ]; then
-            git -C "$CLONE" checkout -q main
-        elif git -C "$CLONE" show-ref -q --verify "refs/remotes/origin/$branch"; then
-            git -C "$CLONE" checkout -q -B "$branch" "origin/$branch"
-        else
-            git -C "$CLONE" checkout -q -B "$branch" origin/main
-        fi
-        log "cloned $REMOTE -> $CLONE ($(git -C "$CLONE" branch --show-current))"
+        log "cloned $REMOTE -> $CLONE"
     fi
     grep -qx '.sync-status' "$CLONE/.git/info/exclude" 2>/dev/null \
         || printf '.sync-status\n' >> "$CLONE/.git/info/exclude"
@@ -344,9 +389,25 @@ sync_clone() {
         set_status "skipped: uncommitted changes in ~/knowledge; commit them and start the sandbox again"
         return 0
     fi
-    if ! git_net -C "$CLONE" fetch -q origin 2>/dev/null; then
-        set_status "offline: cannot reach $REMOTE; working from the last fetch"
-        return 0
+    # A fresh clone, ours or a manual one, sits on the remote's default branch.
+    # The proposals branch is created here, from the remote one when it exists.
+    if [ "$role" = proposals ] && ! git -C "$CLONE" show-ref -q --verify "refs/heads/$branch"; then
+        if git -C "$CLONE" show-ref -q --verify "refs/remotes/origin/$branch"; then
+            git -C "$CLONE" checkout -q -B "$branch" "origin/$branch"
+        else
+            git -C "$CLONE" checkout -q -B "$branch" origin/main
+        fi
+        log "created $branch in $CLONE"
+    fi
+
+    # A failed fetch does not end the sync: merges and the scope check run on the
+    # last fetched refs (a manual fetch lands there too), and pushes are listed
+    # for the user to run by hand.
+    rc=0; out=$(git_net -C "$CLONE" fetch -q origin 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        net_failed "$rc" "$out"
+        HINT_FETCH+=("git -C $CLONE fetch origin")
+        net=no
     fi
 
     current=$(git -C "$CLONE" branch --show-current)
@@ -377,10 +438,22 @@ sync_clone() {
                 return 0
             fi
             if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$(git -C "$CLONE" rev-parse -q --verify "origin/$branch" 2>/dev/null || true)" ]; then
-                if ! out=$(git_net -C "$CLONE" push -q origin "HEAD:refs/heads/$branch" 2>&1); then
-                    set_status "push failed: $(printf '%s' "$out" | tail -1)"
+                if [ "$net" = no ]; then
+                    HINT_PUSH+=("git -C $CLONE push origin HEAD:refs/heads/$branch")
+                    set_status "offline: cannot reach $REMOTE; $branch has commits to push (see the commands below)"
                     return 0
                 fi
+                rc=0; out=$(git_net -C "$CLONE" push -q origin "HEAD:refs/heads/$branch" 2>&1) || rc=$?
+                if [ "$rc" -ne 0 ]; then
+                    net_failed "$rc" "$out"
+                    HINT_PUSH+=("git -C $CLONE push origin HEAD:refs/heads/$branch")
+                    set_status "push failed: $NET_REASON"
+                    return 0
+                fi
+            fi
+            if [ "$net" = no ]; then
+                set_status "offline: cannot reach $REMOTE; working from the last fetch"
+                return 0
             fi
             set_status "ok: $branch is in sync with $REMOTE"
             ;;
@@ -389,21 +462,37 @@ sync_clone() {
                 set_status "skipped: ~/knowledge is on '$current', expected main"
                 return 0
             fi
-            if ! git -C "$CLONE" merge -q --ff-only origin/main >/dev/null 2>&1; then
+            if git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main \
+               && ! git -C "$CLONE" merge -q --ff-only origin/main >/dev/null 2>&1; then
                 set_status "diverged: main is not a fast-forward of origin/main; merge origin/main inside the sandbox"
                 return 0
             fi
             # Local proposals branches follow the remote fast-forward only. One the
             # integrator committed on while the sandbox also pushed is reported,
             # never forced either way; git refuses that update on its own.
-            git_net -C "$CLONE" fetch -q origin 'refs/heads/proposals/*:refs/heads/proposals/*' >/dev/null 2>&1 || true
+            if [ "$net" = yes ]; then
+                git_net -C "$CLONE" fetch -q origin 'refs/heads/proposals/*:refs/heads/proposals/*' >/dev/null 2>&1 || true
+            else
+                HINT_FETCH+=("git -C $CLONE fetch origin 'refs/heads/proposals/*:refs/heads/proposals/*'")
+            fi
             while IFS= read -r b; do
                 [ -n "$b" ] || continue
                 git -C "$CLONE" merge-base --is-ancestor "origin/$b" "$b" 2>/dev/null || note="$note $b"
             done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+            if [ "$net" = no ]; then
+                if [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse -q --verify origin/main 2>/dev/null || true)" ]; then
+                    HINT_PUSH+=("git -C $CLONE push origin main")
+                fi
+                HINT_PUSH+=("git -C $CLONE push origin 'refs/heads/proposals/*:refs/heads/proposals/*'")
+                set_status "offline: cannot reach $REMOTE; push by hand (see the commands below)"
+                return 0
+            fi
             if [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse origin/main)" ]; then
-                if ! out=$(git_net -C "$CLONE" push -q origin main 2>&1); then
-                    set_status "push failed for main: $(printf '%s' "$out" | tail -1)"
+                rc=0; out=$(git_net -C "$CLONE" push -q origin main 2>&1) || rc=$?
+                if [ "$rc" -ne 0 ]; then
+                    net_failed "$rc" "$out"
+                    HINT_PUSH+=("git -C $CLONE push origin main")
+                    set_status "push failed for main: $NET_REASON"
                     return 0
                 fi
                 MAIN_PUSHED="yes"
@@ -430,7 +519,7 @@ cmd_sync() {
     load_config
     sync_main || return 0
     cmd_render
-    [ $# -gt 0 ] || return 0
+    [ $# -gt 0 ] || { print_hints; return 0; }
 
     local project sb id role=proposals
     project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
@@ -448,6 +537,7 @@ cmd_sync() {
     if [ "$MAIN_PUSHED" = yes ]; then
         sync_main && cmd_render
     fi
+    print_hints "$project"
 }
 
 cmd_status() {
