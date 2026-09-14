@@ -185,6 +185,13 @@ conversations, and this project's own ~/.claude/projects/<key> entry only, so a
 sandbox cannot read or write another project's Claude Code history or memory.
 Edits there are real edits on the host.
 
+Shared knowledge (optional): after 'ai-knowledge init <private-git-url>
+--integrator <dev-tools dir>' the global rules and roles come from that
+repository instead, rendered read-only into every sandbox as GEMINI.md,
+CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
+gets its own clone at ~/knowledge on a proposals branch, synced by the host on
+every start; the 'propose-rule' skill files a rule for the integrator sandbox.
+
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
 the host once, per project; plugins are shared between projects; indexes are per
