@@ -62,23 +62,31 @@ It commits, pushes `main`, and renders (see step 4 of "How it works"). From now 
 `--integrator` names the project whose sandbox is the integrator. Its clone sits on
 `main` instead of a proposals branch.
 
-### 4. Recreate every existing sandbox
+### 4. Migrate every existing sandbox
 
-Re-run `create-ai-sandbox.sh <project>` for each sandbox that existed before the
-init. The knowledge mounts live in the sandbox's compose file, and only
-`create-ai-sandbox.sh` rewrites that file. A plain `ai-sandbox` or
-`ai-sandbox-restart` runs the sync and creates the clone on the host, but the
-container keeps its old mounts: no `~/knowledge`, and the live `GEMINI.md` mount
-now points through the host symlink at the render, read-write. Inside such a
-sandbox the `propose-rule` skill reports the repository as not configured.
+Every sandbox carries a stamp in its `.env`, `SANDBOX_KNOWLEDGE=0|1`, written by
+`create-ai-sandbox.sh` and saying whether its compose file has the knowledge
+mounts. `ai-sandbox` and `ai-sandbox-restart` compare the stamp with the host's
+configuration and refuse to start a sandbox that is `stale` (stamp disagrees) or
+`unstamped` (created before stamps existed). Such a sandbox would mount the live
+`GEMINI.md`, which now resolves through the host symlink to the render, read-write.
+The start scripts only check; they never rewrite a sandbox.
 
-Check from the host with `ai-knowledge status <project>` and
+The repair is a separate, one-off script in the dev-tools checkout, not installed
+into `~/.ai-sandbox/bin`:
 
 ```bash
-grep -c knowledge ~/.ai-sandbox/<project-id>-agent/docker-compose.yml
+ai-knowledge status                                  # every sandbox: current | stale | unstamped
+<dev-tools>/bin/ai/ai-sandbox-migrate-knowledge      # stop and recreate each stale or unstamped one
 ```
 
-which is 0 until the sandbox has been recreated.
+It recovers the project of an unstamped sandbox from the project mount in its
+compose file, refuses the whole run if any project directory is gone, and
+forwards extra arguments to `create-ai-sandbox.sh`. Once `ai-knowledge status`
+shows every sandbox as `current`, delete the script; nothing else refers to it.
+
+Inside a container, `sandbox-doctor` tells the cases apart: "not configured on the
+host", "NOT migrated", or the last sync line.
 
 ### 5. Second computer
 
@@ -96,7 +104,8 @@ a `conflict` status.
 | `ai-knowledge init <url> [--integrator DIR]` | Configure, seed an empty remote, render |
 | `ai-knowledge sync [PROJECT_DIR]` | Update `main`, render, sync the project's clone |
 | `ai-knowledge render` | Render only |
-| `ai-knowledge status [PROJECT_DIR]` | Config, `main` revision, last sync status of the clone |
+| `ai-knowledge status` | Config, `main` revision, then every sandbox with its knowledge state and last sync |
+| `ai-knowledge status PROJECT_DIR` | The same header, then that project's clone and last sync |
 | `ai-knowledge proposals [--repo DIR]` | List open proposal files across `proposals/*` branches |
 
 ## How it works
@@ -134,7 +143,8 @@ under `proposals/<project-id>/`.
 ### 3. Sync on every sandbox start
 
 `create-ai-sandbox.sh`, `ai-sandbox` and `ai-sandbox-restart` run
-`ai-knowledge sync <project>` before `compose up`. Network git runs
+`ai-knowledge sync <project>` before `compose up`; a start syncs only its own
+sandbox's clone. Network git runs
 non-interactively (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode=yes`) and under a
 timeout (60 s, `AI_KNOWLEDGE_GIT_TIMEOUT`). No step fails the start. The outcome
 is one line in `<clone>/.sync-status`, shown by `sandbox-doctor` and
