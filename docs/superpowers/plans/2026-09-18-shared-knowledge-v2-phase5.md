@@ -20,8 +20,12 @@ converted legacy proposal branch   proposal/<YYYY-MM-DD>-<project-id>-<slug>-<4 
                                    (project-id = the old branch name after "proposals/")
 locks                              flock -w 300 on $AI_KNOWLEDGE_ROOT/.lock around sync_main+render,
                                    and on <sandbox dir>/.knowledge.lock around one clone's sync
-closed branch                      tip is an ancestor of origin/main AND `git ls-tree -r <tip> -- proposals/`
-                                   lists a .md other than README.md; otherwise "empty", kept
+closed branch                      tip is an ancestor of origin/main AND not on origin/main's first-parent
+                                   chain (`git rev-list --first-parent origin/main` does not list it);
+                                   an ancestor that IS on the chain is "empty", kept. Applied at all
+                                   three sites in sync_clone: the classification loop, the post-push
+                                   local cleanup, and the remote deletion loop.
+scratch files of sync --all         <sandbox dir>/.sync-output.<pid> and .sync-exit.<pid>, removed by the run that made them
 status words (first token)         ok: | skipped: | refused: | conflict: | diverged: | offline: |
                                    push failed: | empty:  (tests anchor on "^<timestamp> <word>")
 ```
@@ -51,9 +55,9 @@ Goal (a, b, c, d, e, f, k): in `bin/ai/ai-knowledge`:
 - Scope check: `git diff --name-only --no-renames "origin/main...$b"` captured with
   its exit status; a non-zero status (no merge base) is `refused` with "no common
   history with main"; any path outside `proposals/` is `refused` as today.
-- Closed-branch rule per the contract; a branch whose tip is an ancestor but whose
-  tree holds no proposal file is counted `empty` and left alone; the status line
-  says `empty N` when N > 0 and the first status word stays `ok:`.
+- Closed-branch rule per the contract at all three sites; an ancestor on the
+  first-parent chain is counted `empty` and left alone; the status line says
+  `empty N` when N > 0 and the first status word stays `ok:`.
 - A clone whose HEAD is unborn after cloning is put on `main` from `origin/main`.
 - The `diverged` message for role `integrator` says merge `origin/main` in the
   clone, never `reset`; the proposals-role message says how to move stray commits
@@ -63,25 +67,46 @@ Goal (a, b, c, d, e, f, k): in `bin/ai/ai-knowledge`:
 - `main push failed` becomes a `push failed:` status.
 - A `knowledge` path that exists and is not a git checkout is moved to
   `knowledge.not-a-clone.<timestamp>` before cloning, and the status says so.
-- `cmd_sync` and `cmd_sync_all`: a `cmd_render` failure is a warning and the clone
-  sync still runs; the render's temp directory is removed on failure.
-- Locks per the contract: `sync_main`+`cmd_render` under the main lock;
-  `sync_project_clone` under the clone lock (children of `--all` take it too).
+- `cmd_render` replaces `$AI_KNOWLEDGE_RENDER` only after every step succeeded
+  (the python render and `wire_host` prerequisites); on failure the previous render
+  stays intact, the temp directory is removed, and the function returns non-zero
+  without `exit`. `cmd_sync` and `cmd_sync_all` treat that as a warning and still
+  sync the clones. Note: a function used as the left operand of `||` runs without
+  `errexit`, so the render must check its own steps, not rely on `set -e`.
+- Locks per the contract. Every call of `cmd_render`, including the `render` and
+  `init` commands, runs under the main lock together with `sync_main`; the main
+  lock and a clone lock are never held at the same time; a lock timeout is a
+  warning plus `skipped: lock busy` for a clone, never an exit. The locked region
+  cannot be a subshell: `sync_main` sets `MAIN_FETCHED`, `HINT_FETCH`, `NET_REASON`
+  that the callers read afterwards, so use `exec {fd}>lock; flock -w 300 "$fd"`.
+- `sync --all` scratch files per the contract, so two runs never read each other's.
+- `cmd_sync_all` rows for a stale or unstamped sandbox name `create-ai-sandbox.sh
+  <project>` as the repair (goal i), the bulk script as the shortcut.
+- `cmd_init`: a `$KNOWLEDGE_MAIN` that exists and is not a git checkout is moved
+  aside like the clone, never `rm -rf`'d.
 - `print_hints` prints commands with `%q` for paths.
 - The malformed-name refusal carries `git -C ~/knowledge branch -m <b> proposal/<date>-<slug>-<4 hex>`.
 - Integrator sync: when `main`'s tree holds a proposal file other than README, warn
   once per sync ("a proposal branch was merged for real; see the doc on re-opening").
 Files: `bin/ai/ai-knowledge`, `tests/ai-sandbox/test-knowledge.sh`.
 Tests: orphan branch refused; a branch renaming `rules/global.md` into `proposals/`
-refused; an empty branch reported `empty 1` and still present after the sync; a
+refused; an empty branch (tip equal to `origin/main`, and one created from an older
+main) reported `empty` and still present after the sync; a render made to fail
+(a role file with broken frontmatter or `python3` hidden from PATH) leaves the
+previous `GLOBAL.md` unchanged and still writes the clone's status; a
 `timeout` stub on PATH that makes `git fetch` exit 128 silently yields an
 `offline:` status and a visible message, not a stale `ok:`; a `master`-headed bare
 remote gives a sandbox clone on `main` with rules present; the integrator diverged
 message contains `merge` and not `reset --hard`; `init --integrator` with an
 integrator clone one commit ahead skips the record and names `sync --all`; a
 non-git `knowledge` directory is moved aside; two `sync --all` runs started
-together both end with every clone `ok:` (use `&` and `wait`); existing status
-assertions are re-anchored on the status word where they used containment of `ok`.
+together both end with every clone `ok:` and both tables show no `error:` row (use
+`&` and `wait`); a hint for a path with a space is quoted; the malformed-name
+refusal contains `branch -m`; a `main` carrying a proposal file makes the integrator
+sync warn; existing status assertions are re-anchored on the status word where they
+used containment of `ok`. A stub `tests/ai-sandbox/stub/lease-timeout` (not on PATH
+by default; a test puts a `timeout` symlink to it first on PATH for one run) can
+make `git fetch` exit 128 silently for the silent-failure case; task 5 reuses it.
 Acceptance: assertions pass; `bash tests/ai-sandbox/run-tests.sh` green except
 test-tools case 20.
 
@@ -95,23 +120,33 @@ Goal (h): in `bin/ai/ai-sandbox-migrate-knowledge`:
   returns 2 or 1, print how to load the key (`eval "$(ssh-agent -s)"; ssh-add`)
   and exit 1 before touching anything. All git network calls in the script run
   with `GIT_TERMINAL_PROMPT=0` and `timeout 60`.
-- Conversion covers every open file on every old branch found either on the remote
-  or as a local `proposals/*` branch in any clone on this host, using the contract
-  name `<project-id>-<slug>`; a file is "already converted" only when a branch with
-  that exact `<project-id>-<slug>` exists on the remote. Step 0 still pushes a
-  local old branch that is ahead of an existing remote branch; a local old branch
-  whose remote is gone is converted from the clone instead of re-pushed.
-- The ours-merge and remote deletion stay integrator-host only and behind the
-  existing confirmation; moving clones to `main` and deleting local old branches
-  runs regardless of that answer once every open file has a counterpart.
+- Conversion runs on every host, not only the integrator's: every open file on
+  every old branch found on the remote or as a local `proposals/*` branch in any
+  clone on this host becomes a branch named per the contract, `<project-id>-<slug>`
+  (its file is therefore `proposals/<date>-<project-id>-<slug>.md`; the existing
+  migration assertions change accordingly). A file is "already converted" only when
+  a branch with that exact `<project-id>-<slug>` exists on the remote (assumption:
+  no host has run the earlier script, which used the bare slug). Step 0 still
+  pushes a local old branch that is ahead of an existing remote branch; a local old
+  branch whose remote is gone is converted from the clone instead of re-pushed.
+- Only the ours-merge and the remote deletion stay integrator-host only and behind
+  the existing confirmation. Moving clones to `main` runs regardless of that
+  answer; a local old branch is deleted only when each of its open files has a
+  counterpart on the remote, otherwise it is kept and named. A running sandbox that
+  the user chose not to stop keeps its clone untouched too.
+- The ssh precheck classifies the URL like `ensure_ssh_access` does (`ssh://`,
+  `user@host:path`), not by prefix alone.
 - The script ends with `ai-knowledge sync --all` and prints that the doctor inside
   sandboxes is rebuilt by the next plain `create-ai-sandbox.sh <project>` run.
 Files: `bin/ai/ai-sandbox-migrate-knowledge`, `tests/ai-sandbox/test-knowledge.sh`.
 Tests: a running stale sandbox is skipped without `y` and recreated with `y`; two
 old branches from two projects with the same slug become two branches; a local-only
-old branch (remote deleted) is converted, not re-pushed; declining the deletion
-still moves clones to `main`; an ssh remote without an agent exits 1 before any
-change (stub `ssh-add -l` returning 2); every clone ends `ok:` after the run.
+old branch (remote deleted) is converted, not re-pushed, on a non-integrator host
+(config without INTEGRATOR); a local-only old branch whose conversion fails (the
+canonical checkout made unwritable for that run) is kept and named; declining the
+deletion still moves clones to `main`; an ssh remote without an agent exits 1
+before any change (stub `ssh-add -l` returning 2); every clone ends `ok:` after
+the run.
 Acceptance: assertions pass.
 
 ### Task 4: documents, skill, messages in create

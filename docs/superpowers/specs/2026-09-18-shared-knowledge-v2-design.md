@@ -227,8 +227,11 @@ unchanged; this phase makes the code meet them and the operator journey usable.
 **Goal.** (a) The scope check fails closed: a proposal branch with no merge base
 with `origin/main`, or whose diff (renames disabled) touches anything outside
 `proposals/`, is `refused`. (b) A "closed" branch is one whose tip is an ancestor
-of `origin/main` **and** whose tree holds a proposal file; an empty branch is
-reported, never deleted. (c) The script runs with `set -E` so the ERR trap fires
+of `origin/main` **and** not on `origin/main`'s first-parent chain (an ours-merge
+puts the tip on the second parent; a fresh or empty branch sits on the chain
+itself); an empty branch is reported, never deleted. Rule chosen at plan review
+over "tree holds a proposal file", which misclassified a branch whose file was
+removed and a `main` carrying a stray proposal file. (c) The script runs with `set -E` so the ERR trap fires
 in functions, and no message parser can end a sync silently. (d) A fresh clone
 with an unborn HEAD is put on `main` from `origin/main`. (e) No status ever
 advises `reset --hard` to the integrator; the integrator record is skipped, with a
