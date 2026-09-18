@@ -4,8 +4,9 @@
 # One private git repository holds the global, project-independent knowledge:
 # rules/global.md, roles/<name>.md, skills/<name>/ and decisions.md. Every
 # sandbox reads a rendered copy of its main branch read-only, and proposes
-# changes through its own clone on a branch proposals/<project-id>. The
-# integrator sandbox's clone is on main and carries every proposals branch.
+# changes through its own clone: main checked out, one local branch
+# proposal/<date>-<slug>-<hex> per proposal. The integrator sandbox's clone
+# carries every open proposal branch and closes them with an ours-merge.
 #
 # No sandbox has git credentials, so every fetch, merge and push happens here,
 # before a sandbox starts. A sync never fails a start: whatever goes wrong is
@@ -17,7 +18,9 @@
 #                                                       in parallel (AI_KNOWLEDGE_JOBS, default 4)
 #   ai-knowledge render                                 render main into the shared store
 #   ai-knowledge status [PROJECT_DIR]                   config and the last sync status
-#   ai-knowledge proposals [--repo DIR]                 list proposal files across proposals/* branches
+#   ai-knowledge proposals [--repo DIR]                 list open proposal files across proposal/* branches
+#   ai-knowledge propose FILE [--repo DIR] [--slug S] [--project-id ID] [--machine M] [--project P] [--push]
+#                                                       file FILE as a proposal/* branch from origin/main
 set -euo pipefail
 HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # set -e ends the script on any unguarded failure; without this it would do so
@@ -432,10 +435,69 @@ set_status() {
     log "$*"
 }
 
+PROPOSAL_RE='^proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
+
+# The hook is advisory (an agent can bypass it); the host's scope check below
+# is the enforcement. It fails at commit time, inside the sandbox, where the
+# agent sees the message, instead of at the next sync on the host.
+install_hook() {   # <clone>
+    local hook="$1/.git/hooks/pre-commit"
+    mkdir -p "$1/.git/hooks"
+    cat > "$hook.new" <<'HOOK'
+#!/usr/bin/env bash
+# Installed by ai-knowledge on the host; refreshed on every sync. Advisory:
+# the host refuses to push what this hook would have refused to commit.
+role=$(cut -d' ' -f1 "$(git rev-parse --git-dir)/ai-knowledge-role" 2>/dev/null)
+role=${role:-proposals}
+branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || true)
+case "$branch" in
+    main)
+        if [ "$role" = proposals ]; then
+            echo "ai-knowledge: this clone proposes, it does not edit main. Use the propose-rule skill: it commits on a proposal/* branch." >&2
+            exit 1
+        fi ;;
+    proposal/*)
+        bad=$(git diff --cached --name-only | grep -v '^proposals/' || true)
+        if [ -n "$bad" ]; then
+            echo "ai-knowledge: a proposal branch may change only proposals/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+            exit 1
+        fi ;;
+esac
+exit 0
+HOOK
+    chmod 0755 "$hook.new"; mv -f "$hook.new" "$hook"
+}
+
+# Local main follows origin/main fast-forward only, whether or not it is
+# checked out (git refuses to fetch into the checked-out branch, so that case
+# merges). Returns 1 when main has local commits.
+ff_main() {   # <clone> <current branch> <role>
+    git -C "$1" show-ref -q --verify refs/remotes/origin/main || return 0
+    # The integrator's main is allowed ahead (it has commits to push); a
+    # proposing clone's is not. --ff-only alone would report "already up to
+    # date" for a main that is ahead, which is exactly the case to catch.
+    if [ "$3" = integrator ] && git -C "$1" merge-base --is-ancestor origin/main main 2>/dev/null; then
+        return 0
+    fi
+    git -C "$1" merge-base --is-ancestor main origin/main 2>/dev/null || return 1
+    if [ "$2" = main ]; then
+        git -C "$1" merge -q --ff-only origin/main >/dev/null 2>&1
+    else
+        git -C "$1" update-ref refs/heads/main origin/main
+    fi
+}
+
 # <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the
 # caller: every outcome is one line in .sync-status.
+#
+# Order, for both roles: fetch (prune) -> fast-forward main -> classify every
+# local proposal/* branch as malformed, closed (its tip is an ancestor of
+# origin/main), or open -> push the open ones -> delete the closed ones. The
+# integrator also pushes main and deletes closed branches on the remote, under
+# a lease on the tip it fetched, so an amendment pushed meanwhile survives.
 sync_clone() {
-    local sb=$1 id=$2 role=$3 branch="proposals/$2" out rc note="" current b net=yes
+    local sb=$1 id=$2 role=$3 out rc net=yes current b tip remote_tip
+    local pushed=0 closed=0 pending=0 main_state=current refused="" conflicts="" pushfail=""
     CLONE="$sb/knowledge"
 
     if [ ! -d "$CLONE/.git" ]; then
@@ -451,127 +513,117 @@ sync_clone() {
     fi
     grep -qx '.sync-status' "$CLONE/.git/info/exclude" 2>/dev/null \
         || printf '.sync-status\n' >> "$CLONE/.git/info/exclude"
+    printf '%s %s\n' "$role" "$id" > "$CLONE/.git/ai-knowledge-role"
+    install_hook "$CLONE"
 
     if [ -n "$(git -C "$CLONE" status --porcelain)" ]; then
-        set_status "skipped: uncommitted changes in ~/knowledge; commit them and start the sandbox again"
+        set_status "skipped: uncommitted changes in ~/knowledge; commit them and sync again"
         return 0
     fi
-    # A fresh clone, ours or a manual one, sits on the remote's default branch.
-    # The proposals branch is created here, from the remote one when it exists.
-    if [ "$role" = proposals ] && ! git -C "$CLONE" show-ref -q --verify "refs/heads/$branch"; then
-        if git -C "$CLONE" show-ref -q --verify "refs/remotes/origin/$branch"; then
-            git -C "$CLONE" checkout -q -B "$branch" "origin/$branch"
-        else
-            git -C "$CLONE" checkout -q -B "$branch" origin/main
-        fi
-        log "created $branch in $CLONE"
-    fi
+    current=$(git -C "$CLONE" branch --show-current)
+    case $current in
+        proposals/*)
+            set_status "skipped: ~/knowledge is on the old-style branch '$current'; run ai-sandbox-migrate-knowledge on the host"
+            return 0 ;;
+    esac
 
-    # A failed fetch does not end the sync: merges and the scope check run on the
-    # last fetched refs (a manual fetch lands there too), and pushes are listed
-    # for the user to run by hand.
-    rc=0; out=$(git_net -C "$CLONE" fetch -q origin 2>&1) || rc=$?
+    rc=0; out=$(git_net -C "$CLONE" fetch -q --prune origin 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
         net_failed "$rc" "$out"
-        HINT_FETCH+=("git -C $CLONE fetch origin")
+        HINT_FETCH+=("git -C $CLONE fetch --prune origin")
         net=no
     fi
+    # The integrator carries every open proposal as a local branch; a branch
+    # that is not a fast-forward is left alone by git and reported below.
+    if [ "$role" = integrator ]; then
+        if [ "$net" = yes ]; then
+            git_net -C "$CLONE" fetch -q origin 'refs/heads/proposal/*:refs/heads/proposal/*' >/dev/null 2>&1 || true
+        else
+            HINT_FETCH+=("git -C $CLONE fetch origin 'refs/heads/proposal/*:refs/heads/proposal/*'")
+        fi
+    fi
+    ff_main "$CLONE" "$current" "$role" || main_state=diverged
 
-    current=$(git -C "$CLONE" branch --show-current)
-    case $role in
-        proposals)
-            if [ "$current" != "$branch" ]; then
-                set_status "skipped: ~/knowledge is on '$current', expected $branch"
-                return 0
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        tip=$(git -C "$CLONE" rev-parse "$b")
+        if ! [[ $b =~ $PROPOSAL_RE ]]; then
+            refused="$refused $b (name must be proposal/<date>-<slug>-<4 hex>)"; continue
+        fi
+        if git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main \
+           && git -C "$CLONE" merge-base --is-ancestor "$b" origin/main; then
+            if [ "$current" = "$b" ]; then git -C "$CLONE" checkout -q main; current=main; fi
+            git -C "$CLONE" branch -q -D "$b"
+            closed=$((closed + 1)); continue
+        fi
+        out=$(git -C "$CLONE" diff --name-only "origin/main...$b" | grep -v '^proposals/' || true)
+        if [ -n "$out" ]; then
+            refused="$refused $b changes $(printf '%s' "$out" | tr '\n' ' ')"; continue
+        fi
+        remote_tip=$(git -C "$CLONE" rev-parse -q --verify "refs/remotes/origin/$b" 2>/dev/null || true)
+        [ "$remote_tip" != "$tip" ] || continue
+        if [ -n "$remote_tip" ] && ! git -C "$CLONE" merge-base --is-ancestor "$remote_tip" "$b"; then
+            conflicts="$conflicts $b"; continue
+        fi
+        if [ "$net" = no ]; then
+            HINT_PUSH+=("git -C $CLONE push origin $b:refs/heads/$b"); pending=$((pending + 1)); continue
+        fi
+        rc=0; out=$(git_net -C "$CLONE" push -q origin "$b:refs/heads/$b" 2>&1) || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            net_failed "$rc" "$out"; HINT_PUSH+=("git -C $CLONE push origin $b:refs/heads/$b")
+            pushfail="$pushfail $b"; continue
+        fi
+        pushed=$((pushed + 1))
+    done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
+
+    local main_note=""
+    if [ "$role" = integrator ] && [ "$main_state" = current ] \
+       && [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse -q --verify origin/main 2>/dev/null || true)" ]; then
+        if [ "$net" = no ]; then
+            HINT_PUSH+=("git -C $CLONE push origin main"); main_note="main pending"
+        else
+            rc=0; out=$(git_net -C "$CLONE" push -q origin main 2>&1) || rc=$?
+            if [ "$rc" -eq 0 ]; then MAIN_PUSHED="yes"; main_note="main pushed"
+            else net_failed "$rc" "$out"; HINT_PUSH+=("git -C $CLONE push origin main"); main_note="main push failed"
             fi
-            # The integrator closes proposals by committing on this branch, so its
-            # remote state merges first, then main.
-            if git -C "$CLONE" show-ref -q --verify "refs/remotes/origin/$branch" \
-               && ! git -C "$CLONE" merge -q --no-edit "origin/$branch" >/dev/null 2>&1; then
-                git -C "$CLONE" merge --abort 2>/dev/null || true
-                set_status "conflict: origin/$branch does not merge into ~/knowledge; resolve inside the sandbox"
-                return 0
-            fi
-            if git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main \
-               && ! git -C "$CLONE" merge -q --no-edit origin/main >/dev/null 2>&1; then
-                git -C "$CLONE" merge --abort 2>/dev/null || true
-                set_status "conflict: main does not merge into $branch; resolve inside the sandbox"
-                return 0
-            fi
-            # A proposals branch may differ from main only under its own directory.
-            out=$(git -C "$CLONE" diff --name-only origin/main...HEAD | grep -v "^proposals/$id/" || true)
-            if [ -n "$out" ]; then
-                set_status "refused: $branch changes files outside proposals/$id/ ($(printf '%s' "$out" | tr '\n' ' ')); revert them"
-                return 0
-            fi
-            if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$(git -C "$CLONE" rev-parse -q --verify "origin/$branch" 2>/dev/null || true)" ]; then
-                if [ "$net" = no ]; then
-                    HINT_PUSH+=("git -C $CLONE push origin HEAD:refs/heads/$branch")
-                    set_status "offline: cannot reach $REMOTE; $branch has commits to push (see the commands below)"
-                    return 0
-                fi
-                rc=0; out=$(git_net -C "$CLONE" push -q origin "HEAD:refs/heads/$branch" 2>&1) || rc=$?
-                if [ "$rc" -ne 0 ]; then
-                    net_failed "$rc" "$out"
-                    HINT_PUSH+=("git -C $CLONE push origin HEAD:refs/heads/$branch")
-                    set_status "push failed: $NET_REASON"
-                    return 0
-                fi
-            fi
-            if [ "$net" = no ]; then
-                set_status "offline: cannot reach $REMOTE; working from the last fetch"
-                return 0
-            fi
-            set_status "ok: $branch is in sync with $REMOTE"
-            ;;
-        integrator)
-            if [ "$current" != main ]; then
-                set_status "skipped: ~/knowledge is on '$current', expected main"
-                return 0
-            fi
-            if git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main \
-               && ! git -C "$CLONE" merge -q --ff-only origin/main >/dev/null 2>&1; then
-                set_status "diverged: main is not a fast-forward of origin/main; merge origin/main inside the sandbox"
-                return 0
-            fi
-            # Local proposals branches follow the remote fast-forward only. One the
-            # integrator committed on while the sandbox also pushed is reported,
-            # never forced either way; git refuses that update on its own.
-            if [ "$net" = yes ]; then
-                git_net -C "$CLONE" fetch -q origin 'refs/heads/proposals/*:refs/heads/proposals/*' >/dev/null 2>&1 || true
-            else
-                HINT_FETCH+=("git -C $CLONE fetch origin 'refs/heads/proposals/*:refs/heads/proposals/*'")
-            fi
-            while IFS= read -r b; do
-                [ -n "$b" ] || continue
-                git -C "$CLONE" merge-base --is-ancestor "origin/$b" "$b" 2>/dev/null || note="$note $b"
-            done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
-            if [ "$net" = no ]; then
-                if [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse -q --verify origin/main 2>/dev/null || true)" ]; then
-                    HINT_PUSH+=("git -C $CLONE push origin main")
-                fi
-                HINT_PUSH+=("git -C $CLONE push origin 'refs/heads/proposals/*:refs/heads/proposals/*'")
-                set_status "offline: cannot reach $REMOTE; push by hand (see the commands below)"
-                return 0
-            fi
-            if [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse origin/main)" ]; then
-                rc=0; out=$(git_net -C "$CLONE" push -q origin main 2>&1) || rc=$?
-                if [ "$rc" -ne 0 ]; then
-                    net_failed "$rc" "$out"
-                    HINT_PUSH+=("git -C $CLONE push origin main")
-                    set_status "push failed for main: $NET_REASON"
-                    return 0
-                fi
-                MAIN_PUSHED="yes"
-            fi
-            # A pattern refspec that matches nothing pushes nothing, without error.
-            if ! git_net -C "$CLONE" push -q origin 'refs/heads/proposals/*:refs/heads/proposals/*' >/dev/null 2>&1; then
-                set_status "ok: main pushed; not pushed because they diverged from the remote (merge origin/<branch> inside the sandbox):$note"
-                return 0
-            fi
-            set_status "ok: main and $(git -C "$CLONE" for-each-ref 'refs/heads/proposals/*' | wc -l | tr -d ' ') proposals branch(es) in sync with $REMOTE"
-            ;;
-    esac
+        fi
+    fi
+    # Remote deletion: only the integrator, only after main is on the remote,
+    # only for a tip that is an ancestor of origin/main, and only if the remote
+    # still has that tip (the lease). A rejected lease means the proposer pushed
+    # an amendment: the proposal is open again, nothing is lost.
+    if [ "$role" = integrator ] && [ "$net" = yes ] && [ "$main_note" != "main push failed" ] && [ "$main_note" != "main pending" ]; then
+        # Branches the integrator closed in this round became ancestors of
+        # origin/main only now that main is pushed; drop the local copies too.
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            git -C "$CLONE" merge-base --is-ancestor "$b" origin/main 2>/dev/null || continue
+            if [ "$current" = "$b" ]; then git -C "$CLONE" checkout -q main; current=main; fi
+            git -C "$CLONE" branch -q -D "$b"; closed=$((closed + 1))
+        done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            tip=$(git -C "$CLONE" rev-parse "refs/remotes/$b")
+            git -C "$CLONE" merge-base --is-ancestor "$tip" origin/main 2>/dev/null || continue
+            b=${b#origin/}
+            out=$(git_net -C "$CLONE" push -q "--force-with-lease=refs/heads/$b:$tip" origin ":refs/heads/$b" 2>&1) \
+                || case $out in *"stale info"*|*"remote ref does not exist"*) ;; *) warn "cannot delete $b on the remote: $out" ;; esac
+        done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/remotes/origin/proposal/*')
+    fi
+
+    if [ -n "$refused" ]; then
+        set_status "refused: not pushed:$refused; fix or delete those branches"
+    elif [ -n "$conflicts" ]; then
+        set_status "conflict: remote has commits these branches lack:$conflicts; merge origin/<branch> inside the sandbox"
+    elif [ "$main_state" = diverged ]; then
+        set_status "diverged: main has local commits (only the integrator commits on main; git reset --hard origin/main in ~/knowledge); pushed $pushed"
+    elif [ "$net" = no ]; then
+        set_status "offline: cannot reach $REMOTE; pending push: $pending branch(es)${main_note:+, $main_note} (see the commands below)"
+    elif [ -n "$pushfail" ]; then
+        set_status "push failed: $NET_REASON (branches:$pushfail)"
+    else
+        set_status "ok: main current${main_note:+, $main_note}; pushed $pushed; closed $closed"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -718,9 +770,9 @@ cmd_status() {
     done < <(ai_sandbox_list)
 }
 
-# For the integrator: '<branch> <path>' per open proposal file, across every
-# local proposals/* branch. Inside a sandbox the clone is ~/knowledge; on the
-# host it is the canonical main checkout unless --repo says otherwise.
+# '<branch> <path>' per open proposal file, across every local proposal/*
+# branch that main has not absorbed yet. Inside a sandbox the clone is
+# ~/knowledge; on the host it is the canonical main checkout unless --repo says.
 cmd_proposals() {
     local repo="" b
     while [ $# -gt 0 ]; do
@@ -736,9 +788,75 @@ cmd_proposals() {
     [ -d "$repo/.git" ] || die "no git repository at $repo"
     while IFS= read -r b; do
         [ -n "$b" ] || continue
+        git -C "$repo" merge-base --is-ancestor "$b" main 2>/dev/null && continue
         git -C "$repo" ls-tree -r --name-only "$b" -- proposals/ \
             | { grep '\.md$' || true; } | { grep -v '/README\.md$' || true; } | sed "s|^|$b |"
-    done < <(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+    done < <(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
+}
+
+# A file becomes one proposal branch, built with plumbing from origin/main so
+# no working tree is touched: the migration re-files old proposals with it and
+# init files the host's GEMINI.md drift with it.
+cmd_propose() {
+    local file="" repo="$KNOWLEDGE_MAIN" slug="" project_id="" machine="" project="" push=no
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo)       repo=$2; shift 2 ;;
+            --slug)       slug=$2; shift 2 ;;
+            --project-id) project_id=$2; shift 2 ;;
+            --machine)    machine=$2; shift 2 ;;
+            --project)    project=$2; shift 2 ;;
+            --push)       push=yes; shift ;;
+            -*)           die "unknown option: $1" ;;
+            *)            file=$1; shift ;;
+        esac
+    done
+    [ -n "$file" ] && [ -f "$file" ] || die "usage: ai-knowledge propose FILE [--repo DIR] [--slug S] [--project-id ID] [--machine M] [--project P] [--push]"
+    [ -d "$repo/.git" ] || die "no git repository at $repo"
+    git -C "$repo" show-ref -q --verify refs/remotes/origin/main || die "$repo has no origin/main"
+    command -v python3 >/dev/null 2>&1 || die "python3 is required"
+    if [ -z "$slug" ]; then
+        slug=$(basename "$file" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
+        slug=$(ai_sandbox_slug "$slug"); [ -n "$slug" ] || slug=proposal
+    fi
+    local date path tmp idx blob tree commit branch identity=()
+    date=$(date +%F); path="proposals/$date-$slug.md"
+    tmp=$(mktemp)
+    # Frontmatter keys the caller knows (project_id, machine, project) are added
+    # when the file lacks them; an existing key wins.
+    SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 - <<'PYFM'
+import os
+text = open(os.environ["SRC"], encoding="utf-8").read()
+extra = [(k, os.environ[v]) for k, v in (("project_id", "PID"), ("machine", "MACHINE"), ("project", "PROJECT")) if os.environ.get(v)]
+if text.startswith("---\n") and "\n---\n" in text[4:]:
+    head, rest = text[4:].split("\n---\n", 1)
+    have = {l.split(":", 1)[0].strip() for l in head.splitlines() if ":" in l}
+    head = "\n".join([head.rstrip("\n")] + ["%s: %s" % (k, v) for k, v in extra if k not in have])
+    text = "---\n" + head + "\n---\n" + rest
+elif extra:
+    text = "---\n" + "\n".join("%s: %s" % (k, v) for k, v in extra) + "\n---\n\n" + text
+open(os.environ["DST"], "w", encoding="utf-8").write(text if text.endswith("\n") else text + "\n")
+PYFM
+    git -C "$repo" config user.email >/dev/null 2>&1 \
+        || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
+    idx=$(mktemp); rm -f "$idx"
+    GIT_INDEX_FILE=$idx git -C "$repo" read-tree origin/main
+    blob=$(git -C "$repo" hash-object -w "$tmp")
+    GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path"
+    tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree)
+    commit=$(git -C "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p origin/main -m "proposal: $slug")
+    rm -f "$idx" "$tmp"
+    branch="proposal/$date-$slug-${commit:0:4}"
+    git -C "$repo" update-ref "refs/heads/$branch" "$commit"
+    if [ "$push" = yes ]; then
+        local rc=0 out
+        out=$(git_net -C "$repo" push -q origin "$branch:refs/heads/$branch" 2>&1) || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            net_failed "$rc" "$out"; warn "created $branch but could not push: $NET_REASON"
+            HINT_PUSH+=("git -C $repo push origin $branch:refs/heads/$branch"); print_hints
+        fi
+    fi
+    printf '%s\n' "$branch"
 }
 
 case "${1:-}" in
@@ -748,6 +866,7 @@ case "${1:-}" in
     render)    cmd_render ;;
     status)    shift; cmd_status "$@" ;;
     proposals) shift; cmd_proposals "$@" ;;
+    propose)   shift; load_config; ensure_ssh_access "$REMOTE"; cmd_propose "$@" ;;
     -h|--help|help) usage ;;
     '')        usage >&2; exit 2 ;;
     *)         die "unknown command: $1 (try: ai-knowledge --help)" ;;

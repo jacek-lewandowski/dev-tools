@@ -47,55 +47,148 @@ assert_file "own skill copied into ~/.agents" "$HOME/.agents/skills/propose-rule
 assert_file "own skill copied into the shared store" "$AI_SANDBOX_ROOT/shared/agent-skills/skills/propose-rule/SKILL.md"
 assert_link "host claude skill symlink" "$HOME/.claude/skills/propose-rule" "../../.agents/skills/propose-rule"
 
-# --- sync creates a project sandbox clone on its proposals branch
+# --- sync creates a project sandbox clone on main, with role file and hook
 pid=$(ai_sandbox_project_id "$proj"); pdir=$(ai_sandbox_dir_for "$proj"); mkdir -p "$pdir"
 knowledge sync "$proj" >"$tmp/sync1.out" 2>&1 || cat "$tmp/sync1.out"
 clone="$pdir/knowledge"
-assert_eq "clone on its proposals branch" "$(git -C "$clone" branch --show-current)" "proposals/$pid"
-assert_eq "proposals branch pushed" "$(git -C "$remote" rev-parse "proposals/$pid")" "$(git -C "$clone" rev-parse HEAD)"
+assert_eq "clone on main" "$(git -C "$clone" branch --show-current)" main
 assert_contains "status ok" "$(cat "$clone/.sync-status")" "ok"
+assert_eq "role file names the role and project id" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
+assert_file "pre-commit hook installed" "$clone/.git/hooks/pre-commit"
+[ -x "$clone/.git/hooks/pre-commit" ] && r=yes || r=no
+assert_eq "hook is executable" "$r" yes
 assert_file "mount target CLAUDE.md pre-created" "$pdir/.claude/CLAUDE.md"
 assert_file "mount target AGENTS.md pre-created" "$pdir/.codex/AGENTS.md"
 assert_file "mount target agents dir pre-created" "$pdir/.gemini/agents"
 assert_link "sandbox claude skill symlink" "$pdir/.claude/skills/propose-rule" "../../.agents/skills/propose-rule"
 assert_link "sandbox codex skill symlink" "$pdir/.codex/skills/propose-rule" "../../.agents/skills/propose-rule"
 
-# --- an in-scope proposal is pushed; out of scope is refused; dirty is skipped
-mkdir -p "$clone/proposals/$pid"; echo 'scope: global' > "$clone/proposals/$pid/2026-09-14-test.md"
-git -C "$clone" add -A; git -C "$clone" commit -qm "proposal: test"
+# What the propose-rule skill does: a temporary branch, one file, rename to the final name.
+today=$(date +%F)
+propose_in() {   # <clone> <slug> [rule text]; prints the branch name
+    local c=$1 slug=$2 hex
+    git -C "$c" checkout -q -b "proposal/tmp-$slug" main
+    printf -- '---\nscope: global\nproject: p\nproject_id: x\nmachine: test\ntarget: rules/global.md\nevidence: e\n---\n\n# %s\n\n%s\n' \
+        "$slug" "${3:-rule}" > "$c/proposals/$today-$slug.md"
+    git -C "$c" add "proposals/$today-$slug.md"; git -C "$c" commit -qm "proposal: $slug"
+    hex=$(git -C "$c" rev-parse HEAD | cut -c1-4)
+    git -C "$c" branch -q -m "proposal/$today-$slug-$hex"; git -C "$c" checkout -q main
+    printf 'proposal/%s-%s-%s' "$today" "$slug" "$hex"
+}
+
+# --- an in-scope proposal is pushed; out of scope and malformed are refused; dirty is skipped
+b1=$(propose_in "$clone" test)
 knowledge sync "$proj" >/dev/null 2>&1
-assert_eq "proposal pushed" "$(git -C "$remote" ls-tree -r --name-only "proposals/$pid" -- "proposals/$pid/")" "proposals/$pid/2026-09-14-test.md"
-echo hacked >> "$clone/rules/global.md"; git -C "$clone" commit -qam "escape"
+assert_eq "proposal branch pushed" "$(git -C "$remote" rev-parse "$b1")" "$(git -C "$clone" rev-parse "$b1")"
+assert_eq "proposal file on the branch" "$(git -C "$remote" ls-tree -r --name-only "$b1" -- proposals/ | grep -v README)" "proposals/$today-test.md"
+assert_contains "status counts the push" "$(cat "$clone/.sync-status")" "pushed 1"
+git -C "$clone" checkout -q -b "proposal/$today-escape-abcd" main
+echo hacked >> "$clone/roles/planner.md"; git -C "$clone" commit -q --no-verify -am "escape"; git -C "$clone" checkout -q main
+git -C "$clone" checkout -q -b "proposal/tmp-half" main
+echo 'scope: global' > "$clone/proposals/$today-half.md"; git -C "$clone" add -A; git -C "$clone" commit -qm "half"; git -C "$clone" checkout -q main
 knowledge sync "$proj" >/dev/null 2>&1
-assert_contains "out-of-scope change refused" "$(cat "$clone/.sync-status")" "refused"
-assert_eq "remote branch untouched by the refused push" \
-    "$(git -C "$remote" show "proposals/$pid:rules/global.md" | grep -c hacked)" 0
-git -C "$clone" reset -q --hard HEAD~1
-echo wip > "$clone/proposals/$pid/wip.md"
+assert_contains "out-of-scope branch refused" "$(cat "$clone/.sync-status")" "refused"
+assert_contains "refusal names the branch" "$(cat "$clone/.sync-status")" "escape-abcd"
+assert_contains "malformed name refused" "$(cat "$clone/.sync-status")" "tmp-half"
+git -C "$remote" show-ref -q "refs/heads/proposal/$today-escape-abcd" && r=yes || r=no
+assert_eq "refused branch not on the remote" "$r" no
+git -C "$remote" show-ref -q "refs/heads/proposal/tmp-half" && r=yes || r=no
+assert_eq "malformed branch not on the remote" "$r" no
+git -C "$clone" branch -q -D "proposal/$today-escape-abcd" "proposal/tmp-half"
+echo wip > "$clone/proposals/wip.md"
 knowledge sync "$proj" >/dev/null 2>&1
 assert_contains "dirty tree skipped" "$(cat "$clone/.sync-status")" "skipped"
-rm "$clone/proposals/$pid/wip.md"
+rm "$clone/proposals/wip.md"
 
-# --- the integrator sees the branch, edits main, closes the proposal
+# --- the hook refuses commits on main in a proposing clone and out-of-scope paths on a proposal branch
+echo hacked >> "$clone/rules/global.md"
+out=$(git -C "$clone" commit -qam "on main" 2>&1) && r=0 || r=$?
+assert_eq "hook refuses a commit on main" "$r" 1
+assert_contains "hook names the skill" "$out" "propose-rule"
+git -C "$clone" checkout -q rules/global.md
+git -C "$clone" checkout -q -b "proposal/$today-hooky-0000" main
+echo x > "$clone/roles/x.md"; git -C "$clone" add roles/x.md
+git -C "$clone" commit -qm "bad path" >/dev/null 2>&1 && r=0 || r=$?
+assert_eq "hook refuses a path outside proposals/ on a proposal branch" "$r" 1
+git -C "$clone" reset -q roles/x.md; rm "$clone/roles/x.md"
+echo ok > "$clone/proposals/$today-hooky.md"; git -C "$clone" add proposals/
+git -C "$clone" commit -qm "good path" >/dev/null 2>&1 && r=0 || r=$?
+assert_eq "hook accepts a proposals/ path on a proposal branch" "$r" 0
+git -C "$clone" checkout -q main; git -C "$clone" branch -q -D "proposal/$today-hooky-0000"
+
+# --- the integrator sees the branch, edits main, closes with an ours-merge; the branch dies everywhere
 idir=$(ai_sandbox_dir_for "$integ"); mkdir -p "$idir"
 knowledge sync "$integ" >/dev/null 2>&1
 iclone="$idir/knowledge"
 assert_eq "integrator clone on main" "$(git -C "$iclone" branch --show-current)" main
-assert_contains "integrator has the proposals branch locally" "$(git -C "$iclone" branch --list 'proposals/*')" "proposals/$pid"
-assert_eq "proposals listing" "$(knowledge proposals --repo "$iclone")" "proposals/$pid proposals/$pid/2026-09-14-test.md"
-echo '- be kind' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: kindness"
-git -C "$iclone" checkout -q "proposals/$pid"; git -C "$iclone" rm -q "proposals/$pid/2026-09-14-test.md"
-git -C "$iclone" commit -qm "proposal: test integrated"; git -C "$iclone" checkout -q main
+assert_eq "integrator role file" "$(cut -d' ' -f1 "$iclone/.git/ai-knowledge-role")" integrator
+assert_contains "integrator has the proposal branch locally" "$(git -C "$iclone" branch --list 'proposal/*')" "$b1"
+assert_eq "proposals listing" "$(knowledge proposals --repo "$iclone")" "$b1 proposals/$today-test.md"
+echo '- be kind' >> "$iclone/rules/global.md"
+git -C "$iclone" commit -qam "feat: kindness" && r=0 || r=$?
+assert_eq "hook lets the integrator commit on main" "$r" 0
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: test integrated" "$b1"
+assert_eq "ours-merge leaves main's tree unchanged" "$(git -C "$iclone" ls-tree -r --name-only HEAD -- proposals/ | grep -vc README)" 0
+assert_eq "closed proposal no longer listed" "$(knowledge proposals --repo "$iclone")" ""
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "main pushed" "$(git -C "$remote" rev-parse main)" "$(git -C "$iclone" rev-parse main)"
-assert_eq "proposal branch pushed" "$(git -C "$remote" rev-parse "proposals/$pid")" "$(git -C "$iclone" rev-parse "proposals/$pid")"
+git -C "$remote" show-ref -q "refs/heads/$b1" && r=yes || r=no
+assert_eq "closed branch deleted on the remote" "$r" no
+git -C "$iclone" show-ref -q "refs/heads/$b1" && r=yes || r=no
+assert_eq "closed branch deleted in the integrator clone" "$r" no
 assert_contains "render follows main" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "- be kind"
+assert_contains "integrator status ok" "$(cat "$iclone/.sync-status")" "ok"
 
-# --- the project sandbox picks up both on its next sync
+# --- the proposer's next sync fast-forwards main and drops its closed branch without re-creating it
 knowledge sync "$proj" >/dev/null 2>&1
-assert_no_file "closed proposal removed locally" "$clone/proposals/$pid/2026-09-14-test.md"
-assert_contains "main merged into the branch" "$(cat "$clone/rules/global.md")" "- be kind"
-assert_contains "status ok after round trip" "$(cat "$clone/.sync-status")" "ok"
+assert_contains "main fast-forwarded in the clone" "$(cat "$clone/rules/global.md")" "- be kind"
+git -C "$clone" show-ref -q "refs/heads/$b1" && r=yes || r=no
+assert_eq "closed branch deleted locally" "$r" no
+git -C "$remote" show-ref -q "refs/heads/$b1" && r=yes || r=no
+assert_eq "closed branch not re-created on the remote" "$r" no
+assert_contains "status counts the close" "$(cat "$clone/.sync-status")" "closed 1"
+
+# --- an amendment pushed after the close reopens the proposal instead of being deleted
+b2=$(propose_in "$clone" amend)
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: amend rejected" "$b2"
+git -C "$clone" checkout -q "$b2"; echo more >> "$clone/proposals/$today-amend.md"
+git -C "$clone" commit -qam "amend more"; git -C "$clone" checkout -q main
+knowledge sync "$proj" >/dev/null 2>&1
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "amended branch survives the integrator's sync" "$(git -C "$remote" rev-parse "$b2")" "$(git -C "$clone" rev-parse "$b2")"
+assert_eq "amended proposal listed again" "$(knowledge proposals --repo "$iclone")" "$b2 proposals/$today-amend.md"
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: amend rejected again" "$b2"
+knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+git -C "$remote" show-ref -q "refs/heads/$b2" && r=yes || r=no
+assert_eq "re-closed branch deleted" "$r" no
+
+# --- a clone parked on a proposal branch still gets main; a closed parked branch is left on main
+b3=$(propose_in "$clone" park); git -C "$clone" checkout -q "$b3"
+echo '- be brief' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: brevity"
+knowledge sync "$integ" >/dev/null 2>&1
+knowledge sync "$proj" >/dev/null 2>&1
+knowledge sync "$integ" >/dev/null 2>&1   # the integrator fetches the parked branch
+assert_eq "parked clone keeps its branch" "$(git -C "$clone" branch --show-current)" "$b3"
+assert_eq "parked clone's main follows origin" "$(git -C "$clone" rev-parse main)" "$(git -C "$remote" rev-parse main)"
+assert_contains "parked clone status ok" "$(cat "$clone/.sync-status")" "ok"
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: park rejected" "$b3"
+knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "closed parked branch: clone moved to main" "$(git -C "$clone" branch --show-current)" main
+git -C "$clone" show-ref -q "refs/heads/$b3" && r=yes || r=no
+assert_eq "closed parked branch deleted" "$r" no
+
+# --- a local commit on main is diverged; proposal branches are still pushed
+git -C "$clone" commit -q --no-verify --allow-empty -m "local on main"
+b4=$(propose_in "$clone" diverge)
+knowledge sync "$proj" >/dev/null 2>&1
+assert_contains "diverged main reported" "$(cat "$clone/.sync-status")" "diverged"
+assert_eq "proposal pushed despite diverged main" "$(git -C "$remote" rev-parse "$b4")" "$(git -C "$clone" rev-parse "$b4")"
+git -C "$clone" reset -q --hard origin/main
+knowledge sync "$integ" >/dev/null 2>&1
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: diverge rejected" "$b4"
+knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+assert_contains "status ok after the reset" "$(cat "$clone/.sync-status")" "ok"
 
 # --- offline is a status, not a failure, and the manual commands are printed
 mv "$remote" "$remote.away"
@@ -103,35 +196,50 @@ knowledge sync "$proj" >"$tmp/offline.out" 2>&1; rc=$?
 assert_eq "offline sync exits 0" "$rc" 0
 assert_contains "offline status" "$(cat "$clone/.sync-status")" "offline"
 assert_contains "manual fetch of main printed" "$(cat "$tmp/offline.out")" "git -C $AI_KNOWLEDGE_ROOT/main fetch origin"
-assert_contains "manual fetch of the clone printed" "$(cat "$tmp/offline.out")" "git -C $clone fetch origin"
+assert_contains "manual fetch of the clone printed" "$(cat "$tmp/offline.out")" "git -C $clone fetch --prune origin"
 assert_contains "manual sync printed" "$(cat "$tmp/offline.out")" "ai-knowledge sync $proj"
 assert_eq "no push printed when nothing is pending" "$(grep -c 'git -C .* push ' "$tmp/offline.out")" 0
-mkdir -p "$clone/proposals/$pid"; echo 'scope: global' > "$clone/proposals/$pid/2026-09-14-offline.md"
-git -C "$clone" add -A; git -C "$clone" commit -qm "proposal: offline"
+b5=$(propose_in "$clone" offline)
 knowledge sync "$proj" >"$tmp/offline2.out" 2>&1
 assert_contains "pending push printed when offline" "$(cat "$tmp/offline2.out")" \
-    "git -C $clone push origin HEAD:refs/heads/proposals/$pid"
+    "git -C $clone push origin $b5:refs/heads/$b5"
 assert_contains "offline status names the pending push" "$(cat "$clone/.sync-status")" "push"
-# the integrator gets its own list
 knowledge sync "$integ" >"$tmp/offline3.out" 2>&1
 assert_contains "integrator manual fetch printed" "$(cat "$tmp/offline3.out")" "git -C $iclone fetch origin"
 mv "$remote.away" "$remote"
 knowledge sync "$proj" >/dev/null 2>&1
-assert_eq "pending proposal pushed once online" \
-    "$(git -C "$remote" ls-tree -r --name-only "proposals/$pid" -- "proposals/$pid/" | grep -c offline)" 1
+assert_eq "pending proposal pushed once online" "$(git -C "$remote" rev-parse "$b5")" "$(git -C "$clone" rev-parse "$b5")"
 assert_contains "status ok again once online" "$(cat "$clone/.sync-status")" "ok"
 
-# --- a manually cloned repository is put on its branch by the next sync
-manual="$tmp/work/m"; mkdir -p "$manual"; git -C "$manual" init -q
-mid=$(ai_sandbox_project_id "$manual"); mdir=$(ai_sandbox_dir_for "$manual"); mkdir -p "$mdir"
+# --- a manually cloned repository is adopted; a clone on an old-style branch is skipped
+manual="$tmp/work/manual"; mkdir -p "$manual"; git -C "$manual" init -q
+mdir=$(ai_sandbox_dir_for "$manual"); mkdir -p "$mdir"
 mv "$remote" "$remote.away"
 knowledge sync "$manual" >"$tmp/manual.out" 2>&1
 assert_contains "manual clone printed" "$(cat "$tmp/manual.out")" "git clone file://$remote $mdir/knowledge"
 mv "$remote.away" "$remote"
 git clone -q "file://$remote" "$mdir/knowledge"
 knowledge sync "$manual" >/dev/null 2>&1
-assert_eq "manual clone moved onto its proposals branch" "$(git -C "$mdir/knowledge" branch --show-current)" "proposals/$mid"
+assert_eq "manual clone stays on main" "$(git -C "$mdir/knowledge" branch --show-current)" main
 assert_contains "manual clone status ok" "$(cat "$mdir/knowledge/.sync-status")" "ok"
+assert_file "manual clone got the hook" "$mdir/knowledge/.git/hooks/pre-commit"
+git -C "$mdir/knowledge" checkout -q -b "proposals/old-id" main
+knowledge sync "$manual" >/dev/null 2>&1
+assert_contains "old-style branch skipped" "$(cat "$mdir/knowledge/.sync-status")" "skipped"
+assert_contains "old-style skip names the migration" "$(cat "$mdir/knowledge/.sync-status")" "migrate-knowledge"
+git -C "$mdir/knowledge" checkout -q main; git -C "$mdir/knowledge" branch -q -D "proposals/old-id"
+
+# --- propose: a file becomes a well-formed branch from origin/main without touching the tree
+printf -- '---\nscope: global\ntarget: rules/global.md\nevidence: e\n---\n\n# From host\n\ntext\n' > "$tmp/rule.md"
+head_before=$(git -C "$AI_KNOWLEDGE_ROOT/main" rev-parse HEAD)
+pb=$(knowledge propose "$tmp/rule.md" --slug from-host --project-id abc --machine host1 --push 2>"$tmp/propose.err") || cat "$tmp/propose.err"
+case "$pb" in proposal/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-from-host-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]) r=yes ;; *) r=no ;; esac
+assert_eq "propose prints a well-formed branch name ($pb)" "$r" yes
+assert_eq "propose leaves the canonical tree alone" "$(git -C "$AI_KNOWLEDGE_ROOT/main" status --porcelain)$(git -C "$AI_KNOWLEDGE_ROOT/main" rev-parse HEAD)" "$head_before"
+assert_contains "propose adds project_id" "$(git -C "$AI_KNOWLEDGE_ROOT/main" show "$pb:proposals/$today-from-host.md")" "project_id: abc"
+assert_contains "propose adds machine" "$(git -C "$AI_KNOWLEDGE_ROOT/main" show "$pb:proposals/$today-from-host.md")" "machine: host1"
+assert_contains "propose keeps the body" "$(git -C "$AI_KNOWLEDGE_ROOT/main" show "$pb:proposals/$today-from-host.md")" "# From host"
+assert_eq "propose --push reaches the remote" "$(git -C "$remote" rev-parse "$pb")" "$(git -C "$AI_KNOWLEDGE_ROOT/main" rev-parse "$pb")"
 
 # --- create-ai-sandbox.sh mounts the render read-only and the clone read-write
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/create.out" 2>&1 || cat "$tmp/create.out"
