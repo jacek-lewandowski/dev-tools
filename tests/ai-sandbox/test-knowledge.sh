@@ -212,6 +212,12 @@ assert_contains "all: table row for the third sandbox" "$(grep "$(basename "$tdi
 assert_contains "all: unstamped sandbox reported, not synced" "$(grep fab-c-agent "$tmp/all1.out" | tail -1)" "unstamped"
 assert_no_file "all: no clone for the unstamped sandbox" "$AI_SANDBOX_ROOT/fab-c-agent/knowledge"
 assert_contains "all: stamped sandbox with a missing project reported" "$(grep fab-a-agent "$tmp/all1.out" | tail -1)" "missing project"
+eproj="$tmp/work/e"; mkdir -p "$eproj"; edir=$(ai_sandbox_dir_for "$eproj"); mkdir -p "$edir"
+printf 'services: {}\n' > "$edir/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$eproj" > "$edir/.env"
+chmod 000 "$eproj"
+knowledge sync --all >"$tmp/all-err.out" 2>&1 || cat "$tmp/all-err.out"
+assert_contains "all: a failing child reports its exit code" "$(grep "$(basename "$edir")" "$tmp/all-err.out" | tail -1)" "error: exit 1"
+chmod 755 "$eproj"; rm -rf "$edir"
 assert_contains "all: child output printed under its name" "$(cat "$tmp/all1.out")" "== $(basename "$pdir")"
 echo '- be patient' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: patience"
 AI_KNOWLEDGE_JOBS=1 knowledge sync --all >"$tmp/all2.out" 2>&1 || cat "$tmp/all2.out"
@@ -311,6 +317,9 @@ export SSH_AUTH_SOCK="$tmp/user-agent.sock"; : > "$SSH_AUTH_SOCK"
 knowledge sync "$proj" >"$tmp/ssh2.out" 2>&1 </dev/null || true
 assert_contains "existing agent: key loaded, sync ok" "$(cat "$clone/.sync-status")" ok
 assert_contains "key added with a one hour lifetime" "$(cat "$SSH_STUB_LOG")" "ssh-add -t 3600 $SSH_STUB_KEY"
+rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
+sleep 2 | knowledge sync "$proj" >/dev/null 2>&1 || true
+assert_contains "without a terminal ssh-add cannot wait on stdin" "$(cat "$SSH_STUB_LOG")" "stdin=/dev/null"
 assert_eq "the user's agent is not killed" "$(grep -c 'ssh-agent -k' "$SSH_STUB_LOG")" 0
 assert_contains "user told the key went into their agent" "$(cat "$tmp/ssh2.out")" "one hour"
 unset SSH_AUTH_SOCK; rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
@@ -320,6 +329,10 @@ if command -v script >/dev/null 2>&1; then
     assert_contains "terminal: agent started" "$(cat "$SSH_STUB_LOG")" "ssh-agent -s"
     assert_contains "terminal: agent killed at exit" "$(cat "$SSH_STUB_LOG")" "ssh-agent -k"
     assert_no_file "terminal: agent marker gone after the run" "$SSH_STUB_AGENT"
+    rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
+    SSH_STUB_AGENT_FAIL=1 SSH_AGENT_PID=999999 script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$proj'" /dev/null >/dev/null 2>&1 || true
+    assert_contains "agent start failure: sync goes offline" "$(cat "$clone/.sync-status")" offline
+    assert_eq "agent start failure: nothing is killed" "$(grep -c 'ssh-agent -k' "$SSH_STUB_LOG")" 0
     rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
     script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$tmp/nonexistent'" /dev/null >/dev/null 2>&1 || true
     assert_contains "die: agent had been started" "$(cat "$SSH_STUB_LOG")" "ssh-agent -s"

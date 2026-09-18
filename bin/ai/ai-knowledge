@@ -26,8 +26,8 @@ trap 'printf "!! ai-knowledge: unexpected error at line %s\n" "$LINENO" >&2' ERR
 # An ssh-agent this process started dies with it, however it ends. The flag is
 # a plain variable: children of 'sync --all' inherit the exported agent
 # variables but not this, so they never kill the parent's agent.
-AGENT_STARTED=""
-trap '[ -z "$AGENT_STARTED" ] || ssh-agent -k >/dev/null 2>&1 || true' EXIT
+AGENT_STARTED=""   # pid of the agent this process started, else empty
+trap '[ -z "$AGENT_STARTED" ] || SSH_AGENT_PID=$AGENT_STARTED ssh-agent -k >/dev/null 2>&1 || true' EXIT
 . "$HERE/ai-sandbox-lib.sh"
 
 KNOWLEDGE_MAIN="$AI_KNOWLEDGE_ROOT/main"
@@ -107,16 +107,29 @@ ensure_ssh_access() {   # <remote url>
         [ -f "$k" ] && keys+=("$k")
     done < <(ssh -G ${port:+-p "$port"} "$target" 2>/dev/null | sed -n 's/^identityfile //p' || true)
 
+    # Without a terminal ssh-add would read the passphrase from whatever stdin
+    # is and could wait forever on an open pipe; /dev/null makes an encrypted
+    # key fail at once (unencrypted keys and an askpass GUI still work).
+    add_keys() {
+        if [ -t 0 ]; then ssh-add -t 3600 "${keys[@]+"${keys[@]}"}"
+        else ssh-add -t 3600 "${keys[@]+"${keys[@]}"}" </dev/null
+        fi
+    }
     rc=0; ssh-add -l >/dev/null 2>&1 || rc=$?
     if [ -n "${SSH_AUTH_SOCK:-}" ] && [ "$rc" -ne 2 ]; then
         warn "$host refused the ssh key. Adding it to your ssh-agent for one hour (a passphrase prompt may follow)."
-        ssh-add -t 3600 "${keys[@]+"${keys[@]}"}" || { warn "ssh-add failed; continuing offline"; return 0; }
+        add_keys || { warn "ssh-add failed; continuing offline"; return 0; }
     elif [ -t 0 ]; then
         warn "$host refused the ssh key and no ssh-agent is running. Starting one for this run only;"
         warn "it is removed when ai-knowledge exits (a passphrase prompt may follow)."
-        eval "$(ssh-agent -s)" >/dev/null || { warn "ssh-agent failed to start; continuing offline"; return 0; }
-        AGENT_STARTED=yes
-        ssh-add -t 3600 "${keys[@]+"${keys[@]}"}" || { warn "ssh-add failed; continuing offline"; return 0; }
+        # Capture before eval: a failed substitution evals to nothing and would
+        # look like success, and the trap must only ever kill the pid we started.
+        local agent_env
+        agent_env=$(ssh-agent -s) || { warn "ssh-agent failed to start; continuing offline"; return 0; }
+        eval "$agent_env" >/dev/null
+        [ -n "${SSH_AGENT_PID:-}" ] || { warn "ssh-agent reported no pid; continuing offline"; return 0; }
+        AGENT_STARTED=$SSH_AGENT_PID
+        add_keys || { warn "ssh-add failed; continuing offline"; return 0; }
     else
         warn "$host refused the ssh key; no ssh-agent and no terminal to ask for a passphrase. Continuing offline."
         return 0
@@ -635,8 +648,10 @@ cmd_sync_all() {
         [ "$(ai_sandbox_knowledge_state "$sb")" = current ] || continue   # stale: refused at start too
         while [ "$running" -ge "$jobs" ]; do wait -n || true; running=$((running - 1)); done
         (
-            bash "$0" _sync-clone "$project" "$sb" >"$sb/.sync-output" 2>&1
-            echo $? > "$sb/.sync-exit"
+            # The subshell inherits set -e; without the guard a failing child
+            # would end it before its code is recorded.
+            rc=0; bash "$0" _sync-clone "$project" "$sb" >"$sb/.sync-output" 2>&1 || rc=$?
+            echo "$rc" > "$sb/.sync-exit"
         ) &
         pids+=($!); running=$((running + 1))
     done < <(ai_sandbox_list)
@@ -665,10 +680,10 @@ cmd_sync_all() {
             status="not synced: unstamped; run ai-sandbox-migrate-knowledge"
         elif [ "$state" != current ]; then
             status="not synced: $state; run ai-sandbox-migrate-knowledge"
-        elif [ ! -d "$project" ]; then
-            status="missing project: $project"
         elif [ "$(cat "$sb/.sync-exit" 2>/dev/null)" != 0 ]; then
-            status="error: exit $(cat "$sb/.sync-exit" 2>/dev/null || echo '?'); see its output above"
+            if [ ! -d "$project" ]; then status="missing project: $project"
+            else status="error: exit $(cat "$sb/.sync-exit" 2>/dev/null || echo '?'); see its output above"
+            fi
         else
             status=$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)
         fi
