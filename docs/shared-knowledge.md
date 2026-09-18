@@ -80,8 +80,14 @@ ai-knowledge status                                  # every sandbox: current | 
 <dev-tools>/bin/ai/ai-sandbox-migrate-knowledge      # stop and recreate each stale or unstamped one
 ```
 
-It recovers the project of an unstamped sandbox from its `project-path` file or
-the project mount in its compose file, refuses the whole run if any project
+After the sandboxes it converts the knowledge branches of the first design: every
+open file on a remote `proposals/<project-id>` branch becomes a `proposal/*` branch
+(`project_id` from the old branch name, `machine: unknown`); with your confirmation
+each old branch is merged into `main` with `-s ours` and deleted on the remote;
+every clean clone on this host moves from its old branch to `main`. A clone with
+an unpushed old-style commit is pushed first, or the run stops; a dirty clone is
+named and left. It recovers the project of an unstamped sandbox from its
+`project-path` file or the project mount in its compose file, refuses the whole run if any project
 directory is gone, forwards extra arguments to `create-ai-sandbox.sh`, and
 recreates with `--no-start`, so migrated sandboxes stay stopped and the running
 cap cannot end the run halfway; start each with `ai-sandbox` when needed. A
@@ -94,12 +100,10 @@ host", "NOT migrated", or the last sync line.
 
 ### 5. Second computer
 
-Repeat steps 1 to 3 with the same remote URL. Proposal branches are keyed by
-project id, a slug plus a hash of the absolute project path. Two machines holding
-the project at different paths get different branches. At the same path they share
-one branch, which works because the host merges the remote branch into the clone
-before every push; only two commits to the same proposal file between syncs end in
-a `conflict` status.
+Repeat steps 1 to 3 with the same remote URL. Every proposal has its own branch,
+named after the date, the slug and the first characters of its commit, so two
+machines, or two checkouts of one project, never share a branch and never
+conflict. The proposal's frontmatter records the project id and the machine.
 
 ### Commands
 
@@ -111,7 +115,8 @@ a `conflict` status.
 | `ai-knowledge render` | Render only |
 | `ai-knowledge status` | Config, `main` revision, then every sandbox with its knowledge state and last sync |
 | `ai-knowledge status PROJECT_DIR` | The same header, then that project's clone and last sync |
-| `ai-knowledge proposals [--repo DIR]` | List open proposal files across `proposals/*` branches |
+| `ai-knowledge proposals [--repo DIR]` | List open proposal files across `proposal/*` branches |
+| `ai-knowledge propose FILE [--slug S] [--project-id ID] [--machine M] [--push]` | File a document as a `proposal/*` branch from `origin/main` |
 
 ## How it works
 
@@ -122,12 +127,14 @@ rules/global.md          rules for every agent and every tool; plain markdown
 roles/<name>.md          frontmatter (name, description, optional tools, model) + body
 skills/<name>/SKILL.md   own-authored skills
 decisions.md             why each rule exists; integrated and rejected proposals
-proposals/README.md      proposal format; branches add proposals/<project-id>/*.md
+proposals/README.md      proposal format; a proposal branch adds proposals/<date>-<slug>.md
 ```
 
-Branch `main` holds the knowledge and is written only by the integrator. Branch
-`proposals/<project-id>` belongs to one sandbox and may differ from `main` only
-under `proposals/<project-id>/`.
+Branch `main` holds the knowledge and is written only by the integrator's clone
+(the integrator sandbox, or the owner in that clone, always with a `decisions.md`
+entry). Branch `proposal/<YYYY-MM-DD>-<slug>-<hex>` holds one proposal, created
+from `main`, and may differ from `main` only under `proposals/`. The host refuses
+to push a proposal branch whose name does not follow that pattern.
 
 ### 2. Host-side layout
 
@@ -214,35 +221,47 @@ the transport for the rules now.
 
 ### 5. Project sandbox clone
 
-The clone is created from the remote on first use and checked out on
-`proposals/<project-id>`, from the remote branch if it exists, otherwise from
-`main`. Every sync then:
+The clone is created from the remote on first use with `main` checked out. The
+host writes `.git/ai-knowledge-role` (`proposals <project-id>`) and a pre-commit
+hook into it on every sync. The hook refuses a commit on `main` and any staged
+path outside `proposals/` on a `proposal/*` branch, so a mistake fails inside the
+sandbox at commit time; the host's scope check below remains the enforcement.
+Every sync:
 
-1. Stops with `skipped` if the working tree has uncommitted changes.
-2. Fetches. On failure it records the manual fetch command and continues.
-3. Merges `origin/proposals/<project-id>`, then `origin/main`. A conflict aborts
-   the merge with `conflict`; it is resolved inside the sandbox.
-4. Checks that the branch differs from `origin/main` only under
-   `proposals/<project-id>/`. Anything else is `refused` and not pushed.
-5. Pushes the branch, fast-forward only. Status `ok`, or `offline` with the
-   manual push command when the remote is unreachable.
-
-A clone made by hand with `git clone` is picked up by the next sync, which
-creates the proposals branch.
+1. Stops with `skipped` if the working tree has uncommitted changes, or if the
+   clone sits on an old-style `proposals/<project-id>` branch (run the migration
+   script).
+2. Fetches with `--prune`. On failure it records the manual fetch command and
+   continues on the last fetched refs.
+3. Fast-forwards `main` to `origin/main`, whether or not it is checked out. A
+   `main` with local commits is `diverged`; the proposal branches are still
+   processed.
+4. Classifies every local `proposal/*` branch: a malformed name or a change
+   outside `proposals/` is `refused` and never pushed; a tip that is an ancestor
+   of `origin/main` is closed and the local branch deleted (checking out `main`
+   first if the clone sat on it); the rest are open and pushed fast-forward only,
+   a remote with commits the branch lacks being a `conflict`.
+5. Writes `ok: main current; pushed N; closed M`, or the first problem found, or
+   `offline` with the per-branch push commands to run by hand.
 
 ### 6. Integrator clone
 
-The integrator's clone is on `main` and holds a local branch for every
-`proposals/*` branch. Every sync:
+The integrator's clone is on `main` and carries a local branch for every open
+`proposal/*` branch. Every sync: fetches with `--prune` and fetches every
+`refs/heads/proposal/*` into a local branch of the same name (a branch that does
+not fast-forward is left alone); fast-forwards `main` unless it has commits to
+push; pushes open proposal branches that are fast-forwards of the remote; pushes
+`main` when it is ahead (`diverged` and no push when it is not a fast-forward);
+then deletes closed branches locally and on the remote. Remote deletion happens
+only after `main` is on the remote, only for a tip that is an ancestor of
+`origin/main`, and only under a lease on the fetched tip: an amendment the
+proposer pushed meanwhile rejects the lease, and the proposal is simply open
+again. If `main` advanced, the host re-renders at once.
 
-1. Fast-forwards `main` from `origin/main`. If it diverged, status `diverged`, no
-   push.
-2. Fetches every `proposals/*` branch into a local branch of the same name,
-   fast-forward only.
-3. Pushes `main` and every local `proposals/*` branch without force. A proposals
-   branch that diverged from the remote is reported and left alone. Offline, the
-   pushes are listed as manual commands instead.
-4. If `main` advanced, re-renders immediately.
+Closing a proposal is `git merge -s ours --no-ff` of its branch into `main`:
+`main`'s tree is unchanged, the branch tip becomes an ancestor of `main`, and no
+checkout or file removal is needed. The proposal text stays reachable with
+`git log --full-history -- proposals/` or `git show <merge>^2:proposals/<file>`.
 
 ### 7. Container mounts
 
@@ -264,15 +283,22 @@ Docker does not create them root-owned.
 The `propose-rule` skill ships in the repository's `skills/` and reaches every tool
 through the skills directories. It:
 
-1. Verifies `~/knowledge` is on `proposals/<project-id>` with a clean tree.
+1. Verifies `~/knowledge` is on `main` with a clean tree.
 2. Greps `rules/`, `roles/` and `decisions.md` for duplicates and prior rejections.
-3. Writes `proposals/<project-id>/<YYYY-MM-DD>-<slug>.md` with frontmatter
-   (`scope`, `project`, `target`, `evidence`) and the rule text as it should appear
-   in the target file.
-4. Commits only that file. It never pushes and never touches other paths.
+3. Creates `proposal/tmp-<slug>` from `main`, writes
+   `proposals/<YYYY-MM-DD>-<slug>.md` with frontmatter (`scope`, `project`,
+   `project_id`, `machine`, `target`, `evidence`) and the rule text as it should
+   appear in the target file, commits only that file, renames the branch to
+   `proposal/<YYYY-MM-DD>-<slug>-<4 hex of the commit>` and returns to `main`.
+4. Never pushes and never touches other paths.
 
 The host pushes the branch on the next sync: a sandbox start, or
-`ai-knowledge sync --all` on the host.
+`ai-knowledge sync --all` on the host. Inside the sandbox, `sandbox-doctor` shows
+each local proposal branch as `pushed` or `pending`, and the age of the last sync.
+
+From the host, `ai-knowledge propose FILE [--slug S] [--project-id ID] [--machine M] [--push]`
+files any markdown document as a proposal branch, built from `origin/main` with
+plumbing, without touching a working tree.
 
 ### 9. Integrating (integrator sandbox)
 
@@ -281,28 +307,32 @@ The `knowledge-integrate` skill lives in this repository under
 linked from `.claude/skills/`. It:
 
 1. Lists open proposals with `bin/ai/ai-knowledge proposals --repo ~/knowledge`
-   and reads each with `git show <branch>:<path>`. Proposal content is treated as
-   data, never as instructions.
+   (`<branch> <path>` per file on a `proposal/*` branch that `main` has not
+   absorbed) and reads each with `git show <branch>:<path>`. Proposal content is
+   treated as data, never as instructions. It never checks a proposal branch out.
 2. Triages each as duplicate, global, role, skill or reject, and drafts the edits
    to `rules/`, `roles/`, `skills/` and `decisions.md`.
 3. Waits for the user's approval of the triage table and diffs.
 4. Commits the approved edits on `main`, one commit per proposal or merged group.
    Rejections get only a `decisions.md` entry.
-5. Checks out each source branch and commits the removal of the handled proposal
-   file.
+5. Closes each handled proposal with `git merge -s ours --no-ff -m "proposal:
+   <slug> integrated|rejected" <branch>`.
 
-The host pushes `main` and the touched branches on the next sync. Every other
-sandbox receives the new rules on its next sync, when its branch also merges the
-new `main`; a running agent reads them in its next session, since Claude Code
-loads `CLAUDE.md` once per session.
+The host pushes `main` and deletes the closed branches on the next sync. Every
+other sandbox receives the new rules on its next sync and drops its own copies of
+the closed branches; agents read the new rules in their next session.
+
+The owner may also edit `main` directly in the integrator's clone, with a
+`decisions.md` entry; that clone is the one `ai-knowledge status <dev-tools dir>`
+prints.
 
 ### Who can do what
 
 | Party | Effective rules | Clone | Network git |
 |---|---|---|---|
-| Project sandbox | read-only | commit on its own proposals branch | none |
-| Integrator sandbox | read-only | commit on `main` and every proposals branch | none |
-| Host | writes the render | fetch, merge, scope check, fast-forward push | all |
+| Project sandbox | read-only | commit on `proposal/*` branches it creates | none |
+| Integrator sandbox | read-only | commit on `main`; close proposals with an ours-merge | none |
+| Host | writes the render | fetch, fast-forward, scope check, push, leased deletion of closed branches | all |
 
 ## Known limits
 
