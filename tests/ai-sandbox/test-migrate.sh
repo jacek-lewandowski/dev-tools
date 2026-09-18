@@ -115,4 +115,15 @@ assert_file     "newer store untouched"          "$AI_SANDBOX_ROOT/late-agent"
 assert_eq       "newer marker not overwritten"   "$(cat "$AI_SANDBOX_ROOT/.schema-version")" '99'
 rm -rf "$tmpS"
 
+# --- the installed knowledge seed is refreshed from the recorded checkout
+fake_home >/dev/null; tmpK="$FAKE_HOME_DIR"
+printf 'DEV_TOOLS_DIR=%s\n' "$REPO_ROOT" > "$AI_SANDBOX_ROOT/config"
+mkdir -p "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule"
+echo stale > "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"
+echo junk > "$AI_SANDBOX_ROOT/bin/knowledge-seed/leftover.md"
+bash "$REPO_ROOT/bin/ai/ai-sandbox-migrate" >/dev/null 2>&1
+assert_eq "installed seed refreshed" "$(cmp -s "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md" "$REPO_ROOT/bin/ai/knowledge-seed/skills/propose-rule/SKILL.md" && echo same || echo differs)" same
+# (deletion of stale seed files is rsync --delete, which the suite's stub rsync does not model)
+rm -rf "$tmpK"
+
 finish

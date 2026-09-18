@@ -268,6 +268,7 @@ assert_contains "doctor reports knowledge" "$(cat "$AI_SANDBOX_ROOT/image/build/
 assert_contains "doctor lists proposal branches" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'proposal/'
 assert_eq "sandbox block no longer names a per-sandbox branch" "$(grep -c 'proposals/<project-id>' "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" 0
 assert_contains "sandbox block names the proposal branch pattern" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "proposal/<date>-<slug>-<hex>"
+assert_file "seed installed beside the helper" "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"
 assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" "Shared knowledge repository"
 
 assert_contains "create stamps SANDBOX_KNOWLEDGE=1" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=1'
@@ -339,6 +340,7 @@ rm -rf "$tdir"
 # --- status without an argument lists every sandbox with its state
 all=$(knowledge status 2>&1)
 assert_contains "status keeps the remote header" "$all" "remote:      file://$remote"
+assert_contains "status names the integrator clone" "$all" "clone (integrator): $idir/knowledge"
 assert_contains "status lists a current sandbox" "$all" "fab-a-agent"
 assert_contains "status marks the stale one" "$(printf '%s\n' "$all" | grep fab-b-agent)" "stale"
 assert_contains "status marks the unstamped one" "$(printf '%s\n' "$all" | grep fab-c-agent)" "unstamped"
@@ -460,6 +462,45 @@ out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
 assert_eq "second run has nothing to convert" "$r" 0
 assert_contains "second run says so" "$out" "nothing to convert"
 rm -f "$sdir/knowledge/wip.txt"; git -C "$sdir/knowledge" checkout -q main; git -C "$sdir/knowledge" branch -q -D proposals/dirty-0000
+# --- init on a host with only the installed helper seeds from the seed beside it (phase 4)
+remote2="$tmp/remote2.git"; git init -q --bare "$remote2"
+home2="$tmp/home2"; mkdir -p "$home2/.gemini"
+out=$(HOME="$home2" AI_SANDBOX_ROOT="$home2/.ai-sandbox" bash "$AI_SANDBOX_ROOT/bin/ai-knowledge" init "file://$remote2" 2>&1) && r=0 || r=$?
+assert_eq "installed helper inits without a dev-tools checkout" "$r" 0
+assert_contains "second remote seeded from the installed seed" "$(git -C "$remote2" ls-tree --name-only main | tr '\n' ' ')" "skills"
+assert_file "second remote has the propose-rule skill" "$home2/.ai-sandbox/knowledge/main/skills/propose-rule/SKILL.md"
+
+# --- the integrator is recorded in README.md on main; a second host is warned
+assert_contains "integrator recorded on main" "$(git -C "$remote" show main:README.md)" "ai-knowledge integrator: $(hostname):$integ"
+kinit() {   # <home> [init args...]: init in another HOME against the first remote
+    local h=$1; shift
+    mkdir -p "$h/.gemini"
+    HOME="$h" AI_SANDBOX_ROOT="$h/.ai-sandbox" bash "$REPO_ROOT/bin/ai/ai-knowledge" init "file://$remote" "$@" 2>&1
+}
+home3="$tmp/home3"; mkdir -p "$home3/.gemini"; other="$tmp/work/other-integ"; mkdir -p "$other"
+git -C "$AI_KNOWLEDGE_ROOT/main" show origin/main:rules/global.md > "$home3/.gemini/GEMINI.md"
+out=$(kinit "$home3" --integrator "$other" </dev/null) || true
+assert_contains "second integrator host is warned" "$out" "already"
+assert_eq "recorded integrator unchanged" "$(git -C "$remote" show main:README.md | grep -c "ai-knowledge integrator: $(hostname):$integ")" 1
+assert_eq "no second integrator line" "$(git -C "$remote" show main:README.md | grep -c 'ai-knowledge integrator:')" 1
+assert_eq "identical GEMINI.md prints no drift prompt" "$(printf '%s\n' "$out" | grep -c 'File this difference')" 0
+
+# --- init shows GEMINI.md drift and offers to file it as a proposal
+home4="$tmp/home4"; mkdir -p "$home4/.gemini"
+{ git -C "$AI_KNOWLEDGE_ROOT/main" show origin/main:rules/global.md; echo '- host-only rule'; } > "$home4/.gemini/GEMINI.md"
+out=$(printf 'y\n' | kinit "$home4") || true
+assert_contains "drift shown as a diff" "$out" "+- host-only rule"
+drift=$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -- "-gemini-md-" | head -1)
+assert_contains "drift filed as a proposal branch" "$drift" "gemini-md-"
+assert_contains "drift proposal holds the diff" "$(git -C "$remote" show "$drift:proposals/$today-gemini-md-$(ai_sandbox_slug "$(hostname)").md")" '```diff'
+assert_contains "drift proposal names the machine" "$(git -C "$remote" show "$drift:proposals/$today-gemini-md-$(ai_sandbox_slug "$(hostname)").md")" "machine: $(hostname)"
+assert_file "drifting GEMINI.md still backed up" "$(ls "$home4"/.gemini/GEMINI.md.pre-ai-knowledge.* 2>/dev/null | head -1)"
+assert_contains "plain init names the recorded integrator" "$out" "integrator: $(hostname):$integ"
+home5="$tmp/home5"; mkdir -p "$home5/.gemini"
+{ git -C "$AI_KNOWLEDGE_ROOT/main" show origin/main:rules/global.md; echo '- another host-only rule'; } > "$home5/.gemini/GEMINI.md"
+out=$(kinit "$home5" </dev/null) || true
+assert_contains "without a terminal the command to file it is printed" "$out" "ai-knowledge propose"
+assert_eq "without a terminal nothing is filed" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -- '-gemini-md-')" 1
 # --- ssh remotes: a refused key is loaded into an agent, started when needed
 export SSH_STUB_LOADED="$tmp/ssh-loaded" SSH_STUB_AGENT="$tmp/ssh-agent.sock" SSH_STUB_LOG="$tmp/ssh.log" SSH_STUB_KEY="$tmp/id_test"
 : > "$SSH_STUB_KEY"; : > "$SSH_STUB_LOG"; rm -f "$SSH_STUB_LOADED" "$SSH_STUB_AGENT"
