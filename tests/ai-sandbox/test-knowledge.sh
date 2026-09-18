@@ -300,8 +300,14 @@ assert_eq "stale sandbox fails the prerequisite" "$r" 1
 assert_contains "refusal names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
 assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
 assert_contains "stale refusal explains the mismatch" "$msg" "disagrees"
+assert_contains "stale refusal names the single-sandbox repair with the stamped project" "$msg" "create-ai-sandbox.sh $tmp/work/fab-b"
 msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-c-agent" 2>&1) || true
 assert_contains "unstamped refusal explains the missing stamp" "$msg" "before the knowledge stamp"
+assert_contains "unstamped refusal without a recoverable project shows a placeholder" "$msg" "create-ai-sandbox.sh <project dir>"
+printf '%s\n' "$tmp/work/fab-c" > "$AI_SANDBOX_ROOT/fab-c-agent/project-path"
+msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-c-agent" 2>&1) || true
+assert_contains "unstamped refusal falls back to project-path" "$msg" "create-ai-sandbox.sh $tmp/work/fab-c"
+rm -f "$AI_SANDBOX_ROOT/fab-c-agent/project-path"
 # --- _sync-clone syncs one clone and never renders (phase 2)
 knowledge _sync-clone "$proj" "$pdir" >"$tmp/one.out" 2>&1 || cat "$tmp/one.out"
 assert_contains "_sync-clone leaves the clone ok" "$(cat "$clone/.sync-status")" "ok"
@@ -357,14 +363,23 @@ stale="$tmp/work/stale"; mkdir -p "$stale"; git -C "$stale" init -q
 sdir=$(ai_sandbox_dir_for "$stale"); mkdir -p "$sdir"
 printf 'services: {}\n' > "$sdir/docker-compose.yml"
 printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$stale" > "$sdir/.env"
+# a running container is entered whatever its stamp: the check guards only the start
 : > "$DOCKER_STUB_LOG"
-msg=$(cd "$stale" && bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
-assert_eq "ai-sandbox refuses a stale sandbox" "$r" 1
+msg=$(cd "$stale" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox enters a running stale sandbox" "$r" 0
+assert_contains "entering a running stale sandbox goes through compose" "$(stub_docker_log)" "compose"
+assert_contains "entering a running stale sandbox execs into it" "$(stub_docker_log)" "exec"
+assert_eq "no compose up for a running stale sandbox" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$stale" && DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox refuses to start a stale sandbox" "$r" 1
 assert_contains "ai-sandbox names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
+assert_contains "ai-sandbox names create-ai-sandbox.sh with the project directory" "$msg" "create-ai-sandbox.sh $stale"
 assert_eq "no compose call for a refused start" "$(grep -c compose "$DOCKER_STUB_LOG")" 0
-msg=$(cd "$stale" && bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" 2>&1) && r=0 || r=$?
-assert_eq "ai-sandbox-restart refuses a stale sandbox" "$r" 1
+msg=$(cd "$stale" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox-restart refuses a running stale sandbox" "$r" 1
 assert_eq "no compose down for a refused restart" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
+assert_contains "restart refusal names create-ai-sandbox.sh with the project directory" "$msg" "create-ai-sandbox.sh $stale"
 : > "$DOCKER_STUB_LOG"
 out=$(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1) && r=0 || r=$?
 assert_eq "print-context works on a current sandbox" "$r" 0

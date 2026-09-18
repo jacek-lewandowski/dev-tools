@@ -14,11 +14,6 @@ if [ "${1:-}" = "--print-context" ]; then
     exit 0
 fi
 
-# A sandbox whose compose file predates the host's knowledge configuration
-# would mount the rules read-write; it is refused here and repaired only by the
-# separate migration script.
-ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
-
 # Knowledge sync before the container comes up, so the rules it reads are the
 # current main and its proposals reach the remote. Never blocks the start.
 if ai_knowledge_configured; then
@@ -30,6 +25,10 @@ if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
     "$AI_SANDBOX_DIR/start-display.sh" || exit 1
 fi
 if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null)" != "true" ]; then
+    # A sandbox whose compose file predates the host's knowledge configuration
+    # would mount the rules read-write, so it is refused only here, where it
+    # would come up; a running container is entered whatever its stamp.
+    ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
     ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
     echo "Starting $AI_SANDBOX_NAME..."
     ai_sandbox_compose up -d || exit 1

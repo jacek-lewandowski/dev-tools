@@ -97,12 +97,15 @@ ai_sandbox_knowledge_state() {
 }
 
 # The start path only checks; it never rewrites a sandbox. The repair is a
-# separate, disposable script run from the dev-tools checkout.
+# plain create-ai-sandbox.sh run for this sandbox; the disposable migration
+# script from the dev-tools checkout is the shortcut for every sandbox at once.
 ai_sandbox_require_current() {   # <sandbox dir>
-    local state dev_tools=""
+    local state dev_tools="" project
     state=$(ai_sandbox_knowledge_state "$1")
     [ "$state" = current ] && return 0
     [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
+    project=$(ai_sandbox_env_value "$1" SANDBOX_PROJECT_DIR)
+    if [ -z "$project" ] && [ -f "$1/project-path" ]; then project=$(head -1 "$1/project-path"); fi
     {
         if [ "$state" = stale ]; then
             echo "Sandbox $(basename "$1") is stale: its compose file disagrees with the host's knowledge configuration."
@@ -110,6 +113,8 @@ ai_sandbox_require_current() {   # <sandbox dir>
             echo "Sandbox $(basename "$1") is unstamped: it was created before the knowledge stamp existed."
         fi
         echo "It cannot be started until it has been recreated. Run on the host:"
+        echo "    create-ai-sandbox.sh ${project:-<project dir>}"
+        echo "To recreate every stale or unstamped sandbox at once instead:"
         echo "    ${dev_tools:-<dev-tools checkout>}/bin/ai/ai-sandbox-migrate-knowledge"
     } >&2
     return 1
