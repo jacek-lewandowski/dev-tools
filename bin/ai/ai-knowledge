@@ -740,7 +740,11 @@ sync_clone() {
     if [ "$role" = integrator ]; then
         out=$(git -C "$CLONE" ls-tree -r --name-only main -- proposals/ 2>/dev/null \
             | { grep '\.md$' || true; } | { grep -v '/README\.md$' || true; })
-        [ -z "$out" ] || warn "main carries proposal files ($(printf '%s' "$out" | tr '\n' ' ')): a proposal branch was merged for real, not with -s ours; see the doc on re-opening a closed proposal"
+        if [ -n "$out" ]; then
+            warn "main carries proposal files ($(printf '%s' "$out" | tr '\n' ' ')): a proposal branch was merged for real, not with -s ours; every sync reports it as empty and keeps it"
+            warn "  finish by hand: remove the file on main with a normal commit and a decisions.md entry, then delete the branch:"
+            warn "  git -C ~/knowledge branch -D <branch>   and on the host   git -C ~/.ai-sandbox/knowledge/main push origin :refs/heads/<branch>"
+        fi
     fi
 
     while IFS= read -r b; do

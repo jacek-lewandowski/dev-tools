@@ -338,21 +338,35 @@ checkout or file removal is needed. The proposal text stays reachable with
 ### Re-opening a closed proposal
 
 A closed proposal's branch is gone, but its file is still in `main`'s history,
-on the second parent of the merge that closed it. To open it again, take the
-file from there and file it as a new proposal from the host:
+on the second parent of the merge that closed it. Only the host can file a new
+proposal, and the host has no `~/knowledge`; its checkout of `main` is
+`~/.ai-sandbox/knowledge/main`. Sync first so that checkout carries the merge,
+then take the file from there and file it again:
 
 ```bash
-git -C ~/knowledge show <merge commit>^2:proposals/<file> > /tmp/f.md   # in the integrator sandbox, or from ~/.ai-sandbox/knowledge/main on the host
-ai-knowledge propose /tmp/f.md --push                                    # on the host
+ai-knowledge sync --all
+git -C ~/.ai-sandbox/knowledge/main show <merge commit>^2:proposals/<file> > ~/.ai-sandbox/knowledge/reopen-<slug>.md
+ai-knowledge propose ~/.ai-sandbox/knowledge/reopen-<slug>.md --push
 ```
+
+Inside the integrator sandbox an agent can only extract the text, with
+`git -C ~/knowledge show <merge commit>^2:proposals/<file>`, and hand it to the
+user. The sandbox's `/tmp` is not the host's, so a file written there is not
+visible to `ai-knowledge propose`.
 
 Close proposals with `-s ours` only. A plain `git merge <branch>` puts the
 proposal file on `main` for good: every clone and the render carry it, and the
 integrator's next sync warns that `main carries proposal files` because `a
-proposal branch was merged for real`. To fix it, remove the file from `main`
-with a normal commit in the integrator's clone (`git rm proposals/<file>`), add
-a `decisions.md` entry saying what happened, and let the next sync push. Never
-rewrite `main` to undo the merge.
+proposal branch was merged for real`. When `main` had not moved, that merge is
+a fast-forward: the branch tip lands on `main`'s first-parent chain, every sync
+reports the branch as `empty`, keeps it on the remote and in every clone, and
+`ai-knowledge proposals` hides it. To fix it, remove the file from `main` with a
+normal commit in the integrator's clone (`git rm proposals/<file>`), add a
+`decisions.md` entry saying what happened, and let the next sync push. Then
+delete the branch by hand; the sync never does it for a tip on the first-parent
+chain. In the integrator clone: `git -C ~/knowledge branch -D <branch>`. On the
+host: `git -C ~/.ai-sandbox/knowledge/main push origin :refs/heads/<branch>`.
+Never rewrite `main` to undo the merge.
 
 ### 7. Container mounts
 
