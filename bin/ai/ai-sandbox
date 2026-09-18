@@ -14,6 +14,11 @@ if [ "${1:-}" = "--print-context" ]; then
     exit 0
 fi
 
+# A sandbox whose compose file predates the host's knowledge configuration
+# would mount the rules read-write; it is refused here and repaired only by the
+# separate migration script.
+ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
+
 # Knowledge sync before the container comes up, so the rules it reads are the
 # current main and its proposals reach the remote. Never blocks the start.
 if ai_knowledge_configured; then
