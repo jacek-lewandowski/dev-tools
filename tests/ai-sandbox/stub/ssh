@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Stands in for ssh. '-G host' prints the key the test configured. Otherwise it
+# is git's transport to an ssh://stub/<path> remote: it refuses with the
+# public-key text until the test's "loaded" marker exists, then runs the
+# command git passed (git-upload-pack '/path') locally.
+set -uo pipefail
+if [ "${1:-}" = -G ]; then printf 'identityfile %s\n' "${SSH_STUB_KEY:-~/.ssh/id_stub}"; exit 0; fi
+args=()
+while [ $# -gt 0 ]; do
+    case $1 in -o|-p|-i|-l) shift 2 ;; -*) shift ;; *) args+=("$1"); shift ;; esac
+done
+if [ ! -f "${SSH_STUB_LOADED:-/nonexistent}" ]; then
+    echo "git@stub: Permission denied (publickey)." >&2
+    exit 255
+fi
+exec sh -c "${args[1]}"

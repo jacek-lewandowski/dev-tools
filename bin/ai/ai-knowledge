@@ -23,6 +23,11 @@ HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # set -e ends the script on any unguarded failure; without this it would do so
 # silently and leave a stale .sync-status behind.
 trap 'printf "!! ai-knowledge: unexpected error at line %s\n" "$LINENO" >&2' ERR
+# An ssh-agent this process started dies with it, however it ends. The flag is
+# a plain variable: children of 'sync --all' inherit the exported agent
+# variables but not this, so they never kill the parent's agent.
+AGENT_STARTED=""
+trap '[ -z "$AGENT_STARTED" ] || ssh-agent -k >/dev/null 2>&1 || true' EXIT
 . "$HERE/ai-sandbox-lib.sh"
 
 KNOWLEDGE_MAIN="$AI_KNOWLEDGE_ROOT/main"
@@ -77,6 +82,50 @@ print_hints() {   # [project dir]
     for c in "${HINT_PUSH[@]+"${HINT_PUSH[@]}"}"; do printf '     %s\n' "$c" >&2; done
 }
 
+# Network git cannot answer a passphrase prompt. When the remote refuses the
+# key, load it into the user's agent for an hour, or into an agent started for
+# this run when a terminal is present; without either, the offline path stays.
+# The caller ignores the result: git_net runs either way and reports as before.
+ensure_ssh_access() {   # <remote url>
+    local url=$1 rest hostpart host user="" port="" rc=0 out target k keys=()
+    case $url in
+        ssh://*) rest=${url#ssh://}; hostpart=${rest%%/*} ;;
+        *://*)   return 0 ;;                       # https, file, git: no key involved
+        *:*)     hostpart=${url%%:*}; case $hostpart in */*) return 0 ;; esac ;;   # scp-like user@host:path
+        *)       return 0 ;;                       # local path
+    esac
+    case $hostpart in *@*) user=${hostpart%%@*}; hostpart=${hostpart#*@} ;; esac
+    case $hostpart in *:*) port=${hostpart##*:}; hostpart=${hostpart%%:*} ;; esac
+    host=$hostpart; target=${user:+$user@}$host
+
+    out=$(git_net ls-remote -q "$url" HEAD 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || return 0
+    printf '%s' "$out" | grep -q -E 'Permission denied|publickey' || return 0
+
+    while IFS= read -r k; do
+        k=${k/#\~/$HOME}
+        [ -f "$k" ] && keys+=("$k")
+    done < <(ssh -G ${port:+-p "$port"} "$target" 2>/dev/null | sed -n 's/^identityfile //p' || true)
+
+    rc=0; ssh-add -l >/dev/null 2>&1 || rc=$?
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ "$rc" -ne 2 ]; then
+        warn "$host refused the ssh key. Adding it to your ssh-agent for one hour (a passphrase prompt may follow)."
+        ssh-add -t 3600 "${keys[@]+"${keys[@]}"}" || { warn "ssh-add failed; continuing offline"; return 0; }
+    elif [ -t 0 ]; then
+        warn "$host refused the ssh key and no ssh-agent is running. Starting one for this run only;"
+        warn "it is removed when ai-knowledge exits (a passphrase prompt may follow)."
+        eval "$(ssh-agent -s)" >/dev/null || { warn "ssh-agent failed to start; continuing offline"; return 0; }
+        AGENT_STARTED=yes
+        ssh-add -t 3600 "${keys[@]+"${keys[@]}"}" || { warn "ssh-add failed; continuing offline"; return 0; }
+    else
+        warn "$host refused the ssh key; no ssh-agent and no terminal to ask for a passphrase. Continuing offline."
+        return 0
+    fi
+    rc=0; git_net ls-remote -q "$url" HEAD >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 0 ] || warn "$host still refuses the key after loading it; continuing offline"
+    return 0
+}
+
 REMOTE=""; INTEGRATOR=""
 read_config() { sed -n "s/^$1=//p" "$AI_KNOWLEDGE_CONFIG" | head -1; }
 load_config() {
@@ -123,6 +172,7 @@ cmd_init() {
     printf 'REMOTE=%s\nINTEGRATOR=%s\n' "$remote" "$integrator" > "$AI_KNOWLEDGE_CONFIG"
     log "config: $AI_KNOWLEDGE_CONFIG"
     REMOTE=$remote; INTEGRATOR=$integrator
+    ensure_ssh_access "$REMOTE"
 
     if [ ! -d "$KNOWLEDGE_MAIN/.git" ]; then
         rm -rf "$KNOWLEDGE_MAIN"
@@ -144,7 +194,7 @@ cmd_init() {
         || warn "$remote has no 'main' branch; ai-knowledge follows main only"
     cmd_render
     print_hints
-    log "done. Sandboxes pick the knowledge up on their next start."
+    log "done. Sandboxes pick the knowledge up on their next sync (a start, or 'ai-knowledge sync --all'); agents in their next session."
 }
 
 # An empty remote gets the seed directory plus the host's current global rules
@@ -543,6 +593,7 @@ cmd_sync() {
         return 0
     fi
     load_config
+    ensure_ssh_access "$REMOTE"
     [ "${1:-}" != --all ] || { cmd_sync_all; return 0; }
     sync_main || return 0
     cmd_render

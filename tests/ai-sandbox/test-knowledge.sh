@@ -296,6 +296,48 @@ out=$(migrate 2>&1) && r=0 || r=$?
 assert_eq "nothing to migrate exits 0" "$r" 0
 assert_contains "nothing to migrate says so" "$out" "nothing to migrate"
 
+# --- ssh remotes: a refused key is loaded into an agent, started when needed
+export SSH_STUB_LOADED="$tmp/ssh-loaded" SSH_STUB_AGENT="$tmp/ssh-agent.sock" SSH_STUB_LOG="$tmp/ssh.log" SSH_STUB_KEY="$tmp/id_test"
+: > "$SSH_STUB_KEY"; : > "$SSH_STUB_LOG"; rm -f "$SSH_STUB_LOADED" "$SSH_STUB_AGENT"
+sshremote="ssh://stub$remote"
+sed -i "s|^REMOTE=.*|REMOTE=$sshremote|" "$AI_KNOWLEDGE_CONFIG"
+for r in "$AI_KNOWLEDGE_ROOT/main" "$clone" "$iclone"; do git -C "$r" remote set-url origin "$sshremote"; done
+unset SSH_AUTH_SOCK
+knowledge sync "$proj" >"$tmp/ssh1.out" 2>&1 </dev/null || true
+assert_contains "no agent, no terminal: offline" "$(cat "$clone/.sync-status")" offline
+assert_no_file "no agent started without a terminal" "$SSH_STUB_AGENT"
+assert_eq "no key added without an agent" "$(grep -c 'ssh-add -t' "$SSH_STUB_LOG")" 0
+export SSH_AUTH_SOCK="$tmp/user-agent.sock"; : > "$SSH_AUTH_SOCK"
+knowledge sync "$proj" >"$tmp/ssh2.out" 2>&1 </dev/null || true
+assert_contains "existing agent: key loaded, sync ok" "$(cat "$clone/.sync-status")" ok
+assert_contains "key added with a one hour lifetime" "$(cat "$SSH_STUB_LOG")" "ssh-add -t 3600 $SSH_STUB_KEY"
+assert_eq "the user's agent is not killed" "$(grep -c 'ssh-agent -k' "$SSH_STUB_LOG")" 0
+assert_contains "user told the key went into their agent" "$(cat "$tmp/ssh2.out")" "one hour"
+unset SSH_AUTH_SOCK; rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
+if command -v script >/dev/null 2>&1; then
+    script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$proj'" /dev/null >"$tmp/ssh3.out" 2>&1 || true
+    assert_contains "terminal: agent started, sync ok" "$(cat "$clone/.sync-status")" ok
+    assert_contains "terminal: agent started" "$(cat "$SSH_STUB_LOG")" "ssh-agent -s"
+    assert_contains "terminal: agent killed at exit" "$(cat "$SSH_STUB_LOG")" "ssh-agent -k"
+    assert_no_file "terminal: agent marker gone after the run" "$SSH_STUB_AGENT"
+    rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
+    script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$tmp/nonexistent'" /dev/null >/dev/null 2>&1 || true
+    assert_contains "die: agent had been started" "$(cat "$SSH_STUB_LOG")" "ssh-agent -s"
+    assert_no_file "die: agent killed anyway" "$SSH_STUB_AGENT"
+    rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
+    script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync --all" /dev/null >/dev/null 2>&1 || true
+    assert_contains "all under a started agent: project ok" "$(cat "$clone/.sync-status")" ok
+    assert_contains "all under a started agent: integrator ok" "$(cat "$iclone/.sync-status")" ok
+    assert_eq "all: agent killed once, by the parent only" "$(grep -c 'ssh-agent -k' "$SSH_STUB_LOG")" 1
+else
+    echo "# script(1) missing: pseudo-terminal cases skipped"
+fi
+: > "$SSH_STUB_LOG"
+sed -i "s|^REMOTE=.*|REMOTE=file://$remote|" "$AI_KNOWLEDGE_CONFIG"
+for r in "$AI_KNOWLEDGE_ROOT/main" "$clone" "$iclone"; do git -C "$r" remote set-url origin "file://$remote"; done
+knowledge sync "$proj" >/dev/null 2>&1 </dev/null || true
+assert_eq "a file remote never touches ssh, ssh-add or ssh-agent" "$(wc -l < "$SSH_STUB_LOG")" 0
+unset SSH_STUB_LOADED SSH_STUB_AGENT SSH_STUB_LOG SSH_STUB_KEY
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"
