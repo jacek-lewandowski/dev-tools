@@ -821,7 +821,9 @@ cmd_propose() {
     fi
     local date path tmp idx blob tree commit branch identity=()
     date=$(date +%F); path="proposals/$date-$slug.md"
-    tmp=$(mktemp)
+    tmp=$(mktemp); idx=$(mktemp); rm -f "$idx"
+    # set -e would leave the temp files behind on a failure below.
+    trap 'rm -f "$tmp" "$idx"' RETURN
     # Frontmatter keys the caller knows (project_id, machine, project) are added
     # when the file lacks them; an existing key wins.
     SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 - <<'PYFM'
@@ -839,14 +841,13 @@ open(os.environ["DST"], "w", encoding="utf-8").write(text if text.endswith("\n")
 PYFM
     git -C "$repo" config user.email >/dev/null 2>&1 \
         || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
-    idx=$(mktemp); rm -f "$idx"
     GIT_INDEX_FILE=$idx git -C "$repo" read-tree origin/main
     blob=$(git -C "$repo" hash-object -w "$tmp")
     GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path"
     tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree)
     commit=$(git -C "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p origin/main -m "proposal: $slug")
-    rm -f "$idx" "$tmp"
     branch="proposal/$date-$slug-${commit:0:4}"
+    [[ $branch =~ $PROPOSAL_RE ]] || die "slug '$slug' does not make a valid branch name ($branch); use lowercase letters, digits and dashes"
     git -C "$repo" update-ref "refs/heads/$branch" "$commit"
     if [ "$push" = yes ]; then
         local rc=0 out
@@ -866,7 +867,10 @@ case "${1:-}" in
     render)    cmd_render ;;
     status)    shift; cmd_status "$@" ;;
     proposals) shift; cmd_proposals "$@" ;;
-    propose)   shift; load_config; ensure_ssh_access "$REMOTE"; cmd_propose "$@" ;;
+    propose)   shift; load_config
+               # Only a push touches the network; a local branch needs no key.
+               case " $* " in *" --push "*) ensure_ssh_access "$REMOTE" ;; esac
+               cmd_propose "$@" ;;
     -h|--help|help) usage ;;
     '')        usage >&2; exit 2 ;;
     *)         die "unknown command: $1 (try: ai-knowledge --help)" ;;

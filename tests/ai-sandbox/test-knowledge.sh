@@ -429,11 +429,21 @@ printf -- '---\nscope: global\n---\n\n# gamma\n\nunpushed\n' > "$mdir/knowledge/
 git -C "$mdir/knowledge" add -A; git -C "$mdir/knowledge" commit -q --no-verify -m "gamma"
 # a dirty clone on an old branch is reported and left alone
 git -C "$sdir/knowledge" checkout -q -b proposals/dirty-0000 main; echo wip > "$sdir/knowledge/wip.txt"
+# the remote moved meanwhile: the clone's push is not a fast-forward, so the run stops before anything is deleted
+printf -- '---\nscope: global\n---\n\n# delta\n\nremote side\n' > "$oldc/proposals/oldproj-1234/2026-09-04-delta.md"
+git -C "$oldc" add -A; git -C "$oldc" commit -qm "delta"; git -C "$oldc" push -q origin proposals/oldproj-1234
+out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "unpushable old commit stops the run" "$r" 1
+assert_contains "the stopping clone is named" "$out" "$(basename "$mdir")"
+git -C "$remote" show-ref -q refs/heads/proposals/oldproj-1234 && r=yes || r=no
+assert_eq "nothing deleted when the run stops" "$r" yes
+assert_eq "nothing converted when the run stops" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -E -- '-(alpha|beta|gamma|delta)-')" 0
+git -C "$mdir/knowledge" fetch -q origin; git -C "$mdir/knowledge" merge -q --no-edit origin/proposals/oldproj-1234
 oldtip=$(git -C "$mdir/knowledge" rev-parse HEAD)
 out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
 assert_eq "branch migration succeeds" "$r" 0
-newbranches=$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -E -- '-(alpha|beta|gamma)-' | sort)
-assert_eq "three old proposals became three proposal branches" "$(printf '%s\n' "$newbranches" | grep -c .)" 3
+newbranches=$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -E -- '-(alpha|beta|gamma|delta)-' | sort)
+assert_eq "four old proposals became four proposal branches" "$(printf '%s\n' "$newbranches" | grep -c .)" 4
 gb=$(printf '%s\n' "$newbranches" | grep gamma)
 assert_contains "converted file carries project_id" "$(git -C "$remote" show "$gb:proposals/$today-gamma.md")" "project_id: oldproj-1234"
 assert_contains "converted file carries machine unknown" "$(git -C "$remote" show "$gb:proposals/$today-gamma.md")" "machine: unknown"
