@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Not on PATH by default: a test symlinks it as 'timeout' into a directory it
+# puts first on PATH for one run, so only that run's git_net calls see it.
+# LEASE_STUB_MODE=fetch-fail makes every 'timeout ... git ... fetch ...' exit
+# 128 without a word, the way a git that dies before printing anything does;
+# everything else, and every other mode, runs the real timeout.
+case "${LEASE_STUB_MODE:-}" in
+    fetch-fail)
+        for a in "$@"; do [ "$a" != fetch ] || exit 128; done ;;
+esac
+exec /usr/bin/timeout "$@"
