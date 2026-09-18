@@ -159,6 +159,9 @@ assert_eq "host GEMINI.md still the render symlink after create" "$(readlink "$H
 assert_contains "doctor reports knowledge" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'status "knowledge"'
 assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" "Shared knowledge repository"
 
+assert_contains "create stamps SANDBOX_KNOWLEDGE=1" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=1'
+assert_contains "create records the project dir" "$(cat "$pdir/.env")" "SANDBOX_PROJECT_DIR=$proj"
+assert_contains "stamp passed into the container" "$compose" 'SANDBOX_KNOWLEDGE=${SANDBOX_KNOWLEDGE}'
 # --- knowledge stamps classify a sandbox from its .env (phase 1)
 fab() {   # <name> [env lines...]: a fabricated sandbox directory with a compose file
     local d="$AI_SANDBOX_ROOT/$1-agent"; shift
@@ -191,6 +194,7 @@ bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$other"
 compose=$(cat "$(ai_sandbox_dir_for "$other")/docker-compose.yml")
 assert_contains "live GEMINI.md mount kept without config" "$compose" "$HOME/.gemini/GEMINI.md:$HOME/.gemini/GEMINI.md\""
 assert_eq "no knowledge mounts without config" "$(printf '%s\n' "$compose" | grep -c knowledge)" 0
+assert_contains "create stamps SANDBOX_KNOWLEDGE=0 without config" "$(cat "$(ai_sandbox_dir_for "$other")/.env")" 'SANDBOX_KNOWLEDGE=0'
 assert_no_file "no clone created without config" "$(ai_sandbox_dir_for "$other")/knowledge"
 
 rm -rf "$tmp"
