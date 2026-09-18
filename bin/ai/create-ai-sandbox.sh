@@ -189,8 +189,9 @@ Shared knowledge (optional): after 'ai-knowledge init <private-git-url>
 --integrator <dev-tools dir>' the global rules and roles come from that
 repository instead, rendered read-only into every sandbox as GEMINI.md,
 CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
-gets its own clone at ~/knowledge on a proposals branch, synced by the host on
-every start; the 'propose-rule' skill files a rule for the integrator sandbox.
+gets its own clone at ~/knowledge with main checked out; the 'propose-rule'
+skill commits one file on a proposal/<date>-<slug>-<hex> branch, and the host
+pushes it on the next sandbox start or 'ai-knowledge sync --all'.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
@@ -1381,7 +1382,7 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
            fi ;;
     0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
-    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts (host: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
+    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts; on the host run create-ai-sandbox.sh <project> (every sandbox at once: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
 esac
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
 if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
