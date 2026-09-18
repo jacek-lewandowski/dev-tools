@@ -17,8 +17,10 @@ edit this repository.
 
 ## Branches
 
-- `main` holds the knowledge. Only the integrator sandbox commits to it, after the
-  user approves each change. Every clone has `main` checked out.
+- `main` holds the knowledge. Only the integrator's clone commits to it, after the
+  user approves each change; the one exception is the commit `ai-knowledge init
+  --integrator` makes from the host to record the integrator in this README.
+  Every clone has `main` checked out.
 - `proposal/<date>-<slug>-<hex>` holds one proposal, created from `main` by the
   `propose-rule` skill in any sandbox. It may differ from `main` only under
   `proposals/`; the host refuses to push anything else, and refuses a branch whose

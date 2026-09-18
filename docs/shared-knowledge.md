@@ -35,8 +35,8 @@ Seed content: [bin/ai/knowledge-seed/](../bin/ai/knowledge-seed).
 ### 1. Install the helpers once
 
 Run `create-ai-sandbox.sh` for any project, once per host. It installs
-`ai-knowledge` and the knowledge seed into `~/.ai-sandbox/bin`; nothing else in
-this document needs the dev-tools checkout.
+`ai-knowledge` and the knowledge seed into `~/.ai-sandbox/bin`. Only the one-off
+migration script of step 4 still runs from the dev-tools checkout.
 
 ### 2. Create the private remote
 
@@ -111,10 +111,11 @@ as `pushed` or `pending`.
 
 Repeat steps 1 to 3 with the same remote URL, without `--integrator` unless this
 host is to take over that role. If the host had its own `~/.gemini/GEMINI.md`,
-`init` shows how it differs from `rules/global.md` on `main` and asks whether to
-file the difference as a proposal (`proposal/<date>-gemini-md-<hostname>-<hex>`,
-a fenced diff with the hostname as `machine`); without a terminal it prints the
-`ai-knowledge propose` command to run later. The old file is backed up either
+`init` shows how it differs from `rules/global.md` on `main` and asks on stdin
+whether to file the difference as a proposal
+(`proposal/<date>-gemini-md-<hostname>-<hex>`, a fenced diff with the hostname as
+`machine`); a terminal waits for the answer, anything else gets a short bounded
+read and, with no answer, the `ai-knowledge propose` command to run later. The old file is backed up either
 way. Every proposal has its own branch, so two machines, or two checkouts of one
 project, never share a branch and never conflict.
 
@@ -153,7 +154,8 @@ proposals/README.md      proposal format; a proposal branch adds proposals/<date
 
 Branch `main` holds the knowledge and is written only by the integrator's clone
 (the integrator sandbox, or the owner in that clone, always with a `decisions.md`
-entry). Branch `proposal/<YYYY-MM-DD>-<slug>-<hex>` holds one proposal, created
+entry), with one exception: the single commit `init --integrator` makes from the
+host to record the integrator in `README.md`, which that flag is the approval for. Branch `proposal/<YYYY-MM-DD>-<slug>-<hex>` holds one proposal, created
 from `main`, and may differ from `main` only under `proposals/`. The host refuses
 to push a proposal branch whose name does not follow that pattern.
 

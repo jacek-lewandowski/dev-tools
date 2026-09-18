@@ -204,9 +204,20 @@ cmd_init() {
             exit 1
         fi
         log "cloned $remote -> $KNOWLEDGE_MAIN"
+    else
+        # An existing checkout may be behind: the integrator record and the
+        # drift diff below must read the remote's current main.
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q origin 2>&1) || rc=$?
+        [ "$rc" -eq 0 ] || { net_failed "$rc" "$out"; warn "cannot fetch $remote: $NET_REASON; working from the last fetch"; }
     fi
+    # "Empty" means the remote has no main. A bare remote made with plain
+    # 'git init' points HEAD at a master that never exists, so a clone of a
+    # seeded repository can still have an unborn HEAD; that is not empty.
     local seeded=no
-    if ! git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    if git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
+        git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1 \
+            || git -C "$KNOWLEDGE_MAIN" checkout -q -B main origin/main
+    elif ! git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
         seed_main; seeded=yes
     fi
     git -C "$KNOWLEDGE_MAIN" checkout -q main 2>/dev/null \
@@ -253,7 +264,7 @@ record_integrator() {
             git -C "$KNOWLEDGE_MAIN" merge -q --ff-only origin/main >/dev/null 2>&1 || true
             log "recorded the integrator in README.md on main: $mine"
         else
-            net_failed "$rc" "$out"; warn "could not record the integrator on main: $NET_REASON (run init again online)"
+            net_failed "$rc" "$out"; warn "could not record the integrator on main: $NET_REASON (run 'ai-knowledge sync', then init again)"
         fi
     elif [ "$existing" = "$mine" ]; then
         :
@@ -286,7 +297,10 @@ offer_gemini_drift() {
         printf '# GEMINI.md drift on %s\n\n```diff\n%s\n```\n' "$(hostname)" "$diff"
     } > "$prop"
     printf 'File this difference as a proposal for the integrator? [y/N] ' >&2
-    ans=""; read -r ans || ans=""
+    # A terminal waits for the answer; anything else (a pipe, /dev/null) gets a
+    # bounded read, so an inherited silent pipe cannot hold init forever.
+    ans=""
+    if [ -t 0 ]; then read -r ans || ans=""; else read -r -t 15 ans || ans=""; fi
     case $ans in
         y|Y|yes)
             if branch=$(cmd_propose "$prop" --slug "$slug" --machine "$(hostname)" --project-id host --push); then
@@ -884,12 +898,15 @@ build_commit() {   # <repo> <base ref> <path> <file> <message>
     local repo=$1 base=$2 path=$3 file=$4 msg=$5 idx blob tree identity=()
     git -C "$repo" config user.email >/dev/null 2>&1 \
         || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
+    # No RETURN trap: in bash it stays armed in the caller and fires again there.
     idx=$(mktemp); rm -f "$idx"
-    trap 'rm -f "$idx"' RETURN
-    GIT_INDEX_FILE=$idx git -C "$repo" read-tree "$base"
-    blob=$(git -C "$repo" hash-object -w "$file")
-    GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path"
-    tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree)
+    if ! { GIT_INDEX_FILE=$idx git -C "$repo" read-tree "$base" \
+           && blob=$(git -C "$repo" hash-object -w "$file") \
+           && GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path" \
+           && tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree); }; then
+        rm -f "$idx"; die "cannot build a commit on $base in $repo"
+    fi
+    rm -f "$idx"
     git -C "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p "$base" -m "$msg"
 }
 
@@ -921,10 +938,9 @@ cmd_propose() {
     local date path tmp commit branch
     date=$(date +%F); path="proposals/$date-$slug.md"
     tmp=$(mktemp)
-    # set -e would leave the temp file behind on a failure below.
-    trap 'rm -f "$tmp"' RETURN
     # Frontmatter keys the caller knows (project_id, machine, project) are added
-    # when the file lacks them; an existing key wins.
+    # when the file lacks them; an existing key wins. Cleanup is explicit: a
+    # RETURN trap would stay armed in the caller.
     SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 - <<'PYFM'
 import os
 text = open(os.environ["SRC"], encoding="utf-8").read()
@@ -938,7 +954,9 @@ elif extra:
     text = "---\n" + "\n".join("%s: %s" % (k, v) for k, v in extra) + "\n---\n\n" + text
 open(os.environ["DST"], "w", encoding="utf-8").write(text if text.endswith("\n") else text + "\n")
 PYFM
-    commit=$(build_commit "$repo" origin/main "$path" "$tmp" "proposal: $slug")
+    [ -s "$tmp" ] || { rm -f "$tmp"; die "cannot read $file"; }
+    commit=$(build_commit "$repo" origin/main "$path" "$tmp" "proposal: $slug") || { rm -f "$tmp"; die "cannot build the proposal commit"; }
+    rm -f "$tmp"
     branch="proposal/$date-$slug-${commit:0:4}"
     [[ $branch =~ $PROPOSAL_RE ]] || die "slug '$slug' does not make a valid branch name ($branch); use lowercase letters, digits and dashes"
     git -C "$repo" update-ref "refs/heads/$branch" "$commit"

@@ -22,7 +22,8 @@ README.md on main                       carries one line "<!-- ai-knowledge inte
 ai-knowledge init <url> [--integrator DIR]
                                         on a host whose ~/.gemini/GEMINI.md is a regular file that
                                         differs from rules/global.md (sandbox block stripped): shows
-                                        the unified diff and, with a terminal, asks whether to file it
+                                        the unified diff and asks on stdin (a terminal waits, anything
+                                        else gets a bounded read) whether to file it
                                         as a proposal (slug gemini-md-<hostname>, machine <hostname>,
                                         project_id host, body = the diff in a fenced block); the backup
                                         of the file is kept as today either way
