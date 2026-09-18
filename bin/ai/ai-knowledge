@@ -540,6 +540,8 @@ cmd_sync() {
     print_hints "$project"
 }
 
+# With a project: that sandbox's clone. Without: every sandbox on this host,
+# with the knowledge state the start scripts check (current, stale, unstamped).
 cmd_status() {
     if ! ai_knowledge_configured; then echo "not configured"; return 0; fi
     load_config
@@ -548,10 +550,19 @@ cmd_status() {
         "$(git -C "$KNOWLEDGE_MAIN" rev-parse --short HEAD 2>/dev/null || echo none)" \
         "$AI_KNOWLEDGE_RENDER"
     local project sb
-    project=$(ai_sandbox_project_root "${1:-$PWD}") || return 0
-    sb=$(ai_sandbox_dir_for "$project")
-    printf 'project:     %s\nclone:       %s\nlast sync:   %s\n' \
-        "$project" "$sb/knowledge" "$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)"
+    if [ $# -gt 0 ]; then
+        project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
+        sb=$(ai_sandbox_dir_for "$project")
+        printf 'project:     %s\nclone:       %s\nlast sync:   %s\n' \
+            "$project" "$sb/knowledge" "$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)"
+        return 0
+    fi
+    printf '\n%-45s %-10s %s\n' sandbox state 'project; last sync'
+    while IFS=$'\t' read -r sb project; do
+        [ -n "$sb" ] || continue
+        printf '%-45s %-10s %s; %s\n' "$(basename "$sb")" "$(ai_sandbox_knowledge_state "$sb")" \
+            "${project:-unknown}" "$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)"
+    done < <(ai_sandbox_list)
 }
 
 # For the integrator: '<branch> <path>' per open proposal file, across every
