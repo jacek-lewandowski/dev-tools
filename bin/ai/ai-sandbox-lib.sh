@@ -63,6 +63,53 @@ ai_sandbox_dir_for() {
     printf '%s/%s-agent' "$AI_SANDBOX_ROOT" "$(ai_sandbox_project_id "$1")"
 }
 
+# One value from a sandbox's managed .env; empty when absent.
+ai_sandbox_env_value() {   # <sandbox dir> <key>
+    sed -n "s/^$2=//p" "$1/.env" 2>/dev/null | tail -1
+}
+
+# Every sandbox directory that has a compose file, as "<sandbox dir>\t<project
+# dir>". The project column is empty for a sandbox created before the stamp.
+ai_sandbox_list() {
+    local d
+    for d in "$AI_SANDBOX_ROOT"/*-agent; do
+        [ -f "$d/docker-compose.yml" ] || continue
+        printf '%s\t%s\n' "$d" "$(ai_sandbox_env_value "$d" SANDBOX_PROJECT_DIR)"
+    done
+}
+
+# The knowledge stamp create-ai-sandbox.sh writes: 1 when the compose file
+# carries the knowledge mounts, 0 when it carries the live GEMINI.md mount,
+# nothing for a sandbox created before stamps existed.
+ai_sandbox_knowledge_stamp() { ai_sandbox_env_value "$1" SANDBOX_KNOWLEDGE; }
+
+# current | stale | unstamped: whether the sandbox's compose file matches the
+# host's knowledge configuration. A stale sandbox with knowledge configured
+# mounts the live GEMINI.md, which now resolves to the render, read-write.
+ai_sandbox_knowledge_state() {
+    local stamp want=0
+    stamp=$(ai_sandbox_knowledge_stamp "$1")
+    ai_knowledge_configured && want=1
+    if [ -z "$stamp" ]; then echo unstamped
+    elif [ "$stamp" = "$want" ]; then echo current
+    else echo stale
+    fi
+}
+
+# The start path only checks; it never rewrites a sandbox. The repair is a
+# separate, disposable script run from the dev-tools checkout.
+ai_sandbox_require_current() {   # <sandbox dir>
+    local state dev_tools=""
+    state=$(ai_sandbox_knowledge_state "$1")
+    [ "$state" = current ] && return 0
+    [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
+    {
+        echo "Sandbox $(basename "$1") is $state: its compose file does not match the host's knowledge configuration."
+        echo "It cannot be started until it has been recreated. Run on the host:"
+        echo "    ${dev_tools:-<dev-tools checkout>}/bin/ai/ai-sandbox-migrate-knowledge"
+    } >&2
+    return 1
+}
 # Resolve the sandbox for the current directory. Sets AI_SANDBOX_DIR,
 # AI_SANDBOX_NAME and AI_SANDBOX_PROJECT, or returns 1 with a message.
 ai_sandbox_require_ctx() {

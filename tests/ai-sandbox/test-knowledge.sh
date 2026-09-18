@@ -159,6 +159,31 @@ assert_eq "host GEMINI.md still the render symlink after create" "$(readlink "$H
 assert_contains "doctor reports knowledge" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'status "knowledge"'
 assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" "Shared knowledge repository"
 
+# --- knowledge stamps classify a sandbox from its .env (phase 1)
+fab() {   # <name> [env lines...]: a fabricated sandbox directory with a compose file
+    local d="$AI_SANDBOX_ROOT/$1-agent"; shift
+    mkdir -p "$d"; printf 'services: {}\n' > "$d/docker-compose.yml"
+    printf '%s\n' "$@" > "$d/.env"
+}
+fab fab-a "SANDBOX_KNOWLEDGE=1" "SANDBOX_PROJECT_DIR=$tmp/work/fab-a"
+fab fab-b "SANDBOX_KNOWLEDGE=0" "SANDBOX_PROJECT_DIR=$tmp/work/fab-b"
+fab fab-c "HOST_UID=1"
+mkdir -p "$AI_SANDBOX_ROOT/fab-d-agent"   # no compose file: not a sandbox
+assert_eq "stamp read" "$(ai_sandbox_knowledge_stamp "$AI_SANDBOX_ROOT/fab-a-agent")" 1
+assert_eq "missing stamp is empty" "$(ai_sandbox_knowledge_stamp "$AI_SANDBOX_ROOT/fab-c-agent")" ""
+assert_eq "stamp 1 is current when configured" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-a-agent")" current
+assert_eq "stamp 0 is stale when configured" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-b-agent")" stale
+assert_eq "no stamp is unstamped" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-c-agent")" unstamped
+listing=$(ai_sandbox_list)
+assert_contains "list carries the project dir" "$listing" "$(printf '%s\t%s' "$AI_SANDBOX_ROOT/fab-a-agent" "$tmp/work/fab-a")"
+assert_contains "list has an empty project for unstamped" "$listing" "$(printf '%s\t' "$AI_SANDBOX_ROOT/fab-c-agent")"
+assert_eq "directories without a compose file are not listed" "$(printf '%s\n' "$listing" | grep -c fab-d)" 0
+ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-a-agent" 2>/dev/null && r=0 || r=$?
+assert_eq "current sandbox passes the prerequisite" "$r" 0
+msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-b-agent" 2>&1) && r=0 || r=$?
+assert_eq "stale sandbox fails the prerequisite" "$r" 1
+assert_contains "refusal names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
+assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"
