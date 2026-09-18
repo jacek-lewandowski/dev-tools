@@ -80,10 +80,14 @@ ai-knowledge status                                  # every sandbox: current | 
 <dev-tools>/bin/ai/ai-sandbox-migrate-knowledge      # stop and recreate each stale or unstamped one
 ```
 
-It recovers the project of an unstamped sandbox from the project mount in its
-compose file, refuses the whole run if any project directory is gone, and
-forwards extra arguments to `create-ai-sandbox.sh`. Once `ai-knowledge status`
-shows every sandbox as `current`, delete the script; nothing else refers to it.
+It recovers the project of an unstamped sandbox from its `project-path` file or
+the project mount in its compose file, refuses the whole run if any project
+directory is gone, forwards extra arguments to `create-ai-sandbox.sh`, and
+recreates with `--no-start`, so migrated sandboxes stay stopped and the running
+cap cannot end the run halfway; start each with `ai-sandbox` when needed. A
+sandbox whose recreation fails is listed under `failed:` and the run exits 1;
+the others are still migrated. Once `ai-knowledge status` shows every sandbox as
+`current`, delete the script; nothing else refers to it.
 
 Inside a container, `sandbox-doctor` tells the cases apart: "not configured on the
 host", "NOT migrated", or the last sync line.

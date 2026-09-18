@@ -14,15 +14,19 @@ HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 
 warn() { printf '!! %s\n' "$*" >&2; }
 
-# A sandbox without a stamp mounts its project at the project's own path. Of
-# the self-mounts in its compose file, the project is the one whose sandbox
-# directory is this one; other self-mounts (GEMINI.md) fail that check.
+# A sandbox without a stamp names its project in project-path (written by
+# ai-sandbox-migrate on every start) or, older still, mounts it at the
+# project's own path. Either way the candidate must map back to this sandbox
+# directory; other self-mounts (GEMINI.md) fail that check.
 recover_project() {   # <sandbox dir>
     local sb=$1 p
     while IFS= read -r p; do
         [ -n "$p" ] || continue
         if [ "$(ai_sandbox_dir_for "$p")" = "$sb" ]; then printf '%s\n' "$p"; return 0; fi
-    done < <(sed -n 's/^[[:space:]]*- *"\([^":]*\):\1"$/\1/p' "$sb/docker-compose.yml")
+    done < <(
+        [ -f "$sb/project-path" ] && head -1 "$sb/project-path"
+        sed -n 's/^[[:space:]]*- *"\([^":]*\):\1"$/\1/p' "$sb/docker-compose.yml"
+    )
     return 1
 }
 
@@ -56,7 +60,7 @@ if [ ${#TODO_DIRS[@]} -eq 0 ]; then
     exit 0
 fi
 
-MIGRATED=()
+MIGRATED=(); FAILED=()
 for i in "${!TODO_DIRS[@]}"; do
     sb=${TODO_DIRS[$i]}; project=${TODO_PROJECTS[$i]}
     echo "== $(basename "$sb"): stopping, then recreating for $project"
@@ -64,11 +68,22 @@ for i in "${!TODO_DIRS[@]}"; do
     # down before the new compose file exists, whatever 'up' would have done.
     docker compose -f "$sb/docker-compose.yml" --env-file "$sb/.env" down \
         || warn "compose down failed for $(basename "$sb"); continuing"
-    "$HERE/create-ai-sandbox.sh" "$@" "$project"
-    MIGRATED+=("$(basename "$sb")")
+    # --no-start: recreated sandboxes stay stopped, so the running cap cannot
+    # end the run halfway. One failure is reported, not fatal to the rest.
+    if "$HERE/create-ai-sandbox.sh" "$@" --no-start "$project"; then
+        MIGRATED+=("$(basename "$sb")")
+    else
+        warn "create-ai-sandbox.sh failed for $(basename "$sb"); left as it was"
+        FAILED+=("$(basename "$sb")")
+    fi
 done
 
 echo
-echo "migrated: ${MIGRATED[*]}"
+echo "migrated: ${MIGRATED[*]-}"
+echo "failed: ${FAILED[*]-}"
 echo "left alone (current): $current"
-echo "Every sandbox is current now; this script can be deleted."
+if [ ${#FAILED[@]} -gt 0 ]; then
+    echo "Fix the failures above and run again. Migrated sandboxes are stopped; start them with ai-sandbox."
+    exit 1
+fi
+echo "Every sandbox is current now and stopped; start each with ai-sandbox. This script can be deleted."

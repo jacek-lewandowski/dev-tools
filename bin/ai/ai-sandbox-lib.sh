@@ -104,7 +104,11 @@ ai_sandbox_require_current() {   # <sandbox dir>
     [ "$state" = current ] && return 0
     [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
     {
-        echo "Sandbox $(basename "$1") is $state: its compose file does not match the host's knowledge configuration."
+        if [ "$state" = stale ]; then
+            echo "Sandbox $(basename "$1") is stale: its compose file disagrees with the host's knowledge configuration."
+        else
+            echo "Sandbox $(basename "$1") is unstamped: it was created before the knowledge stamp existed."
+        fi
         echo "It cannot be started until it has been recreated. Run on the host:"
         echo "    ${dev_tools:-<dev-tools checkout>}/bin/ai/ai-sandbox-migrate-knowledge"
     } >&2
