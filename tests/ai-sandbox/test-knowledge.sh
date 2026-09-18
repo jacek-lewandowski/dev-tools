@@ -173,6 +173,23 @@ knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
 git -C "$remote" show-ref -q "refs/heads/$b2" && r=yes || r=no
 assert_eq "re-closed branch deleted" "$r" no
 
+# --- an amendment that lands between the integrator's fetch and its remote deletion is kept by the lease
+b_lease=$(propose_in "$clone" lease); tip0=$(git -C "$clone" rev-parse "$b_lease")
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: lease rejected" "$b_lease"
+mkdir -p "$tmp/lease"; ln -sfn "$REPO_ROOT/tests/ai-sandbox/stub/lease-timeout" "$tmp/lease/timeout"
+LEASE_STUB_MODE=amend LEASE_STUB_CLONE="$clone" PATH="$tmp/lease:$PATH" knowledge sync "$integ" >"$tmp/lease.out" 2>&1
+assert_eq "amendment made during the integrator's sync" "$(git -C "$clone" rev-parse "$b_lease" | grep -vc "^$tip0\$")" 1
+assert_eq "leased deletion keeps the amended branch on the remote" "$(git -C "$remote" rev-parse -q --verify "refs/heads/$b_lease")" "$(git -C "$clone" rev-parse "$b_lease")"
+assert_status "rejected lease leaves the integrator status ok" "$iclone" "ok:"
+assert_eq "rejected lease is not reported as a failed deletion" "$(grep -c 'cannot delete' "$tmp/lease.out")" 0
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "proposal amended under the lease listed again" "$(knowledge proposals --repo "$iclone")" "$b_lease proposals/$today-lease.md"
+git -C "$iclone" merge -q -s ours --no-ff -m "proposal: lease rejected again" "$b_lease"
+knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+git -C "$remote" show-ref -q "refs/heads/$b_lease" && r=yes || r=no
+assert_eq "re-closed leased branch deleted" "$r" no
+
 # --- a clone parked on a proposal branch still gets main; a closed parked branch is left on main
 b3=$(propose_in "$clone" park); git -C "$clone" checkout -q "$b3"
 echo '- be brief' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: brevity"
@@ -373,6 +390,7 @@ assert_contains "status with a project keeps the single view" "$one" "clone:    
 assert_eq "status with a project lists no other sandbox" "$(printf '%s\n' "$one" | grep -c fab-)" 0
 assert_contains "doctor reads the stamp" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'SANDBOX_KNOWLEDGE'
 assert_contains "doctor names the migration script" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'ai-sandbox-migrate-knowledge'
+assert_contains "doctor names the single repair" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'create-ai-sandbox.sh'
 # --- the start scripts refuse a sandbox whose stamp does not match the host
 stale="$tmp/work/stale"; mkdir -p "$stale"; git -C "$stale" init -q
 sdir=$(ai_sandbox_dir_for "$stale"); mkdir -p "$sdir"
