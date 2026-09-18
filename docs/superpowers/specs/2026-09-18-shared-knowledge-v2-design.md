@@ -69,8 +69,10 @@ the user's approval; the host never force-pushes and never rewrites a branch.
 
 Amended:
 
-- The host deletes a branch only when it is a `proposal/*` branch whose tip is an
-  ancestor of `origin/main`. Nothing else is ever deleted.
+- The host deletes a branch only when it is a `proposal/*` branch whose tip, as
+  last fetched from the remote, is an ancestor of `origin/main`; the remote
+  deletion carries a lease on that tip, so a commit pushed meanwhile survives.
+  Nothing else is ever deleted.
 - The render is rebuilt by at most one process at a time; parallel clone syncs never
   render.
 - Merging into a sandbox clone touches only paths the agent must not edit (`rules/`,
@@ -91,10 +93,12 @@ Amended:
   and keeps two machines apart without a path hash in the name.
 - Every sandbox clone, integrator included, has `main` checked out and follows
   `origin/main` fast-forward only. Proposal branches are local branches beside it.
-- Closing: the integrator removes the proposal file on its branch, merges the branch
-  into main (`decisions.md` entry in the same round), and deletes the local branch.
-  The branch tip is now an ancestor of main, and the host deletes it on the remote
-  and in every clone at the next sync.
+- Closing: the integrator merges the branch into main with `git merge -s ours
+  --no-ff` (main's tree unchanged, `decisions.md` entry in the same round). The
+  branch tip is now an ancestor of main, and the host deletes it on the remote and
+  in every clone at the next sync. Clarified 2026-09-18 after plan review: the
+  earlier wording, "remove the file, then merge", needed a checkout that goal 4
+  forbids.
 
 ## Phases
 
@@ -190,7 +194,8 @@ and the proposal frontmatter keys above. `ai-knowledge proposals` output stays
 is bind-mounted with its `.git` directory (verified: `~/knowledge/.git` is a
 directory); an agent can bypass it, so the host scope check stays the enforcement
 (design decision); the two open proposals on `proposals/modularyzacja-84a3eb05`
-are integrated under the old flow before this phase lands (guessed; to confirm).
+are converted to `proposal/*` branches by the migration script (replaces the
+earlier guess that they would be integrated first; decided at plan review).
 
 ### Phase 4: init, owner path, naming
 
