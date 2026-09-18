@@ -501,6 +501,17 @@ home5="$tmp/home5"; mkdir -p "$home5/.gemini"
 out=$(kinit "$home5" </dev/null) || true
 assert_contains "without a terminal the command to file it is printed" "$out" "ai-knowledge propose"
 assert_eq "without a terminal nothing is filed" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -- '-gemini-md-')" 1
+
+# --- a bare remote whose HEAD names a missing master: the second host must not re-seed
+remote3="$tmp/remote3.git"; git init -q --bare --initial-branch=master "$remote3"
+home6="$tmp/home6"; mkdir -p "$home6/.gemini"; echo '# host six rules' > "$home6/.gemini/GEMINI.md"
+HOME="$home6" AI_SANDBOX_ROOT="$home6/.ai-sandbox" bash "$REPO_ROOT/bin/ai/ai-knowledge" init "file://$remote3" >/dev/null 2>&1 </dev/null || true
+assert_eq "first host seeded main on a master-headed remote" "$(git -C "$remote3" rev-parse --verify -q main | wc -c | tr -d ' ')" 41
+home7="$tmp/home7"; mkdir -p "$home7/.gemini"; printf '# host six rules\n- seven only\n' > "$home7/.gemini/GEMINI.md"
+out=$(HOME="$home7" AI_SANDBOX_ROOT="$home7/.ai-sandbox" bash "$REPO_ROOT/bin/ai/ai-knowledge" init "file://$remote3" 2>&1 </dev/null) || true
+assert_eq "second host does not re-seed" "$(printf '%s\n' "$out" | grep -c 'seeding')" 0
+assert_eq "second host's checkout is on main" "$(git -C "$home7/.ai-sandbox/knowledge/main" branch --show-current)" main
+assert_contains "second host sees its drift" "$out" "+- seven only"
 # --- ssh remotes: a refused key is loaded into an agent, started when needed
 export SSH_STUB_LOADED="$tmp/ssh-loaded" SSH_STUB_AGENT="$tmp/ssh-agent.sock" SSH_STUB_LOG="$tmp/ssh.log" SSH_STUB_KEY="$tmp/id_test"
 : > "$SSH_STUB_KEY"; : > "$SSH_STUB_LOG"; rm -f "$SSH_STUB_LOADED" "$SSH_STUB_AGENT"
