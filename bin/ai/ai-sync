@@ -62,7 +62,8 @@ Components Synchronized:
   2. Skills & Plugins       (~/.agents, ~/.gemini/config/{skills,plugins}, ~/.gemini/skills, ~/.claude/skills,
                              ~/.claude/plugins/{installed_plugins,known_marketplaces}.json)
   3. Vector Database        (~/.gemini/semantic_docs_db - LanceDB semantic search)
-  4. Knowledge Items        (~/.gemini/antigravity-ide/knowledge, ~/.gemini/antigravity/knowledge)
+  4. Antigravity knowledge items (~/.gemini/antigravity-ide/knowledge, ~/.gemini/antigravity/knowledge;
+                             unrelated to the ai-knowledge repository)
   5. Claude Code Memory     (~/.claude/settings.json, ~/.claude/projects/**/memory/**)
   6. Gemini Console (agy)   (~/.gemini/antigravity/{antigravity_state.pbtxt,annotations,prompting}, ~/.antigravity/argv.json)
   7. Brain Artifacts        (Curated *.md and *.metadata.json from ~/.gemini/antigravity-ide/brain/ and agy/brain/)
@@ -305,8 +306,8 @@ do_push() {
     log_step "Vector Database (Semantic Docs)..."
     push_mirror "$HOME/.gemini/semantic_docs_db" semantic_docs_db
 
-    # 4. Long-Term Knowledge Items
-    log_step "Long-Term Knowledge Items..."
+    # 4. Antigravity knowledge items
+    log_step "Antigravity knowledge items..."
     push_mirror "$HOME/.gemini/antigravity-ide/knowledge" knowledge/ide
     push_mirror "$HOME/.gemini/antigravity/knowledge"     knowledge/agy
 
@@ -374,8 +375,8 @@ do_pull() {
     mkdir -p "$HOME/.gemini/semantic_docs_db"
     pull_mirror semantic_docs_db "$HOME/.gemini/semantic_docs_db"
 
-    # 4. Long-Term Knowledge Items
-    log_step "Restoring Long-Term Knowledge Items..."
+    # 4. Antigravity knowledge items
+    log_step "Restoring Antigravity knowledge items..."
     mkdir -p "$HOME/.gemini/antigravity-ide/knowledge" "$HOME/.gemini/antigravity/knowledge"
     pull_mirror knowledge/ide "$HOME/.gemini/antigravity-ide/knowledge"
     pull_mirror knowledge/agy "$HOME/.gemini/antigravity/knowledge"

@@ -79,6 +79,11 @@ assert_contains "the location is reported" "$(cat "$tmp/out")" "mcp_config.json"
 rc=$(AI_SYNC_ALLOW_SECRETS=1 run push)
 assert_eq "the override lets the push through" "$rc" 0
 
+# --- "knowledge" names the ai-knowledge repository; the Antigravity store is named apart
+help=$(bash "$REPO_ROOT/bin/ai/ai-sync" --help 2>&1)
+assert_contains "help names the Antigravity knowledge items" "$help" "Antigravity knowledge items"
+assert_eq "help no longer says Knowledge Items" "$(printf '%s\n' "$help" | grep -c 'Knowledge Items')" 0
+
 # --- once the knowledge repository owns GEMINI.md, ai-sync leaves it alone
 echo '{}' > "$HOME/.gemini/config/mcp_config.json"   # back to a secret-free home
 export RCLONE_STUB_INDEX="$tmp/index"
