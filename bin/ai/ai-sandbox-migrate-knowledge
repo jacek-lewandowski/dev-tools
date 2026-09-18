@@ -127,14 +127,18 @@ done
 # remote branch is then merged into main with -s ours (so its history stays
 # reachable and its deletion falls under "only ancestors of main are deleted")
 # and deleted. Every clone on this host is moved from its old branch to main
-# whatever that answer was.
+# whatever that answer was. Two guards keep every commit reachable: a remote
+# old branch that a skipped (running) clone still holds is converted but never
+# deleted, since nobody read that clone for unpushed commits; and "already
+# converted" compares file bodies, not branch names, so a changed file gets a
+# second proposal/* branch instead of vanishing with its old branch.
 # ---------------------------------------------------------------------------
 BRANCH_FAILED=(); BRANCH_LEFT=()
 
 migrate_branches() {
     ai_knowledge_configured || { echo "knowledge: not configured; nothing to convert"; return 0; }
-    local aik="$HERE/ai-knowledge" integrator main sb project c b cur ltip rtip repo ref where id files f name tmpf nb ans tip src heads complete
-    local -a converted=() sources=()
+    local aik="$HERE/ai-knowledge" integrator main sb project c b cur ltip rtip repo ref where id files f name tmpf nb ans tip src heads complete holder n
+    local -a converted=() sources=() held=()
     integrator=$(read_kconfig INTEGRATOR); main="$AI_KNOWLEDGE_ROOT/main"
     [ -d "$main/.git" ] || { BRANCH_FAILED+=("no canonical checkout at $main; run ai-knowledge sync first"); return 1; }
 
@@ -147,9 +151,36 @@ migrate_branches() {
     remote_tip() {   # <branch>: its commit on the remote, empty when absent
         printf '%s\n' "$heads" | sed -n "s|^\([0-9a-f]*\)[[:space:]]*refs/heads/$1\$|\1|p"
     }
-    # Exact match on the name: a glob would let "tree" match "verify-the-tree".
-    has_counterpart() {   # <project-id>-<slug>
-        printf '%s\n' "$heads" | grep -q -E "[[:space:]]refs/heads/proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-$1-[0-9a-f]{4}\$"
+    # The proposal/* branches on the remote named for <project-id>-<slug>. Exact
+    # match on the name: a glob would let "tree" match "verify-the-tree".
+    counterparts() {   # <project-id>-<slug>
+        printf '%s\n' "$heads" | sed -n "s|^[0-9a-f]*[[:space:]]*refs/heads/\(proposal/[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-$1-[0-9a-f]\{4\}\)\$|\1|p"
+    }
+    # Conversion only adds frontmatter keys (project_id, machine) and a final
+    # newline, so what the proposer wrote is the body: both files are compared
+    # without their leading --- block, without the blank lines after it and
+    # newline-terminated. Frontmatter differences alone never count.
+    body_hash() {   # stdin: a proposal file
+        awk 'NR==1 && $0=="---" {fm=1; next} fm==1 {if ($0=="---") fm=2; next} {print}' \
+            | sed '/./,$!d' | git -C "$main" hash-object --stdin
+    }
+    # A counterpart of <project-id>-<slug> on the remote carries the same body as
+    # <repo> <ref>:<file>. A counterpart whose commit cannot be read even after a
+    # fetch counts as different: a duplicate is visible to the integrator, a
+    # dropped file is not.
+    has_counterpart() {   # <project-id>-<slug> <repo> <ref> <file>
+        local want cb tip path
+        want=$(git -C "$2" show "$3:$4" 2>/dev/null | body_hash) || return 1
+        while IFS= read -r cb; do
+            [ -n "$cb" ] || continue
+            tip=$(remote_tip "$cb"); path="proposals/${cb#proposal/}"; path="${path%-????}.md"
+            git -C "$main" cat-file -e "$tip^{commit}" 2>/dev/null || gnet -C "$main" fetch -q origin "refs/heads/$cb" 2>/dev/null || true
+            [ "$(git -C "$main" show "$tip:$path" 2>/dev/null | body_hash)" != "$want" ] || return 0
+        done < <(counterparts "$1")
+        return 1
+    }
+    held_by() {   # <branch>: the skipped sandbox whose clone still has it
+        local h; for h in "${held[@]+"${held[@]}"}"; do [ "${h%%$'\t'*}" != "$1" ] || { printf '%s\n' "${h#*$'\t'}"; return 0; }; done; return 1
     }
     # The new name of an old file: <project-id>-<slug>, both slugged.
     name_for() {   # <project-id> <path>
@@ -169,10 +200,18 @@ migrate_branches() {
 
     # (0) Nothing is deleted while a clone holds an unpushed old-style commit:
     # a local branch ahead of its remote is pushed first; one whose remote
-    # branch is gone is converted from the clone below instead of re-pushed.
+    # branch is gone is converted from the clone below instead of re-pushed. A
+    # skipped clone is not read for unpushed commits, so every old branch it
+    # still has holds its remote branch: that one is converted but not deleted.
     while IFS=$'\t' read -r sb project; do
         c="$sb/knowledge"; [ -d "$c/.git" ] || continue
-        clone_skipped "$sb" && continue
+        if clone_skipped "$sb"; then
+            while IFS= read -r b; do
+                [ -n "$b" ] || continue
+                held+=("$b"$'\t'"$(basename "$sb")")
+            done < <(git -C "$c" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+            continue
+        fi
         gnet -C "$c" fetch -q origin 2>/dev/null || true
         while IFS= read -r b; do
             [ -n "$b" ] || continue
@@ -214,9 +253,11 @@ migrate_branches() {
         while IFS= read -r f; do
             [ -n "$f" ] || continue
             name=$(name_for "$id" "$f")
-            if has_counterpart "$name"; then
-                echo "  $f: already has a proposal/* branch"; continue
+            if has_counterpart "$name" "$repo" "$ref" "$f"; then
+                echo "  $f: already has a proposal/* branch with this content"; continue
             fi
+            n=$(counterparts "$name" | { grep -c . || true; })
+            [ "$n" -eq 0 ] || echo "  $f: differs from its $n proposal/* branch(es); converted again"
             tmpf=$(mktemp); git -C "$repo" show "$ref:$f" > "$tmpf" 2>/dev/null || true
             if nb=$("$aik" propose "$tmpf" --repo "$main" --project-id "$id" --machine unknown --slug "$name" --push 2>/dev/null </dev/null); then
                 echo "  $f -> $nb"
@@ -225,17 +266,22 @@ migrate_branches() {
             fi
             rm -f "$tmpf"
             read_heads || return 1
-            has_counterpart "$name" || complete=no
+            has_counterpart "$name" "$repo" "$ref" "$f" || complete=no
         done <<< "$files"
         if [ "$complete" != yes ]; then
             BRANCH_FAILED+=("$b: not every proposal on it has a counterpart on the remote; branch kept ($where)")
         elif [ "$where" = "the remote" ]; then
-            converted+=("$b")
+            if holder=$(held_by "$b"); then
+                echo "knowledge: $b kept on the remote: $holder is running and its clone still holds it; stop it and run again"
+            else
+                converted+=("$b")
+            fi
         fi
     done
 
     # (c) Every clean clone goes to main. A local old branch goes only once each
-    # of its files has a counterpart on the remote; otherwise it is kept and named.
+    # of its files has a counterpart with the same body on the remote; otherwise
+    # it is kept and named.
     while IFS=$'\t' read -r sb project; do
         c="$sb/knowledge"; [ -d "$c/.git" ] || continue
         cur=$(git -C "$c" branch --show-current)
@@ -260,12 +306,12 @@ migrate_branches() {
             complete=yes
             while IFS= read -r f; do
                 [ -n "$f" ] || continue
-                has_counterpart "$(name_for "${b#proposals/}" "$f")" || complete=no
+                has_counterpart "$(name_for "${b#proposals/}" "$f")" "$c" "$b" "$f" || complete=no
             done < <(old_files "$c" "$b" "${b#proposals/}")
             if [ "$complete" = yes ]; then
                 git -C "$c" branch -q -D "$b" 2>/dev/null || true
             else
-                BRANCH_LEFT+=("$(basename "$sb") ($b kept: not every proposal on it has a proposal/* branch on the remote)")
+                BRANCH_LEFT+=("$(basename "$sb") ($b kept: not every proposal on it has a proposal/* branch with the same content on the remote)")
             fi
         done < <(git -C "$c" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
     done < <(ai_sandbox_list)

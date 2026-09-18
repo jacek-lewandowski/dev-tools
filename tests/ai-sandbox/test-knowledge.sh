@@ -556,6 +556,53 @@ assert_status "full run: manual clone ok" "$mdir/knowledge" "ok:"
 assert_status "full run: recreated sandbox clone ok" "$rdir/knowledge" "ok:"
 assert_contains "the end names the plain create run that rebuilds the doctor" "$out" "create-ai-sandbox.sh <project>"
 rm -rf "$rdir"
+# --- migration (phase 5): a remote old branch that a skipped running clone still holds is never
+# deleted; "already converted" is decided by the file's body, not by the branch name
+git -C "$oldc" checkout -q -b proposals/px-1 origin/main; mkdir -p "$oldc/proposals/px-1"
+printf -- '---\nscope: global\n---\n\n# held\n\nv1\n' > "$oldc/proposals/px-1/2026-09-08-held.md"
+git -C "$oldc" add -A; git -C "$oldc" commit -qm "held v1"; git -C "$oldc" push -q origin proposals/px-1
+qproj="$tmp/work/q"; mkdir -p "$qproj"; git -C "$qproj" init -q
+qdir=$(ai_sandbox_dir_for "$qproj"); mkdir -p "$qdir"
+printf 'services: {}\n' > "$qdir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$qproj" > "$qdir/.env"
+# the running sandbox's clone sits on the old branch with an unpushed v2 of the file
+git clone -q "file://$remote" "$qdir/knowledge"; git -C "$qdir/knowledge" checkout -q -b proposals/px-1 origin/proposals/px-1
+printf -- '---\nscope: global\n---\n\n# held\n\nv2, unpushed\n' > "$qdir/knowledge/proposals/px-1/2026-09-08-held.md"
+git -C "$qdir/knowledge" add -A; git -C "$qdir/knowledge" commit -q --no-verify -m "held v2"
+v2=$(git -C "$qdir/knowledge" rev-parse HEAD)
+held_branches() { git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -E -- "^proposal/$today-px-1-held-[0-9a-f]{4}\$" || true; }
+# run 1: 'n' to stopping the running sandbox, 'y' to the deletion
+out=$(printf 'n\ny\n' | DOCKER_STUB_RUNNING=true migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "held branch: run 1 succeeds" "$r" 0
+assert_eq "held branch: v1 on the remote is converted" "$(held_branches | grep -c .)" 1
+git -C "$remote" show-ref -q refs/heads/proposals/px-1 && r=yes || r=no
+assert_eq "held branch: the remote old branch is kept while the skipped clone holds it" "$r" yes
+assert_contains "held branch: the output says which sandbox holds it" "$(printf '%s\n' "$out" | grep 'proposals/px-1.*kept')" "$(basename "$qdir")"
+assert_eq "held branch: the skipped clone is untouched" "$(git -C "$qdir/knowledge" rev-parse HEAD)" "$v2"
+assert_eq "held branch: the skipped clone stays on its branch" "$(git -C "$qdir/knowledge" branch --show-current)" proposals/px-1
+# run 2: the sandbox was stopped; v2 differs from the converted v1, so it becomes a second branch
+out=$(printf 'y\n' | DOCKER_STUB_RUNNING=false migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "held branch: run 2 succeeds" "$r" 0
+assert_eq "held branch: v2 became a second proposal branch" "$(held_branches | grep -c .)" 2
+b1=$(held_branches | sed -n 1p); b2=$(held_branches | sed -n 2p)
+[ "$(git -C "$remote" show "$b1:proposals/$today-px-1-held.md")" != "$(git -C "$remote" show "$b2:proposals/$today-px-1-held.md")" ] && r=differ || r=same
+assert_eq "held branch: the two converted files differ" "$r" differ
+assert_contains "held branch: v2 is reachable from a remote ref" "$(git -C "$remote" branch --contains "$v2")" "main"
+git -C "$remote" show-ref -q refs/heads/proposals/px-1 && r=yes || r=no
+assert_eq "held branch: the remote old branch is deleted once nothing holds it" "$r" no
+assert_eq "held branch: the clone moved to main" "$(git -C "$qdir/knowledge" branch --show-current)" main
+assert_eq "held branch: the clone's converted old branch dropped" "$(git -C "$qdir/knowledge" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+# run 3: a local-only old branch whose file equals a counterpart's body is not converted again
+git -C "$mdir/knowledge" checkout -q -b proposals/px-1 main; mkdir -p "$mdir/knowledge/proposals/px-1"
+git -C "$remote" show "$b2:proposals/$today-px-1-held.md" | sed '/^project_id:/d; /^machine:/d' > "$mdir/knowledge/proposals/px-1/2026-09-08-held.md"
+git -C "$mdir/knowledge" add -A; git -C "$mdir/knowledge" commit -q --no-verify -m "held again"
+out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "same body: run succeeds" "$r" 0
+assert_contains "same body: reported as already converted" "$out" "already has a proposal/* branch"
+assert_eq "same body: no third branch" "$(held_branches | grep -c .)" 2
+assert_eq "same body: the local old branch dropped" "$(git -C "$mdir/knowledge" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+assert_eq "same body: the clone moved to main" "$(git -C "$mdir/knowledge" branch --show-current)" main
+rm -rf "$qdir"
 # a host without the integrator converts a local-only old branch (its remote branch is gone) from the clone
 sed -i 's/^INTEGRATOR=.*/INTEGRATOR=/' "$AI_KNOWLEDGE_CONFIG"
 git -C "$mdir/knowledge" checkout -q -b proposals/solo-9999 main; mkdir -p "$mdir/knowledge/proposals/solo-9999"
