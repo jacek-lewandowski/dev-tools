@@ -1359,7 +1359,14 @@ if [ -n "${DISPLAY:-}" ]; then
         status "X server" "NOT reachable -- $(printf '%s' "$_err" | head -1)"
     fi
 fi
-status "knowledge"   "$( [ -f "$HOME/knowledge/.sync-status" ] && cat "$HOME/knowledge/.sync-status" || echo "not configured (host: ai-knowledge init <url>)" )"
+# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: unset means
+# the compose file predates the knowledge mounts and the host refuses to start
+# it until the migration script has recreated it.
+case "${SANDBOX_KNOWLEDGE-unset}" in
+    1)     status "knowledge" "$( [ -f "$HOME/knowledge/.sync-status" ] && cat "$HOME/knowledge/.sync-status" || echo "configured; clone not synced yet (host: ai-knowledge sync)" )" ;;
+    0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
+    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts (host: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
+esac
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
 if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
     _idea=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('name',''),d.get('version',''))" \

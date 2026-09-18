@@ -187,6 +187,20 @@ msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-b-agent" 2>&1) && r=0 || 
 assert_eq "stale sandbox fails the prerequisite" "$r" 1
 assert_contains "refusal names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
 assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
+# --- status without an argument lists every sandbox with its state
+all=$(knowledge status 2>&1)
+assert_contains "status keeps the remote header" "$all" "remote:      file://$remote"
+assert_contains "status lists a current sandbox" "$all" "fab-a-agent"
+assert_contains "status marks the stale one" "$(printf '%s\n' "$all" | grep fab-b-agent)" "stale"
+assert_contains "status marks the unstamped one" "$(printf '%s\n' "$all" | grep fab-c-agent)" "unstamped"
+assert_contains "status shows unknown project for unstamped" "$(printf '%s\n' "$all" | grep fab-c-agent)" "unknown"
+assert_contains "status shows never for a sandbox without a sync" "$(printf '%s\n' "$all" | grep fab-a-agent)" "never"
+assert_contains "status shows the last sync of the real sandbox" "$(printf '%s\n' "$all" | grep "$(basename "$pdir")")" "ok"
+one=$(knowledge status "$proj" 2>&1)
+assert_contains "status with a project keeps the single view" "$one" "clone:       $pdir/knowledge"
+assert_eq "status with a project lists no other sandbox" "$(printf '%s\n' "$one" | grep -c fab-)" 0
+assert_contains "doctor reads the stamp" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'SANDBOX_KNOWLEDGE'
+assert_contains "doctor names the migration script" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'ai-sandbox-migrate-knowledge'
 # --- the start scripts refuse a sandbox whose stamp does not match the host
 stale="$tmp/work/stale"; mkdir -p "$stale"; git -C "$stale" init -q
 sdir=$(ai_sandbox_dir_for "$stale"); mkdir -p "$sdir"
