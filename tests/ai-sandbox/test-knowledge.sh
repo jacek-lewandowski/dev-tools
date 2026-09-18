@@ -221,6 +221,32 @@ assert_contains "print-context reports the sandbox dir" "$out" "dir=$pdir"
 (cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" >/dev/null 2>&1) && r=0 || r=$?
 assert_eq "restart of a current sandbox proceeds" "$r" 0
 assert_contains "restart of a current sandbox reaches compose" "$(stub_docker_log)" "down"
+# --- the disposable migration script recreates stale and unstamped sandboxes
+migrate() { bash "$REPO_ROOT/bin/ai/ai-sandbox-migrate-knowledge" "$@"; }
+assert_eq "migration script is not an installed helper" "$(ai_sandbox_helpers | grep -c migrate-knowledge)" 0
+mproj="$tmp/work/m"; mkdir -p "$mproj"; git -C "$mproj" init -q
+mdir2=$(ai_sandbox_dir_for "$mproj"); mkdir -p "$mdir2"
+printf 'services:\n  x:\n    volumes:\n      - "%s:%s"\n      - "%s/.gemini/GEMINI.md:%s/.gemini/GEMINI.md"\n' "$mproj" "$mproj" "$HOME" "$HOME" > "$mdir2/docker-compose.yml"
+printf 'HOST_UID=1\n' > "$mdir2/.env"
+# fab-b points at a missing project and fab-c has no recoverable path: the whole run is refused
+out=$(migrate --display=none --no-start 2>&1) && r=0 || r=$?
+assert_eq "migration refuses when a project directory is missing" "$r" 1
+assert_contains "refusal names the sandbox with the missing project" "$out" "fab-b-agent"
+assert_contains "refusal names the sandbox without a recoverable path" "$out" "fab-c-agent"
+assert_eq "nothing migrated on a refused run" "$(ai_sandbox_knowledge_state "$mdir2")" unstamped
+rm -rf "$AI_SANDBOX_ROOT"/fab-[bcd]-agent
+: > "$DOCKER_STUB_LOG"
+out=$(migrate --display=none --no-start 2>&1) && r=0 || r=$?
+assert_eq "migration succeeds" "$r" 0
+assert_eq "unstamped sandbox recreated from its compose mount" "$(ai_sandbox_knowledge_state "$mdir2")" current
+assert_eq "stale sandbox recreated from its stamp" "$(ai_sandbox_knowledge_state "$sdir")" current
+assert_contains "recreated compose carries the knowledge mounts" "$(cat "$mdir2/docker-compose.yml")" "$HOME/knowledge"
+assert_eq "running containers are stopped before recreation" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 2
+assert_contains "summary lists the migrated sandboxes" "$out" "$(basename "$mdir2")"
+assert_eq "current sandbox left alone" "$(grep -c "$(basename "$pdir")" <<<"$(printf '%s\n' "$out" | grep -i migrated)")" 0
+out=$(migrate 2>&1) && r=0 || r=$?
+assert_eq "nothing to migrate exits 0" "$r" 0
+assert_contains "nothing to migrate says so" "$out" "nothing to migrate"
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"
