@@ -1854,6 +1854,8 @@ HOST_GIT_NAME="$HOST_GIT_NAME" \
 HOST_GIT_EMAIL="$HOST_GIT_EMAIL" \
 WITH_DOCKER="$WITH_DOCKER" \
 WITH_AUDIO="$WITH_AUDIO" \
+KNOWLEDGE="$KNOWLEDGE" \
+PROJECT_ABS_DIR="$PROJECT_ABS_DIR" \
 DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
@@ -1868,6 +1870,11 @@ managed = {
     "HOST_GIT_EMAIL": os.environ.get("HOST_GIT_EMAIL", ""),
     "SANDBOX_WITH_DOCKER": "1" if os.environ.get("WITH_DOCKER") == "yes" else "0",
     "SANDBOX_WITH_AUDIO": "1" if os.environ.get("WITH_AUDIO") == "yes" else "0",
+    # The knowledge stamp: the start scripts refuse a sandbox whose stamp does
+    # not match the host's configuration, and the migration script uses the
+    # project dir to recreate it.
+    "SANDBOX_KNOWLEDGE": "1" if os.environ.get("KNOWLEDGE") == "yes" else "0",
+    "SANDBOX_PROJECT_DIR": os.environ.get("PROJECT_ABS_DIR", ""),
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
     "SANDBOX_CPUSET": os.environ.get("CPUSET", ""),
@@ -1935,6 +1942,7 @@ cat <<COMPOSE_ENV
       - "PLAYWRIGHT_HTML_REPORT=none"
       - "PYTHONPATH=${CONTAINER_HOME}"
       - "SANDBOX_WITH_DOCKER=\${SANDBOX_WITH_DOCKER}"
+      - "SANDBOX_KNOWLEDGE=\${SANDBOX_KNOWLEDGE}"
 COMPOSE_ENV
 printf '%s' "$DISPLAY_ENV_LINES"
 
