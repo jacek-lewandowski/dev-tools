@@ -13,6 +13,8 @@
 #
 #   ai-knowledge init <remote-url> [--integrator DIR]  configure; seed an empty remote; render
 #   ai-knowledge sync [PROJECT_DIR]                     main + render, then this project's clone
+#   ai-knowledge sync --all                             main + render, then every sandbox's clone
+#                                                       in parallel (AI_KNOWLEDGE_JOBS, default 4)
 #   ai-knowledge render                                 render main into the shared store
 #   ai-knowledge status [PROJECT_DIR]                   config and the last sync status
 #   ai-knowledge proposals [--repo DIR]                 list proposal files across proposals/* branches
@@ -190,6 +192,7 @@ PYEOF
 # ---------------------------------------------------------------------------
 
 # The canonical checkout only ever fast-forwards; nobody edits it by hand.
+MAIN_FETCHED=yes
 sync_main() {
     [ -d "$KNOWLEDGE_MAIN/.git" ] || { warn "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"; return 1; }
     local rc=0 out
@@ -198,6 +201,7 @@ sync_main() {
         net_failed "$rc" "$out"
         warn "cannot fetch $REMOTE; rendering the last fetched main"
         HINT_FETCH+=("git -C $KNOWLEDGE_MAIN fetch origin")
+        MAIN_FETCHED=no
     fi
     # A manual fetch lands here on the next sync, so the merge runs either way.
     if git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
@@ -511,33 +515,116 @@ sync_clone() {
 # commands
 # ---------------------------------------------------------------------------
 
+# One sandbox's clone: role, mount targets, skill links, then the sync. Shared
+# by 'sync PROJECT_DIR' and by the children of 'sync --all'; never renders.
+sync_project_clone() {   # <project dir> <sandbox dir>
+    local project=$1 sb=$2 id role=proposals
+    id=$(ai_sandbox_project_id "$project")
+    if [ -n "$INTEGRATOR" ] && [ "$INTEGRATOR" = "$project" ]; then role=integrator; fi
+    prepare_targets "$sb"
+    link_skills_into "$sb"
+    sync_clone "$sb" "$id" "$role"
+}
+
+# Undocumented child of 'sync --all': one clone, no render, own hints.
+cmd_sync_clone() {   # <project dir> [sandbox dir]
+    load_config
+    local project sb
+    project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
+    sb=${2:-$(ai_sandbox_dir_for "$project")}
+    [ -d "$sb" ] || die "no sandbox directory $sb"
+    sync_project_clone "$project" "$sb"
+    print_hints "$project"
+}
+
 cmd_sync() {
     if ! ai_knowledge_configured; then
         log "knowledge repository not configured (ai-knowledge init <remote-url>); nothing to do"
         return 0
     fi
     load_config
+    [ "${1:-}" != --all ] || { cmd_sync_all; return 0; }
     sync_main || return 0
     cmd_render
     [ $# -gt 0 ] || { print_hints; return 0; }
 
-    local project sb id role=proposals
+    local project sb
     project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
     sb=$(ai_sandbox_dir_for "$project")
-    id=$(ai_sandbox_project_id "$project")
     if [ ! -d "$sb" ]; then
         log "no sandbox directory for $project yet; its clone is created by create-ai-sandbox.sh"
         return 0
     fi
-    if [ -n "$INTEGRATOR" ] && [ "$INTEGRATOR" = "$project" ]; then role=integrator; fi
-    prepare_targets "$sb"
-    link_skills_into "$sb"
-    sync_clone "$sb" "$id" "$role"
-    # The integrator just advanced main: render it now rather than on the next start.
+    sync_project_clone "$project" "$sb"
+    # The integrator just advanced main: render it now rather than on the next sync.
     if [ "$MAIN_PUSHED" = yes ]; then
         sync_main && cmd_render
     fi
     print_hints "$project"
+}
+
+# Every stamped sandbox, running or stopped, in parallel. Main is fetched and
+# rendered once before the children and, if the fetch worked, once more after
+# them, rendering again only when an integrator child advanced it. Children
+# never render, so the render is rebuilt by one process at a time. Each child's
+# output is captured beside its sandbox and printed in list order, then one
+# table; a child that fails is a row, never the end of the run.
+cmd_sync_all() {
+    local jobs="${AI_KNOWLEDGE_JOBS:-4}" before after sb project state pids=() running=0
+    local -a sbs=() projects=()
+    sync_main || return 0
+    before=$(git -C "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
+    cmd_render
+
+    while IFS=$'\t' read -r sb project; do
+        [ -n "$sb" ] || continue
+        sbs+=("$sb"); projects+=("$project")
+        rm -f "$sb/.sync-output" "$sb/.sync-exit"
+        [ -n "$project" ] || continue                       # unstamped: a row, no child
+        [ "$(ai_sandbox_knowledge_state "$sb")" = current ] || continue   # stale: refused at start too
+        while [ "$running" -ge "$jobs" ]; do wait -n || true; running=$((running - 1)); done
+        (
+            bash "$0" _sync-clone "$project" "$sb" >"$sb/.sync-output" 2>&1
+            echo $? > "$sb/.sync-exit"
+        ) &
+        pids+=($!); running=$((running + 1))
+    done < <(ai_sandbox_list)
+    wait "${pids[@]+"${pids[@]}"}" 2>/dev/null || true
+
+    local i
+    for i in "${!sbs[@]}"; do
+        sb=${sbs[$i]}
+        [ -s "$sb/.sync-output" ] || continue
+        printf '\n== %s\n' "$(basename "$sb")"
+        cat "$sb/.sync-output"
+    done
+
+    # An integrator child may have pushed main; one more fetch shows it.
+    if [ "$MAIN_FETCHED" = yes ]; then
+        sync_main || true
+        after=$(git -C "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
+        [ "$after" = "$before" ] || cmd_render
+    fi
+
+    printf '\n%-45s %-10s %s\n' sandbox state 'last sync'
+    for i in "${!sbs[@]}"; do
+        sb=${sbs[$i]}; project=${projects[$i]}
+        state=$(ai_sandbox_knowledge_state "$sb")
+        if [ -z "$project" ]; then
+            status="not synced: unstamped; run ai-sandbox-migrate-knowledge"
+        elif [ "$state" != current ]; then
+            status="not synced: $state; run ai-sandbox-migrate-knowledge"
+        elif [ ! -d "$project" ]; then
+            status="missing project: $project"
+        elif [ "$(cat "$sb/.sync-exit" 2>/dev/null)" != 0 ]; then
+            status="error: exit $(cat "$sb/.sync-exit" 2>/dev/null || echo '?'); see its output above"
+        else
+            status=$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)
+        fi
+        printf '%-45s %-10s %s\n' "$(basename "$sb")" "$state" "$status"
+        rm -f "$sb/.sync-output" "$sb/.sync-exit"
+    done
+    print_hints
 }
 
 # With a project: that sandbox's clone. Without: every sandbox on this host,
@@ -591,6 +678,7 @@ cmd_proposals() {
 case "${1:-}" in
     init)      shift; cmd_init "$@" ;;
     sync)      shift; cmd_sync "$@" ;;
+    _sync-clone) shift; cmd_sync_clone "$@" ;;
     render)    cmd_render ;;
     status)    shift; cmd_status "$@" ;;
     proposals) shift; cmd_proposals "$@" ;;

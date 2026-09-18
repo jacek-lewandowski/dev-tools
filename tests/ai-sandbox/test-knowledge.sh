@@ -190,6 +190,35 @@ assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
 assert_contains "stale refusal explains the mismatch" "$msg" "disagrees"
 msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-c-agent" 2>&1) || true
 assert_contains "unstamped refusal explains the missing stamp" "$msg" "before the knowledge stamp"
+# --- _sync-clone syncs one clone and never renders (phase 2)
+knowledge _sync-clone "$proj" "$pdir" >"$tmp/one.out" 2>&1 || cat "$tmp/one.out"
+assert_contains "_sync-clone leaves the clone ok" "$(cat "$clone/.sync-status")" "ok"
+assert_eq "_sync-clone does not render" "$(grep -c 'rendered' "$tmp/one.out")" 0
+
+# --- sync --all: every stamped sandbox in parallel, one render unless main moved
+third="$tmp/work/third"; mkdir -p "$third"; git -C "$third" init -q
+tdir=$(ai_sandbox_dir_for "$third"); mkdir -p "$tdir"
+printf 'services: {}\n' > "$tdir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$third" > "$tdir/.env"
+printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$proj" > "$pdir/.env.keep"; cp "$pdir/.env.keep" "$pdir/.env"
+printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$integ" > "$idir/.env"
+printf 'services: {}\n' > "$idir/docker-compose.yml"
+knowledge sync --all >"$tmp/all1.out" 2>&1 || cat "$tmp/all1.out"
+assert_contains "all: project clone ok" "$(cat "$clone/.sync-status")" "ok"
+assert_contains "all: integrator clone ok" "$(cat "$iclone/.sync-status")" "ok"
+assert_contains "all: third clone created and ok" "$(cat "$tdir/knowledge/.sync-status" 2>/dev/null)" "ok"
+assert_eq "all: one render when main did not move" "$(grep -c 'rendered' "$tmp/all1.out")" 1
+assert_contains "all: table row for the third sandbox" "$(grep "$(basename "$tdir")" "$tmp/all1.out" | tail -1)" "ok"
+assert_contains "all: unstamped sandbox reported, not synced" "$(grep fab-c-agent "$tmp/all1.out" | tail -1)" "unstamped"
+assert_no_file "all: no clone for the unstamped sandbox" "$AI_SANDBOX_ROOT/fab-c-agent/knowledge"
+assert_contains "all: stamped sandbox with a missing project reported" "$(grep fab-a-agent "$tmp/all1.out" | tail -1)" "missing project"
+assert_contains "all: child output printed under its name" "$(cat "$tmp/all1.out")" "== $(basename "$pdir")"
+echo '- be patient' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: patience"
+AI_KNOWLEDGE_JOBS=1 knowledge sync --all >"$tmp/all2.out" 2>&1 || cat "$tmp/all2.out"
+assert_eq "all: two renders when the integrator advanced main" "$(grep -c 'rendered' "$tmp/all2.out")" 2
+assert_contains "all: render carries the new main" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "- be patient"
+assert_contains "all: project clone merged the new main" "$(cat "$clone/rules/global.md")" "- be patient"
+rm -rf "$tdir"
 # --- status without an argument lists every sandbox with its state
 all=$(knowledge status 2>&1)
 assert_contains "status keeps the remote header" "$all" "remote:      file://$remote"
