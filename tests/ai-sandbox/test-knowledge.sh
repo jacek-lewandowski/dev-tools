@@ -187,6 +187,26 @@ msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-b-agent" 2>&1) && r=0 || 
 assert_eq "stale sandbox fails the prerequisite" "$r" 1
 assert_contains "refusal names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
 assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
+# --- the start scripts refuse a sandbox whose stamp does not match the host
+stale="$tmp/work/stale"; mkdir -p "$stale"; git -C "$stale" init -q
+sdir=$(ai_sandbox_dir_for "$stale"); mkdir -p "$sdir"
+printf 'services: {}\n' > "$sdir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$stale" > "$sdir/.env"
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$stale" && bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox refuses a stale sandbox" "$r" 1
+assert_contains "ai-sandbox names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
+assert_eq "no compose call for a refused start" "$(grep -c compose "$DOCKER_STUB_LOG")" 0
+msg=$(cd "$stale" && bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox-restart refuses a stale sandbox" "$r" 1
+assert_eq "no compose down for a refused restart" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
+: > "$DOCKER_STUB_LOG"
+out=$(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1) && r=0 || r=$?
+assert_eq "print-context works on a current sandbox" "$r" 0
+assert_contains "print-context reports the sandbox dir" "$out" "dir=$pdir"
+(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" >/dev/null 2>&1) && r=0 || r=$?
+assert_eq "restart of a current sandbox proceeds" "$r" 0
+assert_contains "restart of a current sandbox reaches compose" "$(stub_docker_log)" "down"
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"

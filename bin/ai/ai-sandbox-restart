@@ -3,6 +3,7 @@ set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
 ai_sandbox_require_ctx || exit 1
 # Before 'down': a refused restart must leave the sandbox running, not stopped.
+ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
 ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
 ai_sandbox_compose down
 # Knowledge sync before the container comes up, so the rules it reads are the
