@@ -469,16 +469,17 @@ assert_eq "unpushable old commit stops the run" "$r" 1
 assert_contains "the stopping clone is named" "$out" "$(basename "$mdir")"
 git -C "$remote" show-ref -q refs/heads/proposals/oldproj-1234 && r=yes || r=no
 assert_eq "nothing deleted when the run stops" "$r" yes
-assert_eq "nothing converted when the run stops" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -E -- '-(alpha|beta|gamma|delta)-')" 0
+assert_eq "nothing converted when the run stops" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -E -- '-oldproj-1234-(alpha|beta|gamma|delta)-')" 0
 git -C "$mdir/knowledge" fetch -q origin; git -C "$mdir/knowledge" merge -q --no-edit origin/proposals/oldproj-1234
 oldtip=$(git -C "$mdir/knowledge" rev-parse HEAD)
 out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
 assert_eq "branch migration succeeds" "$r" 0
-newbranches=$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -E -- '-(alpha|beta|gamma|delta)-' | sort)
+# the converted branch is named <project-id>-<slug>, so equal slugs from two projects never collide
+newbranches=$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -E -- "^proposal/$today-oldproj-1234-(alpha|beta|gamma|delta)-[0-9a-f]{4}\$" | sort)
 assert_eq "four old proposals became four proposal branches" "$(printf '%s\n' "$newbranches" | grep -c .)" 4
 gb=$(printf '%s\n' "$newbranches" | grep gamma)
-assert_contains "converted file carries project_id" "$(git -C "$remote" show "$gb:proposals/$today-gamma.md")" "project_id: oldproj-1234"
-assert_contains "converted file carries machine unknown" "$(git -C "$remote" show "$gb:proposals/$today-gamma.md")" "machine: unknown"
+assert_contains "converted file carries project_id" "$(git -C "$remote" show "$gb:proposals/$today-oldproj-1234-gamma.md")" "project_id: oldproj-1234"
+assert_contains "converted file carries machine unknown" "$(git -C "$remote" show "$gb:proposals/$today-oldproj-1234-gamma.md")" "machine: unknown"
 git -C "$remote" show-ref -q refs/heads/proposals/oldproj-1234 && r=yes || r=no
 assert_eq "old remote branch deleted after conversion" "$r" no
 git -C "$remote" merge-base --is-ancestor "$oldtip" main && r=yes || r=no
@@ -492,6 +493,99 @@ out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
 assert_eq "second run has nothing to convert" "$r" 0
 assert_contains "second run says so" "$out" "nothing to convert"
 rm -f "$sdir/knowledge/wip.txt"; git -C "$sdir/knowledge" checkout -q main; git -C "$sdir/knowledge" branch -q -D proposals/dirty-0000
+# --- migration (phase 5): running sandboxes are stopped only on request, equal slugs from two projects
+# stay apart, conversion runs on every host, declining the deletion still moves clones to main
+for id in px-1111 py-2222; do
+    git -C "$oldc" checkout -q -b "proposals/$id" origin/main; mkdir -p "$oldc/proposals/$id"
+    printf -- '---\nscope: global\n---\n\n# same\n\nfrom %s\n' "$id" > "$oldc/proposals/$id/2026-09-06-same.md"
+    git -C "$oldc" add -A; git -C "$oldc" commit -qm "$id"; git -C "$oldc" push -q origin "proposals/$id"
+done
+git -C "$clone" fetch -q origin; git -C "$clone" checkout -q -b proposals/px-1111 origin/proposals/px-1111
+rproj="$tmp/work/r"; mkdir -p "$rproj"; git -C "$rproj" init -q
+rdir=$(ai_sandbox_dir_for "$rproj"); mkdir -p "$rdir"
+printf 'services: {}\n' > "$rdir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$rproj" > "$rdir/.env"
+: > "$DOCKER_STUB_LOG"
+# no answer to either prompt: the running sandbox is skipped, the remote branches stay, clones still move
+out=$(DOCKER_STUB_RUNNING=true migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+assert_eq "a skipped running sandbox is not a failure" "$r" 0
+assert_contains "table shows the running column" "$(printf '%s\n' "$out" | head -1)" "running"
+assert_contains "the prompt names the running sandbox" "$(printf '%s\n' "$out" | grep -i 'y/N' | head -1)" "$(basename "$rdir")"
+assert_eq "running stale sandbox not stopped without an answer" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
+assert_eq "running stale sandbox left stale" "$(ai_sandbox_knowledge_state "$rdir")" stale
+assert_contains "skipped running sandbox listed at the end" "$(printf '%s\n' "$out" | grep '^skipped')" "$(basename "$rdir")"
+assert_eq "two projects with the same slug became two branches" \
+    "$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -c -E -- "^proposal/$today-p[xy]-[0-9]{4}-same-[0-9a-f]{4}\$")" 2
+git -C "$remote" show-ref -q refs/heads/proposals/px-1111 && r=yes || r=no
+assert_eq "deletion declined: old remote branch kept" "$r" yes
+assert_eq "deletion declined: clone still moved to main" "$(git -C "$clone" branch --show-current)" main
+assert_eq "deletion declined: converted local old branch dropped" "$(git -C "$clone" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+assert_status "deletion declined: moved clone synced ok" "$clone" "ok:"
+: > "$DOCKER_STUB_LOG"
+# 'y' to both prompts: the running sandbox is stopped and recreated, the converted branches are deleted
+out=$(printf 'y\ny\n' | DOCKER_STUB_RUNNING=true migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "confirmed run succeeds" "$r" 0
+assert_contains "running stale sandbox stopped after y" "$(stub_docker_log)" "down"
+assert_eq "running stale sandbox recreated after y" "$(ai_sandbox_knowledge_state "$rdir")" current
+assert_contains "already converted files are not converted again" "$out" "already has a proposal/* branch"
+assert_eq "no second branch for an already converted file" \
+    "$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -c -E -- "^proposal/$today-px-1111-same-")" 1
+git -C "$remote" show-ref -q refs/heads/proposals/px-1111 && r=yes || r=no
+assert_eq "old remote branches deleted after y" "$r" no
+assert_status "full run: project clone ok" "$clone" "ok:"
+assert_status "full run: integrator clone ok" "$iclone" "ok:"
+assert_status "full run: manual clone ok" "$mdir/knowledge" "ok:"
+assert_status "full run: recreated sandbox clone ok" "$rdir/knowledge" "ok:"
+assert_contains "the end names the plain create run that rebuilds the doctor" "$out" "create-ai-sandbox.sh <project>"
+rm -rf "$rdir"
+# a host without the integrator converts a local-only old branch (its remote branch is gone) from the clone
+sed -i 's/^INTEGRATOR=.*/INTEGRATOR=/' "$AI_KNOWLEDGE_CONFIG"
+git -C "$mdir/knowledge" checkout -q -b proposals/solo-9999 main; mkdir -p "$mdir/knowledge/proposals/solo-9999"
+printf -- '---\nscope: global\n---\n\n# epsilon\n\nlocal only\n' > "$mdir/knowledge/proposals/solo-9999/2026-09-05-epsilon.md"
+git -C "$mdir/knowledge" add -A; git -C "$mdir/knowledge" commit -q --no-verify -m "epsilon"
+out=$(migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+assert_eq "non-integrator host: run succeeds" "$r" 0
+assert_eq "non-integrator host: local-only old branch converted" \
+    "$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -c -E -- "^proposal/$today-solo-9999-epsilon-[0-9a-f]{4}\$")" 1
+git -C "$remote" show-ref -q refs/heads/proposals/solo-9999 && r=yes || r=no
+assert_eq "non-integrator host: local-only old branch not re-pushed" "$r" no
+assert_eq "non-integrator host: clone moved to main" "$(git -C "$mdir/knowledge" branch --show-current)" main
+assert_eq "non-integrator host: converted local branch dropped" "$(git -C "$mdir/knowledge" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+assert_status "non-integrator host: clone ok" "$mdir/knowledge" "ok:"
+# a conversion that fails keeps the local branch and names it; the clone still moves to main
+git -C "$mdir/knowledge" checkout -q -b proposals/solo-8888 main; mkdir -p "$mdir/knowledge/proposals/solo-8888"
+printf -- '---\nscope: global\n---\n\n# zeta\n\nlocal only\n' > "$mdir/knowledge/proposals/solo-8888/2026-09-07-zeta.md"
+git -C "$mdir/knowledge" add -A; git -C "$mdir/knowledge" commit -q --no-verify -m "zeta"
+knowledge sync >/dev/null 2>&1 || true
+chmod -R a-w "$AI_KNOWLEDGE_ROOT/main/.git"
+out=$(migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+chmod -R u+w "$AI_KNOWLEDGE_ROOT/main/.git"
+assert_eq "failed conversion makes the run exit 1" "$r" 1
+assert_contains "failed conversion names the branch" "$out" "proposals/solo-8888"
+git -C "$mdir/knowledge" show-ref -q refs/heads/proposals/solo-8888 && r=yes || r=no
+assert_eq "failed conversion keeps the local branch" "$r" yes
+assert_eq "failed conversion: nothing pushed for it" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -- '-solo-8888-')" 0
+assert_eq "failed conversion: clone still moved to main" "$(git -C "$mdir/knowledge" branch --show-current)" main
+out=$(migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+assert_eq "kept branch converted on the next run" "$(git -C "$remote" for-each-ref 'refs/heads/proposal/*' | grep -c -- "-solo-8888-zeta-")" 1
+assert_eq "kept branch dropped once converted" "$(git -C "$mdir/knowledge" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+sed -i "s|^INTEGRATOR=.*|INTEGRATOR=$integ|" "$AI_KNOWLEDGE_CONFIG"
+# an ssh remote without an agent holding a key stops the run before anything is touched
+printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$stale" > "$sdir/.env"
+sed -i "s|^REMOTE=.*|REMOTE=ssh://stub$remote|" "$AI_KNOWLEDGE_CONFIG"
+: > "$DOCKER_STUB_LOG"; unset SSH_AUTH_SOCK
+out=$(migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+assert_eq "ssh remote without an agent: exit 1" "$r" 1
+assert_contains "ssh remote without an agent: says how to load a key" "$out" 'eval "$(ssh-agent -s)"; ssh-add'
+assert_eq "ssh remote without an agent: stale sandbox untouched" "$(ai_sandbox_knowledge_state "$sdir")" stale
+assert_eq "ssh remote without an agent: docker never called" "$(wc -l < "$DOCKER_STUB_LOG")" 0
+export SSH_AUTH_SOCK="$tmp/empty-agent.sock"; : > "$SSH_AUTH_SOCK"
+out=$(migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+assert_eq "ssh remote with an empty agent: exit 1" "$r" 1
+unset SSH_AUTH_SOCK; rm -f "$tmp/empty-agent.sock"
+sed -i "s|^REMOTE=.*|REMOTE=file://$remote|" "$AI_KNOWLEDGE_CONFIG"
+out=$(migrate --display=none 2>&1 </dev/null) && r=0 || r=$?
+assert_eq "file remote: the stale sandbox is recreated" "$(ai_sandbox_knowledge_state "$sdir")" current
 # --- init on a host with only the installed helper seeds from the seed beside it (phase 4)
 remote2="$tmp/remote2.git"; git init -q --bare "$remote2"
 home2="$tmp/home2"; mkdir -p "$home2/.gemini"
