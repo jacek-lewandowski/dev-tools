@@ -30,6 +30,37 @@ which supersedes the flow and branch model of
 Host helper: [bin/ai/ai-knowledge](../bin/ai/ai-knowledge).
 Seed content: [bin/ai/knowledge-seed/](../bin/ai/knowledge-seed).
 
+## Upgrading from the first design
+
+A host that already runs the 2026-09-14 design has old helpers in
+`~/.ai-sandbox/bin`, sandboxes without a knowledge stamp and clones sitting on
+`proposals/<project-id>` branches. Upgrade in this order:
+
+1. Refresh the helpers. Run the installed `ai-sandbox-migrate` once, or start any
+   sandbox with `ai-sandbox`, which runs it. Either copies the new helpers and
+   the knowledge seed from the dev-tools checkout into `~/.ai-sandbox/bin`.
+2. Expect refusals. From now on `ai-sandbox` refuses to start a stopped sandbox
+   until it has been recreated. Entering a running one still works.
+3. Run `<dev-tools>/bin/ai/ai-sandbox-migrate-knowledge` from the checkout. It
+   lists the running sandboxes and asks before stopping them. When the remote is
+   an ssh URL it needs an ssh agent holding the key and refuses to start without
+   one. It converts every old `proposals/<project-id>` branch, on the remote and
+   in every clone on this host, into `proposal/<date>-<project-id>-<slug>-<hex>`
+   branches, asks once before deleting the old branches on the remote, moves
+   every clone to `main` whether or not you confirmed the deletion, and ends
+   with `ai-knowledge sync --all`. Migrate the integrator's host last, or run
+   its migration again after the other hosts, so that its clone fetches every
+   converted branch.
+4. Run `ai-knowledge init <url> --integrator <dev-tools dir>` once more. The
+   first design kept the integrator in the host's config only; this run records
+   it in `README.md` on `main`. A re-run is safe. While the integrator clone has
+   commits on `main` that are not pushed yet, the record is skipped and the
+   message says so: run `ai-knowledge sync --all` first, then `init` again.
+5. Rebuild each image when convenient with a plain `create-ai-sandbox.sh
+   <project>`. The `sandbox-doctor` inside the container is baked into the
+   image, and the `--no-start` recreations of step 3 do not rebuild it. Until
+   the plain run the doctor's knowledge line is the old one.
+
 ## Deployment
 
 ### 1. Install the helpers once
@@ -77,21 +108,30 @@ mounts. `ai-sandbox` and `ai-sandbox-restart` compare the stamp with the host's
 configuration and refuse to start a sandbox that is `stale` (stamp disagrees) or
 `unstamped` (created before stamps existed). Such a sandbox would mount the live
 `GEMINI.md`, which now resolves through the host symlink to the render, read-write.
-The start scripts only check; they never rewrite a sandbox.
+The start scripts only check; they never rewrite a sandbox. `ai-sandbox` checks
+only when it would start the container; entering a running sandbox always works.
 
-The repair is a separate, one-off script in the dev-tools checkout, not installed
-into `~/.ai-sandbox/bin`:
+The repair for one sandbox is a plain `create-ai-sandbox.sh <project>` run, and
+every message about a stale or unstamped sandbox (the refusal, `ai-knowledge
+status`, the doctor) names it. The shortcut for all of them is a separate,
+one-off script in the dev-tools checkout, not installed into `~/.ai-sandbox/bin`:
 
 ```bash
 ai-knowledge status                                  # every sandbox: current | stale | unstamped
 <dev-tools>/bin/ai/ai-sandbox-migrate-knowledge      # stop and recreate each stale or unstamped one
 ```
 
+It starts by listing the sandboxes that are running and asks before stopping
+them. When the remote is an ssh URL it refuses to start unless an ssh agent holds
+the key, so that no step runs offline halfway through.
+
 After the sandboxes it converts the knowledge branches of the first design: every
-open file on a remote `proposals/<project-id>` branch becomes a `proposal/*` branch
+open file on a `proposals/<project-id>` branch, on the remote or local to a clone
+on this host, becomes a `proposal/<date>-<project-id>-<slug>-<hex>` branch
 (`project_id` from the old branch name, `machine: unknown`); with your confirmation
 each old branch is merged into `main` with `-s ours` and deleted on the remote
-under a lease; every clean clone on this host moves from its old branch to `main`.
+under a lease; every clean clone on this host moves from its old branch to `main`,
+whether or not you confirmed the deletion.
 A clone with an unpushed old-style commit is pushed first, or the run stops; a
 dirty clone is named and left. It recovers the project of an unstamped sandbox
 from its `project-path` file or the project mount in its compose file, refuses
@@ -99,13 +139,17 @@ the whole run if any project directory is gone, forwards extra arguments to
 `create-ai-sandbox.sh`, and recreates with `--no-start`, so migrated sandboxes
 stay stopped and the running cap cannot end the run halfway; start each with
 `ai-sandbox` when needed. A sandbox whose recreation fails is listed under
-`failed:` and the run exits 1; the others are still migrated. Once
+`failed:` and the run exits 1; the others are still migrated. The run ends
+with `ai-knowledge sync --all`. Once
 `ai-knowledge status` shows every sandbox as `current` and no clone sits on an
 old branch, delete the script; nothing else refers to it.
 
 Inside a container, `sandbox-doctor` tells the cases apart: "not configured on the
 host", "NOT migrated", or the last sync line with its age and each proposal branch
-as `pushed` or `pending`.
+as `pushed` or `pending`. The doctor is part of the image: only a plain
+`create-ai-sandbox.sh <project>` run rebuilds it, and the `--no-start`
+recreations of the migration script keep the old one. Until that run its
+knowledge line is the old text.
 
 ### 5. Second computer
 
@@ -118,6 +162,11 @@ whether to file the difference as a proposal
 read and, with no answer, the `ai-knowledge propose` command to run later. The old file is backed up either
 way. Every proposal has its own branch, so two machines, or two checkouts of one
 project, never share a branch and never conflict.
+
+Step 4 applies here too: a sandbox created before `init` ran on this host is
+unstamped and needs the same recreation. When both hosts come from the first
+design, migrate the integrator's host last, or run its migration again after
+the other one.
 
 ### Editing the rules yourself
 
@@ -285,6 +334,25 @@ Closing a proposal is `git merge -s ours --no-ff` of its branch into `main`:
 `main`'s tree is unchanged, the branch tip becomes an ancestor of `main`, and no
 checkout or file removal is needed. The proposal text stays reachable with
 `git log --full-history -- proposals/` or `git show <merge>^2:proposals/<file>`.
+
+### Re-opening a closed proposal
+
+A closed proposal's branch is gone, but its file is still in `main`'s history,
+on the second parent of the merge that closed it. To open it again, take the
+file from there and file it as a new proposal from the host:
+
+```bash
+git -C ~/knowledge show <merge commit>^2:proposals/<file> > /tmp/f.md   # in the integrator sandbox, or from ~/.ai-sandbox/knowledge/main on the host
+ai-knowledge propose /tmp/f.md --push                                    # on the host
+```
+
+Close proposals with `-s ours` only. A plain `git merge <branch>` puts the
+proposal file on `main` for good: every clone and the render carry it, and the
+integrator's next sync warns that `main carries proposal files` because `a
+proposal branch was merged for real`. To fix it, remove the file from `main`
+with a normal commit in the integrator's clone (`git rm proposals/<file>`), add
+a `decisions.md` entry saying what happened, and let the next sync push. Never
+rewrite `main` to undo the merge.
 
 ### 7. Container mounts
 
