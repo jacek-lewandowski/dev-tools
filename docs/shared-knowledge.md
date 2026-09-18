@@ -6,8 +6,8 @@
 project: the global rules (`rules/global.md`), role rules for planner, implementer
 and reviewer agents (`roles/<name>.md`), own-authored skills (`skills/<name>/`) and
 a decision log (`decisions.md`). Every AI sandbox reads a rendered copy of its
-`main` branch read-only and proposes changes through its own clone, on its own
-branch. One sandbox, the integrator, merges approved proposals into `main`.
+`main` branch read-only and proposes changes through its own clone, one branch
+per proposal. One sandbox, the integrator, merges approved proposals into `main`.
 
 **When.** The feature is optional and inert until `ai-knowledge init` has run on
 the host. Without the config file every sandbox script behaves as before and the
@@ -24,7 +24,9 @@ Project-specific knowledge stays out of the repository. Project rules live in th
 project tree; Claude memory and conversations travel between computers with
 `ai-sync` as before.
 
-Design: [2026-09-14-shared-knowledge-design.md](superpowers/specs/2026-09-14-shared-knowledge-design.md).
+Design: [2026-09-18-shared-knowledge-v2-design.md](superpowers/specs/2026-09-18-shared-knowledge-v2-design.md),
+which supersedes the flow and branch model of
+[2026-09-14-shared-knowledge-design.md](superpowers/specs/2026-09-14-shared-knowledge-design.md).
 Host helper: [bin/ai/ai-knowledge](../bin/ai/ai-knowledge).
 Seed content: [bin/ai/knowledge-seed/](../bin/ai/knowledge-seed).
 
@@ -59,8 +61,8 @@ It commits, pushes `main`, and renders (see step 4 of "How it works"). From now 
 `~/.gemini/GEMINI.md` is a symlink into the render. The previous file is kept as
 `GEMINI.md.pre-ai-knowledge.<timestamp>`.
 
-`--integrator` names the project whose sandbox is the integrator. Its clone sits on
-`main` instead of a proposals branch.
+`--integrator` names the project whose sandbox is the integrator: the one clone
+that commits on `main`.
 
 ### 4. Migrate every existing sandbox
 

@@ -89,8 +89,13 @@ read_kconfig() { sed -n "s/^$1=//p" "$AI_KNOWLEDGE_CONFIG" | head -1; }
 
 migrate_branches() {
     ai_knowledge_configured || { echo "knowledge: not configured; nothing to convert"; return 0; }
-    local aik="$HERE/ai-knowledge" integrator main sb project c b cur rt old id files f slug tmpf nb ans
+    local aik="$HERE/ai-knowledge" integrator main sb project c b cur rt old id files f slug tmpf nb ans tip
     local -a converted=()
+    # Exact match on the slug: a glob would let "tree" match "verify-the-tree".
+    has_counterpart() {   # <slug>
+        git -C "$main" ls-remote --heads origin 'proposal/*' \
+            | grep -q -E "refs/heads/proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-$1-[0-9a-f]{4}\$"
+    }
     integrator=$(read_kconfig INTEGRATOR); main="$AI_KNOWLEDGE_ROOT/main"
 
     # (0) Nothing is deleted while a clone holds an unpushed old-style commit.
@@ -131,8 +136,9 @@ migrate_branches() {
                 local complete=yes
                 while IFS= read -r f; do
                     [ -n "$f" ] || continue
-                    slug=$(basename "$f" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
-                    if git -C "$main" ls-remote --heads origin "proposal/*-$slug-*" | grep -q .; then
+                    slug=$(ai_sandbox_slug "$(basename "$f" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')")
+                    [ -n "$slug" ] || slug=proposal
+                    if has_counterpart "$slug"; then
                         echo "  $f: already has a proposal/* branch"; continue
                     fi
                     tmpf=$(mktemp); git -C "$main" show "origin/$b:$f" > "$tmpf"
@@ -142,7 +148,7 @@ migrate_branches() {
                         warn "  $f: conversion failed; $b is kept"; complete=no
                     fi
                     rm -f "$tmpf"
-                    git -C "$main" ls-remote --heads origin "proposal/*-$slug-*" | grep -q . || complete=no
+                    has_counterpart "$slug" || complete=no
                 done <<< "$files"
                 if [ "$complete" = yes ]; then converted+=("$b"); else BRANCH_FAILED+=("$b: not every proposal has a counterpart on the remote; branch kept"); fi
             done <<< "$old"
@@ -152,14 +158,22 @@ migrate_branches() {
                 case $ans in
                     y|Y|yes)
                         for b in "${converted[@]}"; do
-                            git -C "$iclone" merge -q -s ours --no-ff -m "close legacy branch $b (its proposals are proposal/* branches now)" "origin/$b" \
+                            tip=$(git -C "$iclone" rev-parse "origin/$b")
+                            git -C "$iclone" merge -q -s ours --no-ff -m "close legacy branch $b (its proposals are proposal/* branches now)" "$tip" \
                                 || { BRANCH_FAILED+=("$b: ours-merge into main failed"); continue; }
                             git -C "$iclone" push -q origin main || { BRANCH_FAILED+=("cannot push main; $b kept"); continue; }
-                            git -C "$iclone" push -q origin --delete "$b" 2>/dev/null || warn "$b: remote deletion failed; delete it by hand"
-                            git -C "$iclone" branch -q -D "$b" 2>/dev/null || true
-                            echo "knowledge: closed and deleted $b"
+                            # The lease: a commit pushed onto the old branch while this
+                            # script waited at the prompt keeps the branch alive.
+                            if git -C "$iclone" push -q "--force-with-lease=refs/heads/$b:$tip" origin ":refs/heads/$b" 2>/dev/null; then
+                                git -C "$iclone" branch -q -D "$b" 2>/dev/null || true
+                                echo "knowledge: closed and deleted $b"
+                            else
+                                warn "$b: the remote moved since it was read; kept. Run again."
+                                BRANCH_FAILED+=("$b: kept, remote changed under the lease")
+                            fi
                         done ;;
-                    *)  echo "knowledge: old branches kept; clones stay on them. Run again to finish."; return 0 ;;
+                    *)  echo "knowledge: old branches kept on the remote and every clone left on its old branch. Run again to finish."
+                        BRANCH_LEFT+=("(all clones: deletion declined)"); return 0 ;;
                 esac
             fi
         fi
