@@ -265,6 +265,9 @@ assert_eq "sandbox block not written into the repository file" \
     "$(grep -c 'ai-sandbox-environment' "$AI_KNOWLEDGE_ROOT/main/rules/global.md")" 0
 assert_eq "host GEMINI.md still the render symlink after create" "$(readlink "$HOME/.gemini/GEMINI.md")" "$AI_KNOWLEDGE_RENDER/GLOBAL.md"
 assert_contains "doctor reports knowledge" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'status "knowledge"'
+assert_contains "doctor lists proposal branches" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'proposal/'
+assert_eq "sandbox block no longer names a per-sandbox branch" "$(grep -c 'proposals/<project-id>' "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" 0
+assert_contains "sandbox block names the proposal branch pattern" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "proposal/<date>-<slug>-<hex>"
 assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" "Shared knowledge repository"
 
 assert_contains "create stamps SANDBOX_KNOWLEDGE=1" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=1'

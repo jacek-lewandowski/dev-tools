@@ -904,10 +904,13 @@ KNOWLEDGE_NOTE=""
 if [ "$KNOWLEDGE" = "yes" ]; then
 KNOWLEDGE_NOTE="
 Shared knowledge: the global rules and roles you read are rendered read-only from
-a private git repository. Your own clone of it is at ~/knowledge, on the branch
-\`proposals/<project-id>\` (the integrator sandbox is on main). To propose a generic
-rule, use the \`propose-rule\` skill: commit only under proposals/<project-id>/ and
-never push; the host syncs the clone on every sandbox start.
+a private git repository. Your own clone of it is at ~/knowledge with main checked
+out. A project sandbox proposes a generic rule with the \`propose-rule\` skill: one
+file on a branch proposal/<date>-<slug>-<hex>, never a commit on main (a hook
+refuses it), never a push; the host pushes on the next sync (a sandbox start or
+\`ai-knowledge sync --all\`) and the integrator sandbox, which commits on main,
+decides with the \`knowledge-integrate\` skill. \`sandbox-doctor\` shows what is
+pushed and pending.
 "
 fi
 
@@ -1363,7 +1366,20 @@ fi
 # the compose file predates the knowledge mounts and the host refuses to start
 # it until the migration script has recreated it.
 case "${SANDBOX_KNOWLEDGE-unset}" in
-    1)     status "knowledge" "$( [ -f "$HOME/knowledge/.sync-status" ] && cat "$HOME/knowledge/.sync-status" || echo "configured; clone not synced yet (host: ai-knowledge sync)" )" ;;
+    1)     if [ -f "$HOME/knowledge/.sync-status" ]; then
+               _age=$(( ($(date +%s) - $(stat -c %Y "$HOME/knowledge/.sync-status")) / 60 ))
+               status "knowledge" "$(cat "$HOME/knowledge/.sync-status") [${_age} min ago]"
+               # Each open proposal branch: on the remote already, or waiting for the next host sync.
+               for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' 2>/dev/null); do
+                   if [ "$(git -C "$HOME/knowledge" rev-parse -q --verify "refs/remotes/origin/$_b" 2>/dev/null)" = "$(git -C "$HOME/knowledge" rev-parse "$_b" 2>/dev/null)" ]; then
+                       status "  $_b" "pushed"
+                   else
+                       status "  $_b" "pending: reaches the remote on the next host sync"
+                   fi
+               done
+           else
+               status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
+           fi ;;
     0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
     *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts (host: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
 esac
