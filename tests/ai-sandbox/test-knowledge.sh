@@ -187,6 +187,9 @@ msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-b-agent" 2>&1) && r=0 || 
 assert_eq "stale sandbox fails the prerequisite" "$r" 1
 assert_contains "refusal names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
 assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
+assert_contains "stale refusal explains the mismatch" "$msg" "disagrees"
+msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-c-agent" 2>&1) || true
+assert_contains "unstamped refusal explains the missing stamp" "$msg" "before the knowledge stamp"
 # --- status without an argument lists every sandbox with its state
 all=$(knowledge status 2>&1)
 assert_contains "status keeps the remote header" "$all" "remote:      file://$remote"
@@ -228,25 +231,42 @@ mproj="$tmp/work/m"; mkdir -p "$mproj"; git -C "$mproj" init -q
 mdir2=$(ai_sandbox_dir_for "$mproj"); mkdir -p "$mdir2"
 printf 'services:\n  x:\n    volumes:\n      - "%s:%s"\n      - "%s/.gemini/GEMINI.md:%s/.gemini/GEMINI.md"\n' "$mproj" "$mproj" "$HOME" "$HOME" > "$mdir2/docker-compose.yml"
 printf 'HOST_UID=1\n' > "$mdir2/.env"
+# an unstamped sandbox on the current layout has project-path and no self-mount to read
+nproj="$tmp/work/n"; mkdir -p "$nproj"; git -C "$nproj" init -q
+ndir=$(ai_sandbox_dir_for "$nproj"); mkdir -p "$ndir"
+printf 'services: {}\n' > "$ndir/docker-compose.yml"; printf 'HOST_UID=1\n' > "$ndir/.env"
+printf '%s\n' "$nproj" > "$ndir/project-path"
 # fab-b points at a missing project and fab-c has no recoverable path: the whole run is refused
-out=$(migrate --display=none --no-start 2>&1) && r=0 || r=$?
+out=$(migrate --display=none 2>&1) && r=0 || r=$?
 assert_eq "migration refuses when a project directory is missing" "$r" 1
 assert_contains "refusal names the sandbox with the missing project" "$out" "fab-b-agent"
 assert_contains "refusal names the sandbox without a recoverable path" "$out" "fab-c-agent"
 assert_eq "nothing migrated on a refused run" "$(ai_sandbox_knowledge_state "$mdir2")" unstamped
 rm -rf "$AI_SANDBOX_ROOT"/fab-[bcd]-agent
+# a project create-ai-sandbox.sh cannot enter: that sandbox fails, the others still migrate
+bproj="$tmp/work/bad"; mkdir -p "$bproj"
+bdir=$(ai_sandbox_dir_for "$bproj"); mkdir -p "$bdir"
+printf 'services: {}\n' > "$bdir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$bproj" > "$bdir/.env"
+chmod 000 "$bproj"
 : > "$DOCKER_STUB_LOG"
-out=$(migrate --display=none --no-start 2>&1) && r=0 || r=$?
-assert_eq "migration succeeds" "$r" 0
+out=$(migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "a failed recreation makes the run exit 1" "$r" 1
 assert_eq "unstamped sandbox recreated from its compose mount" "$(ai_sandbox_knowledge_state "$mdir2")" current
+assert_eq "unstamped sandbox recreated from project-path" "$(ai_sandbox_knowledge_state "$ndir")" current
 assert_eq "stale sandbox recreated from its stamp" "$(ai_sandbox_knowledge_state "$sdir")" current
+assert_eq "failed sandbox left stale" "$(ai_sandbox_knowledge_state "$bdir")" stale
 assert_contains "recreated compose carries the knowledge mounts" "$(cat "$mdir2/docker-compose.yml")" "$HOME/knowledge"
-assert_eq "running containers are stopped before recreation" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 2
-assert_contains "summary lists the migrated sandboxes" "$out" "$(basename "$mdir2")"
-assert_eq "current sandbox left alone" "$(grep -c "$(basename "$pdir")" <<<"$(printf '%s\n' "$out" | grep -i migrated)")" 0
+assert_eq "running containers are stopped before recreation" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 4
+assert_eq "migrated sandboxes are not started" "$(grep -c 'compose.*up' "$DOCKER_STUB_LOG")" 0
+assert_contains "summary lists the migrated sandboxes" "$(printf '%s\n' "$out" | grep '^migrated:')" "$(basename "$mdir2")"
+assert_contains "summary lists the failed sandbox" "$(printf '%s\n' "$out" | grep '^failed:')" "$(basename "$bdir")"
+assert_eq "current sandbox not reported as migrated" "$(printf '%s\n' "$out" | grep '^migrated:' | grep -c "$(basename "$pdir")")" 0
+chmod 755 "$bproj"; rm -rf "$bdir"
 out=$(migrate 2>&1) && r=0 || r=$?
 assert_eq "nothing to migrate exits 0" "$r" 0
 assert_contains "nothing to migrate says so" "$out" "nothing to migrate"
+
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"
