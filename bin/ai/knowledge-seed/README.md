@@ -13,26 +13,28 @@ edit this repository.
 | `roles/<name>.md` | Rules for one kind of agent (planner, implementer, reviewer, ...). See `roles/README.md`. |
 | `skills/<name>/SKILL.md` | Skills authored here. Copied into `~/.agents/skills` and linked from every tool's skills directory. |
 | `decisions.md` | Why each rule exists, and which proposals were integrated or rejected. |
-| `proposals/` | Empty on `main`. A sandbox's branch adds `proposals/<project-id>/*.md`. See `proposals/README.md`. |
+| `proposals/` | Only this README on `main`. A proposal branch adds one `proposals/<date>-<slug>.md`. See `proposals/README.md`. |
 
 ## Branches
 
 - `main` holds the knowledge. Only the integrator sandbox commits to it, after the
-  user approves each change.
-- `proposals/<project-id>` belongs to one sandbox. It may differ from `main` only
-  under `proposals/<project-id>/`; the host refuses to push anything else.
+  user approves each change. Every clone has `main` checked out.
+- `proposal/<date>-<slug>-<hex>` holds one proposal, created from `main` by the
+  `propose-rule` skill in any sandbox. It may differ from `main` only under
+  `proposals/`; the host refuses to push anything else, and refuses a branch whose
+  name does not follow that pattern.
 
 ## Flow
 
 1. An agent in a project sandbox learns something generic and runs the
-   `propose-rule` skill, which commits one proposal file on the sandbox's branch.
+   `propose-rule` skill, which commits one proposal file on its own branch.
 2. On the next sync (a sandbox start, or `ai-knowledge sync --all` on the host) the
-   host merges `main` into the branch and pushes it.
+   host pushes the branch and fast-forwards the clone's `main`.
 3. In the integrator sandbox the `knowledge-integrate` skill triages every open
-   proposal, the user approves, the agent commits to `main` and removes the
-   proposal file on its branch.
-4. The host pushes; every sandbox picks up the new `main` on its next sync, and
-   agents read it in their next session.
+   proposal, the user approves, the agent commits to `main` and closes each
+   proposal with `git merge -s ours --no-ff` of its branch.
+4. The host pushes `main`, deletes the closed branches on the remote and in every
+   clone at their next sync; agents read the new `main` in their next session.
 
 Nothing project-specific belongs here. Project rules live in the project tree;
 project memory travels with `ai-sync`.
