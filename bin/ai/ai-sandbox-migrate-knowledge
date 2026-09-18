@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# ai-sandbox-migrate-knowledge -- one-off repair of sandboxes created before the
+# knowledge stamp, or before 'ai-knowledge init' changed what a sandbox mounts.
+#
+# The start scripts refuse such a sandbox; nothing in them repairs it. This
+# script does, once, by stopping each stale or unstamped sandbox and re-running
+# create-ai-sandbox.sh for its project, which rewrites the compose file and the
+# stamp. Run it from the dev-tools checkout; it is not installed. Extra
+# arguments are forwarded to create-ai-sandbox.sh (for example --display=none).
+# Delete this script once 'ai-knowledge status' shows every sandbox as current.
+set -euo pipefail
+HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+. "$HERE/ai-sandbox-lib.sh"
+
+warn() { printf '!! %s\n' "$*" >&2; }
+
+# A sandbox without a stamp mounts its project at the project's own path. Of
+# the self-mounts in its compose file, the project is the one whose sandbox
+# directory is this one; other self-mounts (GEMINI.md) fail that check.
+recover_project() {   # <sandbox dir>
+    local sb=$1 p
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        if [ "$(ai_sandbox_dir_for "$p")" = "$sb" ]; then printf '%s\n' "$p"; return 0; fi
+    done < <(sed -n 's/^[[:space:]]*- *"\([^":]*\):\1"$/\1/p' "$sb/docker-compose.yml")
+    return 1
+}
+
+[ -d "$AI_SANDBOX_ROOT" ] || { echo "nothing to migrate: no sandboxes under $AI_SANDBOX_ROOT"; exit 0; }
+
+TODO_DIRS=(); TODO_PROJECTS=(); PROBLEMS=(); current=0
+printf '%-45s %-10s %s\n' sandbox state project
+while IFS=$'\t' read -r sb project; do
+    [ -n "$sb" ] || continue
+    state=$(ai_sandbox_knowledge_state "$sb")
+    if [ -z "$project" ]; then project=$(recover_project "$sb" || true); fi
+    printf '%-45s %-10s %s\n' "$(basename "$sb")" "$state" "${project:-unknown}"
+    if [ "$state" = current ]; then current=$((current + 1)); continue; fi
+    if [ -z "$project" ]; then
+        PROBLEMS+=("$(basename "$sb"): cannot determine its project (no stamp and no project mount in its compose file)")
+    elif [ ! -d "$project" ]; then
+        PROBLEMS+=("$(basename "$sb"): its project directory $project no longer exists")
+    else
+        TODO_DIRS+=("$sb"); TODO_PROJECTS+=("$project")
+    fi
+done < <(ai_sandbox_list)
+echo
+
+if [ ${#PROBLEMS[@]} -gt 0 ]; then
+    for p in "${PROBLEMS[@]}"; do warn "$p"; done
+    warn "Nothing was migrated. Remove those sandbox directories (or restore the project) and run again."
+    exit 1
+fi
+if [ ${#TODO_DIRS[@]} -eq 0 ]; then
+    echo "nothing to migrate: every sandbox is current ($current)"
+    exit 0
+fi
+
+MIGRATED=()
+for i in "${!TODO_DIRS[@]}"; do
+    sb=${TODO_DIRS[$i]}; project=${TODO_PROJECTS[$i]}
+    echo "== $(basename "$sb"): stopping, then recreating for $project"
+    # A stale container that is running mounts the rules read-write; it goes
+    # down before the new compose file exists, whatever 'up' would have done.
+    docker compose -f "$sb/docker-compose.yml" --env-file "$sb/.env" down \
+        || warn "compose down failed for $(basename "$sb"); continuing"
+    "$HERE/create-ai-sandbox.sh" "$@" "$project"
+    MIGRATED+=("$(basename "$sb")")
+done
+
+echo
+echo "migrated: ${MIGRATED[*]}"
+echo "left alone (current): $current"
+echo "Every sandbox is current now; this script can be deleted."
