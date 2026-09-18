@@ -107,6 +107,7 @@ a `conflict` status.
 |---|---|
 | `ai-knowledge init <url> [--integrator DIR]` | Configure, seed an empty remote, render |
 | `ai-knowledge sync [PROJECT_DIR]` | Update `main`, render, sync the project's clone |
+| `ai-knowledge sync --all` | Update `main`, render, sync every sandbox's clone in parallel, render again if `main` moved |
 | `ai-knowledge render` | Render only |
 | `ai-knowledge status` | Config, `main` revision, then every sandbox with its knowledge state and last sync |
 | `ai-knowledge status PROJECT_DIR` | The same header, then that project's clone and last sync |
@@ -163,6 +164,33 @@ and whether a push is pending.
 1. Fetch the canonical `main` and fast-forward it. Offline: keep the last state.
 2. Render and wire the host (step 4).
 3. Sync the sandbox's clone (step 5 or 6).
+
+### Sync on demand: `ai-knowledge sync --all`
+
+Nothing runs on a timer. Between sandbox starts the user runs `ai-knowledge sync
+--all` on the host. It fetches and renders `main` once, then syncs every stamped
+sandbox's clone, running or stopped, in parallel (`AI_KNOWLEDGE_JOBS`, default 4),
+then fetches `main` once more and renders again only if an integrator clone
+advanced it. Children never render, so the render is rebuilt by one process at a
+time. Each clone's output is printed as a block under its sandbox name, followed
+by one table: sandbox, state, last sync line. A stale or unstamped sandbox is
+listed and not synced; a sandbox whose project directory is gone is listed as
+`missing project`; a failing child is a row, never the end of the run. Running
+containers see the new render at once; agents read it in their next session.
+
+**Passphrase-protected keys.** Before the first network command, `ai-knowledge`
+probes the remote. When the probe fails with a public-key refusal on an ssh URL:
+
+1. An agent is reachable through `SSH_AUTH_SOCK`: the keys `ssh -G` reports for the
+   remote's host are added with `ssh-add -t 3600` and the user is told that the key
+   sits in their agent for one hour. That agent is never killed.
+2. No agent, but a terminal: `ai-knowledge` starts an `ssh-agent` for this run,
+   adds the keys, says so, and kills it when it exits, on success, on an error and
+   on `die` alike. Children of `sync --all` inherit the agent and never kill it.
+3. No agent and no terminal: the offline path, with the manual commands, as before.
+
+Any other probe failure (timeout, unknown host, no network) and a second refusal
+after the key was added take the offline path without touching an agent.
 
 ### 4. Render and host wiring
 
@@ -243,7 +271,8 @@ through the skills directories. It:
    in the target file.
 4. Commits only that file. It never pushes and never touches other paths.
 
-The host pushes the branch on the next sandbox start.
+The host pushes the branch on the next sync: a sandbox start, or
+`ai-knowledge sync --all` on the host.
 
 ### 9. Integrating (integrator sandbox)
 
@@ -262,9 +291,10 @@ linked from `.claude/skills/`. It:
 5. Checks out each source branch and commits the removal of the handled proposal
    file.
 
-The host pushes `main` and the touched branches on the integrator's next start or
-on `ai-knowledge sync`. Every other sandbox receives the new rules on its next
-start, when its branch also merges the new `main`.
+The host pushes `main` and the touched branches on the next sync. Every other
+sandbox receives the new rules on its next sync, when its branch also merges the
+new `main`; a running agent reads them in its next session, since Claude Code
+loads `CLAUDE.md` once per session.
 
 ### Who can do what
 
@@ -282,6 +312,9 @@ start, when its branch also merges the new `main`.
   project's `.agents/rules/` only by hand.
 - Mounting the render over `~/.claude/agents` hides agents seeded from the host's
   own directory. Roles come from the repository only.
+- Key discovery for the ssh-agent step relies on `ssh -G` printing `identityfile`
+  lines; with none usable it falls back to a bare `ssh-add`, and several configured
+  keys may prompt more than once.
 
 ## Tests
 

@@ -26,11 +26,13 @@ edit this repository.
 
 1. An agent in a project sandbox learns something generic and runs the
    `propose-rule` skill, which commits one proposal file on the sandbox's branch.
-2. On the next sandbox start the host merges `main` into the branch and pushes it.
+2. On the next sync (a sandbox start, or `ai-knowledge sync --all` on the host) the
+   host merges `main` into the branch and pushes it.
 3. In the integrator sandbox the `knowledge-integrate` skill triages every open
    proposal, the user approves, the agent commits to `main` and removes the
    proposal file on its branch.
-4. The host pushes; every sandbox picks up the new `main` on its next start.
+4. The host pushes; every sandbox picks up the new `main` on its next sync, and
+   agents read it in their next session.
 
 Nothing project-specific belongs here. Project rules live in the project tree;
 project memory travels with `ai-sync`.

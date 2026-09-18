@@ -7,8 +7,8 @@ description: Proposes a generic lesson learned as a change to the shared knowled
 
 This sandbox reads its rules read-only and proposes changes through its own clone
 of the knowledge repository at `~/knowledge`, on a branch `proposals/<project-id>`.
-You can commit there. You cannot fetch or push; the host does that when the
-sandbox next starts.
+You can commit there. You cannot fetch or push; the host does that on the next
+sync: a sandbox start, or `ai-knowledge sync --all` run by the user on the host.
 
 ## When
 
@@ -52,8 +52,9 @@ here.
    git -C ~/knowledge add proposals/<project-id>/<file>
    git -C ~/knowledge commit -m "proposal: <slug>"
    ```
-6. Tell the user the proposal is committed and will reach the remote on the next
-   sandbox start, and that the integrator decides whether it enters `main`.
+6. Tell the user the proposal is committed and reaches the remote on the next
+   sync (a sandbox start, or `ai-knowledge sync --all` on the host), and that the
+   integrator decides whether it enters `main`.
 
 ## Never
 
