@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# '-s' starts a fake agent: its "socket" is the running marker; '-k' removes it.
+printf 'ssh-agent %s\n' "$*" >> "${SSH_STUB_LOG:-/dev/null}"
+case "${1:-}" in
+    -s) : > "${SSH_STUB_AGENT:?}"
+        printf 'SSH_AUTH_SOCK=%s; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=424242; export SSH_AGENT_PID;\necho Agent pid 424242;\n' "$SSH_STUB_AGENT" ;;
+    -k) rm -f "${SSH_STUB_AGENT:?}"; echo "Agent pid 424242 killed;" ;;
+esac
