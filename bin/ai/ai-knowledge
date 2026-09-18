@@ -150,15 +150,17 @@ load_config() {
     [ -n "$REMOTE" ] || die "no REMOTE in $AI_KNOWLEDGE_CONFIG"
 }
 
-# The seed lives in the dev-tools checkout, not beside the installed copy of
-# this helper; create-ai-sandbox.sh records that checkout in $AI_SANDBOX_ROOT/config.
+# The seed sits beside this helper: in the checkout, or installed next to the
+# copy in ~/.ai-sandbox/bin by create-ai-sandbox.sh. A recorded dev-tools
+# checkout is the fallback for an installation that predates that.
 seed_dir() {
     local dev_tools=""
+    if [ -d "$HERE/knowledge-seed" ]; then
+        printf '%s\n' "$HERE/knowledge-seed"; return 0
+    fi
     [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
     if [ -n "$dev_tools" ] && [ -d "$dev_tools/bin/ai/knowledge-seed" ]; then
         printf '%s\n' "$dev_tools/bin/ai/knowledge-seed"
-    elif [ -d "$HERE/knowledge-seed" ]; then
-        printf '%s\n' "$HERE/knowledge-seed"
     else
         return 1
     fi
@@ -203,14 +205,99 @@ cmd_init() {
         fi
         log "cloned $remote -> $KNOWLEDGE_MAIN"
     fi
+    local seeded=no
     if ! git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
-        seed_main
+        seed_main; seeded=yes
     fi
     git -C "$KNOWLEDGE_MAIN" checkout -q main 2>/dev/null \
         || warn "$remote has no 'main' branch; ai-knowledge follows main only"
+    record_integrator
+    [ "$seeded" = yes ] || offer_gemini_drift
     cmd_render
     print_hints
     log "done. Sandboxes pick the knowledge up on their next sync (a start, or 'ai-knowledge sync --all'); agents in their next session."
+}
+
+# The host's GEMINI.md without the block create-ai-sandbox.sh generates, which
+# the render appends again from its own file.
+strip_env_block() {   # <src> <dst>
+    SRC="$1" DST="$2" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 - <<'PYSTRIP'
+import os, re
+text = open(os.environ["SRC"], encoding="utf-8").read()
+pattern = re.compile(r"\n*" + re.escape(os.environ["ENV_BEGIN"]) + r".*?" + re.escape(os.environ["ENV_END"]) + r"\n*", re.DOTALL)
+text = pattern.sub("\n", text).strip("\n")
+open(os.environ["DST"], "w", encoding="utf-8").write(text + "\n")
+PYSTRIP
+}
+
+# The repository, not a host's config, says which host integrates: one line in
+# README.md on main. A second host asking to integrate is warned, not recorded,
+# because two clones committing on main can make it diverge.
+record_integrator() {
+    local readme existing mine tmp commit rc=0 out
+    git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main || return 0
+    readme=$(git -C "$KNOWLEDGE_MAIN" show origin/main:README.md 2>/dev/null || true)
+    existing=$(printf '%s\n' "$readme" | sed -n 's/^<!-- ai-knowledge integrator: \(.*\) -->$/\1/p' | head -1)
+    if [ -z "$INTEGRATOR" ]; then
+        [ -z "$existing" ] || log "integrator: $existing (recorded in README.md on main)"
+        return 0
+    fi
+    mine="$(hostname):$INTEGRATOR"
+    if [ -z "$existing" ]; then
+        tmp=$(mktemp)
+        { printf '%s\n' "$readme"; printf '\n<!-- ai-knowledge integrator: %s -->\n' "$mine"; } > "$tmp"
+        commit=$(build_commit "$KNOWLEDGE_MAIN" origin/main README.md "$tmp" "chore: record the integrator ($mine)")
+        rm -f "$tmp"
+        out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$commit:refs/heads/main" 2>&1) || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            git -C "$KNOWLEDGE_MAIN" merge -q --ff-only origin/main >/dev/null 2>&1 || true
+            log "recorded the integrator in README.md on main: $mine"
+        else
+            net_failed "$rc" "$out"; warn "could not record the integrator on main: $NET_REASON (run init again online)"
+        fi
+    elif [ "$existing" = "$mine" ]; then
+        :
+    else
+        warn "another integrator is already recorded on main: $existing."
+        warn "Two clones committing on main can make it diverge; the record is left alone and this host's INTEGRATOR applies locally only."
+    fi
+}
+
+# A host that had its own GEMINI.md joins a repository that already has rules:
+# what differs is shown and, when the user says so, filed as a proposal instead
+# of vanishing into the backup file.
+offer_gemini_drift() {
+    local brain="$HOME/.gemini/GEMINI.md" local_rules remote_rules diff ans ts prop slug branch
+    [ -f "$brain" ] && [ ! -L "$brain" ] || return 0
+    git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main || return 0
+    local_rules=$(mktemp); remote_rules=$(mktemp)
+    strip_env_block "$brain" "$local_rules"
+    git -C "$KNOWLEDGE_MAIN" show origin/main:rules/global.md > "$remote_rules" 2>/dev/null || : > "$remote_rules"
+    diff=$(diff -u --label rules/global.md --label "$(hostname):~/.gemini/GEMINI.md" "$remote_rules" "$local_rules" || true)
+    rm -f "$local_rules" "$remote_rules"
+    [ -n "$diff" ] || return 0
+    warn "this host's ~/.gemini/GEMINI.md differs from rules/global.md on main:"
+    printf '%s\n' "$diff" >&2
+    ts=$(date +%Y%m%d%H%M%S); slug="gemini-md-$(ai_sandbox_slug "$(hostname)")"
+    prop="$AI_KNOWLEDGE_ROOT/gemini-md-drift.$ts.md"
+    {
+        printf -- '---\nscope: global\nproject: host\ntarget: rules/global.md\n'
+        printf 'evidence: at ai-knowledge init on %s, %s had a hand-maintained GEMINI.md that differed from rules/global.md as below.\n---\n\n' "$(date +%F)" "$(hostname)"
+        printf '# GEMINI.md drift on %s\n\n```diff\n%s\n```\n' "$(hostname)" "$diff"
+    } > "$prop"
+    printf 'File this difference as a proposal for the integrator? [y/N] ' >&2
+    ans=""; read -r ans || ans=""
+    case $ans in
+        y|Y|yes)
+            if branch=$(cmd_propose "$prop" --slug "$slug" --machine "$(hostname)" --project-id host --push); then
+                log "filed as $branch"
+            else
+                warn "could not file the drift; the file is at $prop"
+            fi ;;
+        *)
+            warn "not filed. The old GEMINI.md is kept as a backup beside the new symlink; to file the difference later run:"
+            printf '     ai-knowledge propose %s --slug %s --machine %s --project-id host --push\n' "$prop" "$slug" "$(hostname)" >&2 ;;
+    esac
 }
 
 # An empty remote gets the seed directory plus the host's current global rules
@@ -225,13 +312,7 @@ seed_main() {
     src="$HOME/.gemini/GEMINI.md"
     [ -L "$src" ] && src=$(readlink -f "$src")
     if [ -s "$src" ]; then
-        SRC="$src" DST="$KNOWLEDGE_MAIN/rules/global.md" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 - <<'PYEOF'
-import os, re
-text = open(os.environ["SRC"], encoding="utf-8").read()
-pattern = re.compile(r"\n*" + re.escape(os.environ["ENV_BEGIN"]) + r".*?" + re.escape(os.environ["ENV_END"]) + r"\n*", re.DOTALL)
-text = pattern.sub("\n", text).strip("\n")
-open(os.environ["DST"], "w", encoding="utf-8").write(text + "\n")
-PYEOF
+        strip_env_block "$src" "$KNOWLEDGE_MAIN/rules/global.md"
         log "rules/global.md taken from ~/.gemini/GEMINI.md"
     else
         printf '# Global rules\n\nRules every agent follows in every project. Keep them generic.\n' \
@@ -754,6 +835,8 @@ cmd_status() {
         "$REMOTE" "${INTEGRATOR:-<none>}" \
         "$(git -C "$KNOWLEDGE_MAIN" rev-parse --short HEAD 2>/dev/null || echo none)" \
         "$AI_KNOWLEDGE_RENDER"
+    # The one clone that commits on main: where the owner edits the rules directly.
+    [ -z "$INTEGRATOR" ] || printf 'clone (integrator): %s\n' "$(ai_sandbox_dir_for "$INTEGRATOR")/knowledge"
     local project sb
     if [ $# -gt 0 ]; then
         project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
@@ -794,6 +877,22 @@ cmd_proposals() {
     done < <(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
 }
 
+# One commit on top of BASE that adds or replaces PATH with the content of
+# FILE, built with plumbing so no working tree or index is touched. Prints the
+# commit id. Used for proposal branches and for the integrator record on main.
+build_commit() {   # <repo> <base ref> <path> <file> <message>
+    local repo=$1 base=$2 path=$3 file=$4 msg=$5 idx blob tree identity=()
+    git -C "$repo" config user.email >/dev/null 2>&1 \
+        || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
+    idx=$(mktemp); rm -f "$idx"
+    trap 'rm -f "$idx"' RETURN
+    GIT_INDEX_FILE=$idx git -C "$repo" read-tree "$base"
+    blob=$(git -C "$repo" hash-object -w "$file")
+    GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path"
+    tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree)
+    git -C "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p "$base" -m "$msg"
+}
+
 # A file becomes one proposal branch, built with plumbing from origin/main so
 # no working tree is touched: the migration re-files old proposals with it and
 # init files the host's GEMINI.md drift with it.
@@ -819,11 +918,11 @@ cmd_propose() {
         slug=$(basename "$file" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
         slug=$(ai_sandbox_slug "$slug"); [ -n "$slug" ] || slug=proposal
     fi
-    local date path tmp idx blob tree commit branch identity=()
+    local date path tmp commit branch
     date=$(date +%F); path="proposals/$date-$slug.md"
-    tmp=$(mktemp); idx=$(mktemp); rm -f "$idx"
-    # set -e would leave the temp files behind on a failure below.
-    trap 'rm -f "$tmp" "$idx"' RETURN
+    tmp=$(mktemp)
+    # set -e would leave the temp file behind on a failure below.
+    trap 'rm -f "$tmp"' RETURN
     # Frontmatter keys the caller knows (project_id, machine, project) are added
     # when the file lacks them; an existing key wins.
     SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 - <<'PYFM'
@@ -839,13 +938,7 @@ elif extra:
     text = "---\n" + "\n".join("%s: %s" % (k, v) for k, v in extra) + "\n---\n\n" + text
 open(os.environ["DST"], "w", encoding="utf-8").write(text if text.endswith("\n") else text + "\n")
 PYFM
-    git -C "$repo" config user.email >/dev/null 2>&1 \
-        || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
-    GIT_INDEX_FILE=$idx git -C "$repo" read-tree origin/main
-    blob=$(git -C "$repo" hash-object -w "$tmp")
-    GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path"
-    tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree)
-    commit=$(git -C "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p origin/main -m "proposal: $slug")
+    commit=$(build_commit "$repo" origin/main "$path" "$tmp" "proposal: $slug")
     branch="proposal/$date-$slug-${commit:0:4}"
     [[ $branch =~ $PROPOSAL_RE ]] || die "slug '$slug' does not make a valid branch name ($branch); use lowercase letters, digits and dashes"
     git -C "$repo" update-ref "refs/heads/$branch" "$commit"

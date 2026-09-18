@@ -35,6 +35,10 @@ if [ -f "$AI_SANDBOX_ROOT/config" ]; then
             fi
         done < <(ai_sandbox_helpers)
         chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh" 2>/dev/null || true
+        # The knowledge seed sits beside the helpers; keep it current too.
+        if [ -d "$DEV_TOOLS_DIR/bin/ai/knowledge-seed" ] && command -v rsync >/dev/null 2>&1; then
+            rsync -a --delete "$DEV_TOOLS_DIR/bin/ai/knowledge-seed/" "$AI_SANDBOX_ROOT/bin/knowledge-seed/"
+        fi
     fi
 fi
 

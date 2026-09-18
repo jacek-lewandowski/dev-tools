@@ -2341,6 +2341,9 @@ while IFS= read -r helper; do
 done < <(ai_sandbox_helpers)
 # ai-sandbox-lib.sh is sourced, not run.
 chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
+# The knowledge seed travels with the helper, so 'ai-knowledge init' on a fresh
+# host needs no dev-tools checkout to find it.
+rsync -a --delete "$SCRIPT_DIR/knowledge-seed/" "$AI_SANDBOX_ROOT/bin/knowledge-seed/"
 
 # Recorded so ai-sandbox-migrate can refresh these copies without being told
 # where the repository lives.
