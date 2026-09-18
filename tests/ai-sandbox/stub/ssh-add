@@ -2,7 +2,8 @@
 # Records every call. '-l' answers 1 (agent reachable, no identities) when
 # SSH_AUTH_SOCK names an existing path, else 2 (no agent). Adding a key needs
 # an agent and creates the "loaded" marker the stub ssh checks.
-printf 'ssh-add %s\n' "$*" >> "${SSH_STUB_LOG:-/dev/null}"
+# stdin is recorded so a test can prove a passphrase prompt cannot block.
+printf 'ssh-add %s stdin=%s\n' "$*" "$(readlink /proc/self/fd/0 2>/dev/null || echo unknown)" >> "${SSH_STUB_LOG:-/dev/null}"
 agent_up() { [ -n "${SSH_AUTH_SOCK:-}" ] && [ -e "$SSH_AUTH_SOCK" ]; }
 if [ "${1:-}" = -l ]; then agent_up && exit 1; exit 2; fi
 agent_up || { echo "Could not open a connection to your authentication agent." >&2; exit 2; }
