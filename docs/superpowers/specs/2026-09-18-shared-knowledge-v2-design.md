@@ -1,7 +1,7 @@
 # Shared knowledge repository, revision 2
 
 Date: 2026-09-18
-Status: draft, awaiting approval
+Status: approved 2026-09-18, implemented in four phases (plans of the same date)
 Supersedes: the flow and branch model of `2026-09-14-shared-knowledge-design.md`.
 The repository layout, the render, the container mounts and the security stance of
 that document stay in force unless a section below changes them.

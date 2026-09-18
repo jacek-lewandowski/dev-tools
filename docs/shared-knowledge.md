@@ -32,16 +32,18 @@ Seed content: [bin/ai/knowledge-seed/](../bin/ai/knowledge-seed).
 
 ## Deployment
 
-### 1. Install the helper
+### 1. Install the helpers once
 
-Re-run `create-ai-sandbox.sh` once for any project. It installs `ai-knowledge` into
-`~/.ai-sandbox/bin` and records the dev-tools checkout in `~/.ai-sandbox/config`,
-which `init` needs to find the seed directory.
+Run `create-ai-sandbox.sh` for any project, once per host. It installs
+`ai-knowledge` and the knowledge seed into `~/.ai-sandbox/bin`; nothing else in
+this document needs the dev-tools checkout.
 
 ### 2. Create the private remote
 
 Create an empty private git repository wherever you host code. The host must be
-able to clone and push to it with its own credentials.
+able to clone and push to it with its own credentials. A passphrase-protected ssh
+key is fine: `ai-knowledge` loads it into your agent, or into one it starts and
+removes, when the remote refuses the key.
 
 ### 3. Initialise
 
@@ -57,12 +59,15 @@ remote into `~/.ai-sandbox/knowledge/main` and, if the remote is empty, seeds it
 - `rules/global.md` taken from the host's current `~/.gemini/GEMINI.md`, with the
   generated sandbox-environment block stripped.
 
-It commits, pushes `main`, and renders (see step 4 of "How it works"). From now on
-`~/.gemini/GEMINI.md` is a symlink into the render. The previous file is kept as
-`GEMINI.md.pre-ai-knowledge.<timestamp>`.
+It commits, pushes `main`, records the integrator, and renders (see step 4 of
+"How it works"). From now on `~/.gemini/GEMINI.md` is a symlink into the render.
+The previous file is kept as `GEMINI.md.pre-ai-knowledge.<timestamp>`.
 
 `--integrator` names the project whose sandbox is the integrator: the one clone
-that commits on `main`.
+that commits on `main`. The first host to pass it writes one line into
+`README.md` on `main`, `<!-- ai-knowledge integrator: <hostname>:<path> -->`; a
+later host passing `--integrator` is warned that two integrators can make `main`
+diverge, and the record is left alone.
 
 ### 4. Migrate every existing sandbox
 
@@ -85,27 +90,41 @@ ai-knowledge status                                  # every sandbox: current | 
 After the sandboxes it converts the knowledge branches of the first design: every
 open file on a remote `proposals/<project-id>` branch becomes a `proposal/*` branch
 (`project_id` from the old branch name, `machine: unknown`); with your confirmation
-each old branch is merged into `main` with `-s ours` and deleted on the remote;
-every clean clone on this host moves from its old branch to `main`. A clone with
-an unpushed old-style commit is pushed first, or the run stops; a dirty clone is
-named and left. It recovers the project of an unstamped sandbox from its
-`project-path` file or the project mount in its compose file, refuses the whole run if any project
-directory is gone, forwards extra arguments to `create-ai-sandbox.sh`, and
-recreates with `--no-start`, so migrated sandboxes stay stopped and the running
-cap cannot end the run halfway; start each with `ai-sandbox` when needed. A
-sandbox whose recreation fails is listed under `failed:` and the run exits 1;
-the others are still migrated. Once `ai-knowledge status` shows every sandbox as
-`current`, delete the script; nothing else refers to it.
+each old branch is merged into `main` with `-s ours` and deleted on the remote
+under a lease; every clean clone on this host moves from its old branch to `main`.
+A clone with an unpushed old-style commit is pushed first, or the run stops; a
+dirty clone is named and left. It recovers the project of an unstamped sandbox
+from its `project-path` file or the project mount in its compose file, refuses
+the whole run if any project directory is gone, forwards extra arguments to
+`create-ai-sandbox.sh`, and recreates with `--no-start`, so migrated sandboxes
+stay stopped and the running cap cannot end the run halfway; start each with
+`ai-sandbox` when needed. A sandbox whose recreation fails is listed under
+`failed:` and the run exits 1; the others are still migrated. Once
+`ai-knowledge status` shows every sandbox as `current` and no clone sits on an
+old branch, delete the script; nothing else refers to it.
 
 Inside a container, `sandbox-doctor` tells the cases apart: "not configured on the
-host", "NOT migrated", or the last sync line.
+host", "NOT migrated", or the last sync line with its age and each proposal branch
+as `pushed` or `pending`.
 
 ### 5. Second computer
 
-Repeat steps 1 to 3 with the same remote URL. Every proposal has its own branch,
-named after the date, the slug and the first characters of its commit, so two
-machines, or two checkouts of one project, never share a branch and never
-conflict. The proposal's frontmatter records the project id and the machine.
+Repeat steps 1 to 3 with the same remote URL, without `--integrator` unless this
+host is to take over that role. If the host had its own `~/.gemini/GEMINI.md`,
+`init` shows how it differs from `rules/global.md` on `main` and asks whether to
+file the difference as a proposal (`proposal/<date>-gemini-md-<hostname>-<hex>`,
+a fenced diff with the hostname as `machine`); without a terminal it prints the
+`ai-knowledge propose` command to run later. The old file is backed up either
+way. Every proposal has its own branch, so two machines, or two checkouts of one
+project, never share a branch and never conflict.
+
+### Editing the rules yourself
+
+You own the repository. Edit `main` directly in the integrator's clone, the path
+`ai-knowledge status` prints as `clone (integrator)`, either inside that sandbox
+or on the host, add a `decisions.md` entry, commit. The next sync pushes `main`,
+re-renders, and every other sandbox picks it up at its next sync; agents read it
+in their next session. Nothing requires a proposal for the owner's own changes.
 
 ### Commands
 
