@@ -2,10 +2,29 @@
 # Not on PATH by default: a test symlinks it as 'timeout' into a directory it
 # puts first on PATH for one run, so only that run's git_net calls see it.
 # LEASE_STUB_MODE=fetch-fail makes every 'timeout ... git ... fetch ...' exit
-# 128 without a word, the way a git that dies before printing anything does;
-# everything else, and every other mode, runs the real timeout.
+# 128 without a word, the way a git that dies before printing anything does.
+# LEASE_STUB_MODE=amend plays the proposer who amends at the worst moment: when
+# the command deletes a proposal branch on the remote (a ':refs/heads/<b>'
+# refspec), it first pushes one more commit to <b> from the clone named by
+# LEASE_STUB_CLONE, directly and not through timeout, and then runs the real
+# command; a leased deletion is then rejected with "stale info", a plain one
+# wipes the amendment. Everything else, and every other mode, runs the real
+# timeout.
 case "${LEASE_STUB_MODE:-}" in
     fetch-fail)
         for a in "$@"; do [ "$a" != fetch ] || exit 128; done ;;
+    amend)
+        for a in "$@"; do
+            case $a in
+                :refs/heads/proposal/*)
+                    b=${a#:refs/heads/}
+                    f=$(git -C "$LEASE_STUB_CLONE" ls-tree -r --name-only "$b" -- proposals/ | grep -v '/README\.md$' | head -1)
+                    git -C "$LEASE_STUB_CLONE" checkout -q "$b" \
+                        && echo "amended during the integrator's sync" >> "$LEASE_STUB_CLONE/$f" \
+                        && git -C "$LEASE_STUB_CLONE" commit -qam "amend $b" \
+                        && git -C "$LEASE_STUB_CLONE" push -q origin "$b:refs/heads/$b" >/dev/null 2>&1
+                    git -C "$LEASE_STUB_CLONE" checkout -q main ;;
+            esac
+        done ;;
 esac
 exec /usr/bin/timeout "$@"
