@@ -55,12 +55,10 @@ if [ ${#PROBLEMS[@]} -gt 0 ]; then
     warn "Nothing was migrated. Remove those sandbox directories (or restore the project) and run again."
     exit 1
 fi
-if [ ${#TODO_DIRS[@]} -eq 0 ]; then
-    echo "nothing to migrate: every sandbox is current ($current)"
-    exit 0
-fi
-
 MIGRATED=(); FAILED=()
+if [ ${#TODO_DIRS[@]} -eq 0 ]; then
+    echo "sandboxes: nothing to migrate; every sandbox is current ($current)"
+fi
 for i in "${!TODO_DIRS[@]}"; do
     sb=${TODO_DIRS[$i]}; project=${TODO_PROJECTS[$i]}
     echo "== $(basename "$sb"): stopping, then recreating for $project"
@@ -78,12 +76,127 @@ for i in "${!TODO_DIRS[@]}"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# Knowledge branches: the first design kept one branch per sandbox,
+# proposals/<project-id>; the second keeps one per proposal, proposal/*. Every
+# open file on an old branch becomes a proposal/* branch, the old branch is
+# merged into main with -s ours (so its history stays reachable and its
+# deletion falls under "only ancestors of main are deleted") and then deleted,
+# and every clone on this host is moved from its old branch to main.
+# ---------------------------------------------------------------------------
+BRANCH_FAILED=(); BRANCH_LEFT=()
+read_kconfig() { sed -n "s/^$1=//p" "$AI_KNOWLEDGE_CONFIG" | head -1; }
+
+migrate_branches() {
+    ai_knowledge_configured || { echo "knowledge: not configured; nothing to convert"; return 0; }
+    local aik="$HERE/ai-knowledge" integrator main sb project c b cur rt old id files f slug tmpf nb ans
+    local -a converted=()
+    integrator=$(read_kconfig INTEGRATOR); main="$AI_KNOWLEDGE_ROOT/main"
+
+    # (0) Nothing is deleted while a clone holds an unpushed old-style commit.
+    while IFS=$'\t' read -r sb project; do
+        c="$sb/knowledge"; [ -d "$c/.git" ] || continue
+        git -C "$c" fetch -q origin 2>/dev/null || true
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            rt=$(git -C "$c" rev-parse -q --verify "refs/remotes/origin/$b" 2>/dev/null || true)
+            [ "$rt" != "$(git -C "$c" rev-parse "$b")" ] || continue
+            if git -C "$c" push -q origin "$b:refs/heads/$b" 2>/dev/null; then
+                echo "knowledge: pushed $b from $(basename "$sb")"
+            else
+                BRANCH_FAILED+=("$(basename "$sb"): cannot push its $b; nothing was converted or deleted")
+                return 1
+            fi
+        done < <(git -C "$c" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+    done < <(ai_sandbox_list)
+
+    # (a) and (b) belong to the integrator's host: only its clone commits on main.
+    if [ -n "$integrator" ]; then
+        [ -d "$main/.git" ] || { BRANCH_FAILED+=("no canonical checkout at $main; run ai-knowledge sync first"); return 1; }
+        git -C "$main" fetch -q origin 2>/dev/null || { BRANCH_FAILED+=("cannot fetch the remote; run again online"); return 1; }
+        old=$(git -C "$main" ls-remote --heads origin 'proposals/*' | sed -n 's|.*refs/heads/||p')
+        if [ -z "$old" ]; then
+            echo "knowledge: nothing to convert; no old-style proposals/* branch on the remote"
+        else
+            local iclone; iclone="$(ai_sandbox_dir_for "$integrator")/knowledge"
+            [ -d "$iclone/.git" ] || { BRANCH_FAILED+=("no integrator clone at $iclone"); return 1; }
+            [ "$(git -C "$iclone" branch --show-current)" = main ] || { BRANCH_FAILED+=("integrator clone $iclone is not on main"); return 1; }
+            [ -z "$(git -C "$iclone" status --porcelain)" ] || { BRANCH_FAILED+=("integrator clone $iclone has uncommitted changes"); return 1; }
+            git -C "$iclone" fetch -q origin 2>/dev/null || true
+            while IFS= read -r b; do
+                [ -n "$b" ] || continue
+                id=${b#proposals/}
+                echo "knowledge: converting $b"
+                files=$(git -C "$main" ls-tree -r --name-only "origin/$b" -- "proposals/$id/" | { grep '\.md$' || true; } | { grep -v '/README\.md$' || true; })
+                local complete=yes
+                while IFS= read -r f; do
+                    [ -n "$f" ] || continue
+                    slug=$(basename "$f" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
+                    if git -C "$main" ls-remote --heads origin "proposal/*-$slug-*" | grep -q .; then
+                        echo "  $f: already has a proposal/* branch"; continue
+                    fi
+                    tmpf=$(mktemp); git -C "$main" show "origin/$b:$f" > "$tmpf"
+                    if nb=$("$aik" propose "$tmpf" --repo "$main" --project-id "$id" --machine unknown --slug "$slug" --push 2>/dev/null); then
+                        echo "  $f -> $nb"
+                    else
+                        warn "  $f: conversion failed; $b is kept"; complete=no
+                    fi
+                    rm -f "$tmpf"
+                    git -C "$main" ls-remote --heads origin "proposal/*-$slug-*" | grep -q . || complete=no
+                done <<< "$files"
+                if [ "$complete" = yes ]; then converted+=("$b"); else BRANCH_FAILED+=("$b: not every proposal has a counterpart on the remote; branch kept"); fi
+            done <<< "$old"
+            if [ ${#converted[@]} -gt 0 ]; then
+                printf 'Delete these old branches on the remote after merging them into main with -s ours: %s ? [y/N] ' "${converted[*]}"
+                read -r ans || ans=n
+                case $ans in
+                    y|Y|yes)
+                        for b in "${converted[@]}"; do
+                            git -C "$iclone" merge -q -s ours --no-ff -m "close legacy branch $b (its proposals are proposal/* branches now)" "origin/$b" \
+                                || { BRANCH_FAILED+=("$b: ours-merge into main failed"); continue; }
+                            git -C "$iclone" push -q origin main || { BRANCH_FAILED+=("cannot push main; $b kept"); continue; }
+                            git -C "$iclone" push -q origin --delete "$b" 2>/dev/null || warn "$b: remote deletion failed; delete it by hand"
+                            git -C "$iclone" branch -q -D "$b" 2>/dev/null || true
+                            echo "knowledge: closed and deleted $b"
+                        done ;;
+                    *)  echo "knowledge: old branches kept; clones stay on them. Run again to finish."; return 0 ;;
+                esac
+            fi
+        fi
+    fi
+
+    # (c) Every clean clone goes to main; its old local branches are gone.
+    while IFS=$'\t' read -r sb project; do
+        c="$sb/knowledge"; [ -d "$c/.git" ] || continue
+        cur=$(git -C "$c" branch --show-current)
+        case $cur in
+            proposals/*)
+                if [ -n "$(git -C "$c" status --porcelain)" ]; then
+                    warn "$(basename "$sb"): ~/knowledge is dirty on $cur; left alone. Commit or clean it and run again."
+                    BRANCH_LEFT+=("$(basename "$sb")"); continue
+                fi
+                git -C "$c" show-ref -q --verify refs/heads/main || git -C "$c" branch -q main origin/main
+                git -C "$c" checkout -q main
+                echo "knowledge: $(basename "$sb") moved from $cur to main" ;;
+        esac
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            git -C "$c" branch -q -D "$b" 2>/dev/null || true
+        done < <(git -C "$c" for-each-ref --format='%(refname:short)' 'refs/heads/proposals/*')
+    done < <(ai_sandbox_list)
+    "$aik" sync >/dev/null 2>&1 || true
+    return 0
+}
+migrate_branches || true
+
 echo
 echo "migrated: ${MIGRATED[*]-}"
 echo "failed: ${FAILED[*]-}"
 echo "left alone (current): $current"
-if [ ${#FAILED[@]} -gt 0 ]; then
+for b in "${BRANCH_FAILED[@]+"${BRANCH_FAILED[@]}"}"; do warn "$b"; done
+if [ ${#FAILED[@]} -gt 0 ] || [ ${#BRANCH_FAILED[@]} -gt 0 ]; then
     echo "Fix the failures above and run again. Migrated sandboxes are stopped; start them with ai-sandbox."
     exit 1
 fi
-echo "Every sandbox is current now and stopped; start each with ai-sandbox. This script can be deleted."
+[ ${#BRANCH_LEFT[@]} -eq 0 ] || echo "Clones left on an old branch: ${BRANCH_LEFT[*]}; clean them and run again."
+echo "Every sandbox is current now and stopped; start each with ai-sandbox. This script can be deleted once no clone is left on an old branch."

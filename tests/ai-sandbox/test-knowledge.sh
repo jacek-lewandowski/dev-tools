@@ -413,6 +413,43 @@ out=$(migrate 2>&1) && r=0 || r=$?
 assert_eq "nothing to migrate exits 0" "$r" 0
 assert_contains "nothing to migrate says so" "$out" "nothing to migrate"
 
+# --- migration converts old-style proposals branches and moves clones to main
+oldc="$tmp/oldclone"; git clone -q "file://$remote" "$oldc"
+git -C "$oldc" checkout -q -b proposals/oldproj-1234 origin/main
+mkdir -p "$oldc/proposals/oldproj-1234"
+for f in 2026-09-01-alpha 2026-09-02-beta; do
+    printf -- '---\nscope: global\nproject: oldproj\ntarget: rules/global.md\nevidence: e\n---\n\n# %s\n\nold rule\n' "$f" > "$oldc/proposals/oldproj-1234/$f.md"
+done
+git -C "$oldc" add -A; git -C "$oldc" commit -qm "two old proposals"; git -C "$oldc" push -q origin proposals/oldproj-1234
+# a clone on this host sits on the old branch with one unpushed proposal
+printf 'services: {}\n' > "$mdir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$manual" > "$mdir/.env"
+git -C "$mdir/knowledge" fetch -q origin; git -C "$mdir/knowledge" checkout -q -b proposals/oldproj-1234 origin/proposals/oldproj-1234
+printf -- '---\nscope: global\n---\n\n# gamma\n\nunpushed\n' > "$mdir/knowledge/proposals/oldproj-1234/2026-09-03-gamma.md"
+git -C "$mdir/knowledge" add -A; git -C "$mdir/knowledge" commit -q --no-verify -m "gamma"
+# a dirty clone on an old branch is reported and left alone
+git -C "$sdir/knowledge" checkout -q -b proposals/dirty-0000 main; echo wip > "$sdir/knowledge/wip.txt"
+oldtip=$(git -C "$mdir/knowledge" rev-parse HEAD)
+out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "branch migration succeeds" "$r" 0
+newbranches=$(git -C "$remote" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' | grep -E -- '-(alpha|beta|gamma)-' | sort)
+assert_eq "three old proposals became three proposal branches" "$(printf '%s\n' "$newbranches" | grep -c .)" 3
+gb=$(printf '%s\n' "$newbranches" | grep gamma)
+assert_contains "converted file carries project_id" "$(git -C "$remote" show "$gb:proposals/$today-gamma.md")" "project_id: oldproj-1234"
+assert_contains "converted file carries machine unknown" "$(git -C "$remote" show "$gb:proposals/$today-gamma.md")" "machine: unknown"
+git -C "$remote" show-ref -q refs/heads/proposals/oldproj-1234 && r=yes || r=no
+assert_eq "old remote branch deleted after conversion" "$r" no
+git -C "$remote" merge-base --is-ancestor "$oldtip" main && r=yes || r=no
+assert_eq "old branch tip is an ancestor of main (ours-merge before deletion)" "$r" yes
+assert_eq "clone on the old branch moved to main" "$(git -C "$mdir/knowledge" branch --show-current)" main
+assert_eq "old local branches deleted in the moved clone" "$(git -C "$mdir/knowledge" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+assert_eq "dirty clone left on its branch" "$(git -C "$sdir/knowledge" branch --show-current)" proposals/dirty-0000
+assert_contains "dirty clone named in the output" "$out" "$(basename "$sdir")"
+assert_eq "integrator clone has no old local branches" "$(git -C "$iclone" branch --list 'proposals/*' | wc -l | tr -d ' ')" 0
+out=$(printf 'y\n' | migrate --display=none 2>&1) && r=0 || r=$?
+assert_eq "second run has nothing to convert" "$r" 0
+assert_contains "second run says so" "$out" "nothing to convert"
+rm -f "$sdir/knowledge/wip.txt"; git -C "$sdir/knowledge" checkout -q main; git -C "$sdir/knowledge" branch -q -D proposals/dirty-0000
 # --- ssh remotes: a refused key is loaded into an agent, started when needed
 export SSH_STUB_LOADED="$tmp/ssh-loaded" SSH_STUB_AGENT="$tmp/ssh-agent.sock" SSH_STUB_LOG="$tmp/ssh.log" SSH_STUB_KEY="$tmp/id_test"
 : > "$SSH_STUB_KEY"; : > "$SSH_STUB_LOG"; rm -f "$SSH_STUB_LOADED" "$SSH_STUB_AGENT"
