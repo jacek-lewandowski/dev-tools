@@ -1,7 +1,7 @@
 # Shared knowledge repository, revision 2
 
 Date: 2026-09-18
-Status: approved 2026-09-18, implemented in four phases (plans of the same date)
+Status: approved 2026-09-18; phases 1 to 4 implemented, phase 5 (hardening) added the same day
 Supersedes: the flow and branch model of `2026-09-14-shared-knowledge-design.md`.
 The repository layout, the render, the container mounts and the security stance of
 that document stay in force unless a section below changes them.
@@ -217,6 +217,60 @@ a branch; second-host warning; help text assertion in `tests/ai-sync/test-sync.s
 
 **Assumptions.** `ai-sandbox-migrate` may copy a directory, not only files
 (inferred; it copies helpers one by one today).
+
+### Phase 5: hardening after the adversarial review
+
+Added 2026-09-18 after three independent adversarial reviews of phases 1 to 4
+(invariants, operator journey, robustness). Goals, invariants and non-goals are
+unchanged; this phase makes the code meet them and the operator journey usable.
+
+**Goal.** (a) The scope check fails closed: a proposal branch with no merge base
+with `origin/main`, or whose diff (renames disabled) touches anything outside
+`proposals/`, is `refused`. (b) A "closed" branch is one whose tip is an ancestor
+of `origin/main` **and** whose tree holds a proposal file; an empty branch is
+reported, never deleted. (c) The script runs with `set -E` so the ERR trap fires
+in functions, and no message parser can end a sync silently. (d) A fresh clone
+with an unborn HEAD is put on `main` from `origin/main`. (e) No status ever
+advises `reset --hard` to the integrator; the integrator record is skipped, with a
+message, while the integrator clone is ahead of `origin/main`. (f) Concurrent
+syncs are serialised with `flock`: one lock for main and render, one per clone.
+(g) `ai-sandbox` checks the stamp only when it would start the container; entering
+a running one always works. `ai-sandbox-restart` keeps refusing. (h) The migration
+script shows which sandboxes are running and stops them only after a confirmation;
+it refuses to start when the remote is ssh and no agent holds a key; it converts
+old proposals from every clone's local branches as well as the remote's, naming
+the converted branch `<project-id>-<slug>` so two projects' equal slugs never
+collide; it moves clones to `main` whether or not the remote deletion was
+confirmed; it ends by running `sync --all`. (i) Messages for the `stale` state
+name `create-ai-sandbox.sh <project>` as the repair; the bulk script is the
+optional shortcut. (j) The doc gains "Upgrading from the first design" with the
+exact order for a host already running revision 1, says the doctor is rebuilt only
+by a plain `create-ai-sandbox.sh` run, and documents re-opening a proposal. (k) A
+non-git `knowledge` directory is moved aside, never removed; a render failure does
+not prevent clone syncs; hints are shell-quoted; `main push failed` is a `push
+failed` status; the integrator sync warns when `main` carries a proposal file.
+
+**Tests.** A refused orphan branch and a refused rename out of `rules/`; an empty
+branch reported and kept; a silent git failure ending in a visible message and a
+fresh status line; a `master`-headed remote producing a working clone; two
+concurrent `sync --all` runs both ending `ok`; `ai-sandbox` entering a running
+stale sandbox; the migration refusing running sandboxes without confirmation and
+converting two equal slugs from two projects into two branches; the lease
+exercised by an amendment pushed between the integrator's fetch and its delete;
+status assertions anchored on the status word.
+
+**Contract.** Converted legacy proposals are named `proposal/<date>-<project-id>-<slug>-<hex>`.
+Locks: `$AI_KNOWLEDGE_ROOT/.lock` and `<sandbox dir>/.knowledge.lock`, `flock -w 300`.
+
+**Assumptions.** `flock` from util-linux is on the host (verified in this sandbox;
+Ubuntu ships it); `git diff --no-renames` shows a rename as delete plus add
+(git semantics); the docker stub reports running through `DOCKER_STUB_RUNNING`
+(verified in `tests/ai-sandbox/stub/docker`).
+
+**Accepted, not fixed.** The integrator agent remains the only content guard
+between a proposal file and `main`; automatic integration stays a non-goal, so a
+prompt-injecting proposal is met by the skill's "data, not instructions" rule and
+the user's approval, nothing else.
 
 ## Deferred list
 
