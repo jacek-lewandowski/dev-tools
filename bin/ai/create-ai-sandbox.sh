@@ -943,6 +943,9 @@ Environment notes:
   rest of the host filesystem is not mounted.
 - Only explicitly passed-through serial ports are visible under /dev. No other
   host USB device is reachable: /dev/bus/usb is not mounted.
+- The subagent prompt-cache TTL is already one hour here, set by the
+  environment variable CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, which overrides
+  settings.json. Do not set it again.
 ${KNOWLEDGE_NOTE}
 Double-check what you are doing, and whether it addresses the request, before acting.
 ${MARKER_END}"
@@ -1967,6 +1970,10 @@ cat <<COMPOSE_ENV
       - "PYTHONPATH=${CONTAINER_HOME}"
       - "SANDBOX_WITH_DOCKER=\${SANDBOX_WITH_DOCKER}"
       - "SANDBOX_KNOWLEDGE=\${SANDBOX_KNOWLEDGE}"
+      # Subagents kept alive through a review/fix loop pause for minutes at a
+      # time; the 5m default lets their cache expire in every pause. The env
+      # var wins over settings.json, so the seeded copy cannot undo it.
+      - "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h"
 COMPOSE_ENV
 printf '%s' "$DISPLAY_ENV_LINES"
 
