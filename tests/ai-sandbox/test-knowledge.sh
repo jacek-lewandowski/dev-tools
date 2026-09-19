@@ -303,6 +303,7 @@ assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" 
 assert_contains "create stamps SANDBOX_KNOWLEDGE=1" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=1'
 assert_contains "create records the project dir" "$(cat "$pdir/.env")" "SANDBOX_PROJECT_DIR=$proj"
 assert_contains "stamp passed into the container" "$compose" 'SANDBOX_KNOWLEDGE=${SANDBOX_KNOWLEDGE}'
+assert_contains "subagent cache TTL passed into the container" "$compose" 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h'
 # --- knowledge stamps classify a sandbox from its .env (phase 1)
 fab() {   # <name> [env lines...]: a fabricated sandbox directory with a compose file
     local d="$AI_SANDBOX_ROOT/$1-agent"; shift
