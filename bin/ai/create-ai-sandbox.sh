@@ -862,7 +862,8 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - ImageMagick 6.
 - \`sg\` (ast-grep) and \`comby\` -- structural search and replace.
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
-- \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\` -- already installed; do not reinstall them."
+- \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
+- \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed."
 
 if [ -d "$HOST_SDKMAN" ]; then
     TOOL_NOTES="${TOOL_NOTES}
@@ -1664,9 +1665,9 @@ RUN set -eux; \
         > /etc/apt/sources.list.d/nodesource.list
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git sudo less vim-tiny ca-certificates \
+        git sudo less vim-tiny nano ca-certificates \
         python3 python3-pip python3-venv \
-        socat usbutils \
+        socat usbutils net-tools \
         libwayland-client0 libwayland-egl1 libwayland-cursor0 xwayland \
         openbox xterm x11-utils \
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgtk-3-0 libgbm1 \

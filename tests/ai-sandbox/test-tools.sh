@@ -19,8 +19,12 @@ build="$AI_SANDBOX_ROOT/image/build"
 df=$(cat "$build/Dockerfile")
 
 # --- image -----------------------------------------------------------------
+assert_contains "nano is installed"                      "$df" 'nano'
+assert_contains "net-tools is installed"                 "$df" 'net-tools'
 assert_contains "comby's shared libraries are installed" "$df" 'libev4 libpcre3 libsqlite3-0'
 assert_contains "comby is smoke-tested at build time"    "$df" 'comby -version'
+assert_contains "agy is installed from the antigravity tarball" \
+    "$df" 'mv /tmp/antigravity /usr/local/bin/agy'
 assert_contains "corepack shims are enabled"             "$df" 'corepack enable'
 assert_contains "pnpm and yarn are pre-warmed"           "$df" 'corepack prepare pnpm@latest yarn@stable --activate'
 assert_contains "corepack cache is shared, not root's"   "$df" 'COREPACK_HOME=/usr/local/share/corepack'
@@ -96,6 +100,10 @@ brain=$(cat "$HOME/.gemini/GEMINI.md")
 assert_contains "notes forbid apt-installing a JDK" "$brain" 'never apt-get install a JDK'
 assert_contains "notes mention comby and ast-grep"  "$brain" '`comby`'
 assert_contains "notes mention pnpm via corepack"   "$brain" 'corepack'
+assert_contains "notes mention agy"                 "$brain" '`agy`'
+assert_contains "notes mention codex"               "$brain" '`codex`'
+assert_contains "notes mention nano"                "$brain" '`nano`'
+assert_contains "notes mention net-tools"           "$brain" '`net-tools`'
 
 rm -rf "$tmp"
 finish
