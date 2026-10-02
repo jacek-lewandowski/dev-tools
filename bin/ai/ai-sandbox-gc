@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Reclaim space that migration deliberately left alone: per-sandbox duplicates
 # of assets that now live once under shared/, shared stores that no sandbox
-# mounts any more, and images from the old per-project naming scheme.
+# mounts any more, build-cache trash leftovers a reset could not delete, and
+# images from the old per-project naming scheme.
 #
 # Migration never deletes. This does -- so it lists everything first and removes
 # nothing without confirmation.
@@ -42,6 +43,19 @@ for d in "$AI_SANDBOX_ROOT"/shared/*/; do
     stale+=("$d")
 done
 
+# Build-caches/.trash leftovers (D4): ai_sandbox_caches_reset renames a layer
+# aside and deletes it there, but a root-owned entry left by the container
+# user's sudo can survive that delete and only warns. Orphan volumes are not
+# collected here (D8).
+trash=()
+for dir in "$AI_SANDBOX_ROOT"/*-agent; do
+    [ -d "$dir/build-caches/.trash" ] || continue
+    for t in "$dir"/build-caches/.trash/*; do
+        [ -e "$t" ] || continue
+        trash+=("$t")
+    done
+done
+
 legacy_images=()
 if command -v docker >/dev/null 2>&1; then
     while IFS= read -r img; do
@@ -49,7 +63,7 @@ if command -v docker >/dev/null 2>&1; then
     done < <(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^ai-sandbox-' || true)
 fi
 
-if [ "${#targets[@]}" -eq 0 ] && [ "${#stale[@]}" -eq 0 ] && [ "${#legacy_images[@]}" -eq 0 ]; then
+if [ "${#targets[@]}" -eq 0 ] && [ "${#stale[@]}" -eq 0 ] && [ "${#trash[@]}" -eq 0 ] && [ "${#legacy_images[@]}" -eq 0 ]; then
     echo "Nothing to reclaim."
     exit 0
 fi
@@ -73,13 +87,19 @@ if [ "${#held[@]}" -gt 0 ]; then
             "$(grep -lsF -e "$t:" -e "$t/" "$AI_SANDBOX_ROOT"/*-agent/docker-compose.yml | xargs -n1 dirname | xargs -n1 basename | paste -sd' ')"
     done
 fi
+if [ "${#trash[@]}" -gt 0 ]; then
+    echo "Build-cache trash leftovers (not yet deleted by a reset):"
+    for t in "${trash[@]}"; do
+        printf '  %-6s %s\n' "$(du -sh "$t" 2>/dev/null | cut -f1)" "$t"
+    done
+fi
 if [ "${#legacy_images[@]}" -gt 0 ]; then
     echo "Images from the old per-project naming scheme:"
     printf '  %s\n' "${legacy_images[@]}"
 fi
 
 if [ "$assume_yes" != "yes" ]; then
-    printf 'Remove the duplicates, stale stores and images listed above (kept stores stay)? [y/N] '
+    printf 'Remove the duplicates, stale stores, trash leftovers and images listed above (kept stores stay)? [y/N] '
     read -r reply || reply=n
     case "$reply" in y|Y) ;; *) echo "Cancelled. Nothing was removed."; exit 0 ;; esac
 fi
@@ -90,6 +110,9 @@ for t in "${targets[@]+"${targets[@]}"}"; do
 done
 for t in "${stale[@]+"${stale[@]}"}"; do
     rm -rf "$t"
+done
+for t in "${trash[@]+"${trash[@]}"}"; do
+    rm -rf "$t" 2>/dev/null || echo "  could not remove $t; finish with: sudo rm -rf $t" >&2
 done
 for img in "${legacy_images[@]+"${legacy_images[@]}"}"; do
     docker rmi "$img" >/dev/null 2>&1 || echo "  could not remove $img (still in use?)" >&2

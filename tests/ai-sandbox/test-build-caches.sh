@@ -557,5 +557,106 @@ fi
 leftover_pid=$(cat "$sleep_pidfile" 2>/dev/null || true)
 [ -n "$leftover_pid" ] && kill "$leftover_pid" 2>/dev/null || true
 
+# =============================================================================
+# Task 16: tool notes -- Gradle/Maven named in the mounted-paths sentence, and
+# the unconditional Gradle bullet (A1)
+# =============================================================================
+
+t16proj="$tmp/work/t16"; mkdir -p "$t16proj"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$t16proj" >"$tmp/t16.out" 2>&1 || cat "$tmp/t16.out"
+brain16=$(cat "$HOME/.gemini/GEMINI.md")
+assert_contains "the mounted-paths sentence substring survives" "$brain16" \
+    "The only other host paths mounted are the"
+assert_contains "the mounted-paths sentence now names Gradle" "$brain16" "Gradle"
+assert_contains "the mounted-paths sentence now names Maven" "$brain16" "Maven"
+assert_contains "the Gradle bullet mentions --offline" "$brain16" "--offline"
+assert_contains "the Gradle bullet says writes are discarded" "$brain16" "discarded"
+assert_contains "the Gradle bullet names gradle.properties" "$brain16" "gradle.properties"
+assert_contains "the Gradle bullet points at sandbox-doctor" "$brain16" "sandbox-doctor"
+
+# =============================================================================
+# Task 17: sandbox-doctor -- one status row per build-cache mount (A2)
+# =============================================================================
+
+t17proj="$tmp/work/t17"; mkdir -p "$t17proj"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$t17proj" >"$tmp/t17.out" 2>&1 || cat "$tmp/t17.out"
+doctor17=$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")
+assert_contains "sandbox-doctor has a gradle-caches row" "$doctor17" "gradle-caches"
+assert_contains "sandbox-doctor has a gradle-wrapper-dists row" "$doctor17" "gradle-wrapper-dists"
+assert_contains "sandbox-doctor has a m2-repository row" "$doctor17" "m2-repository"
+assert_contains "sandbox-doctor can report 'overlay'" "$doctor17" "overlay"
+assert_contains "sandbox-doctor can report the not-mounted wording" "$doctor17" \
+    "not mounted -- re-run create-ai-sandbox.sh"
+
+# =============================================================================
+# Task 18: usage() -- a Build caches paragraph, and build-caches/ in the
+# "Layout under ~/.ai-sandbox" list (A3)
+# =============================================================================
+
+help18=$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)
+assert_contains "--help shows a Build caches paragraph" "$help18" "Build caches"
+assert_contains "--help lists build-caches/ in the layout" "$help18" "build-caches/"
+
+# =============================================================================
+# Task 19: create-ai-sandbox.sh -- the D2 repair call site does not leak the
+# check's own "ai-sandbox-stop" message (user's decision, 2026-10-02): this
+# script is already past I10 and about to repair the volume itself, so that
+# message is misleading here. The repair step instead names the volume and
+# says it is repairing/recreating it. Reuses Task 8's differing-volume start
+# ($tmp/t8b.out), rather than re-running that scenario.
+# =============================================================================
+
+t19out=$(cat "$tmp/t8b.out")
+TESTS_RUN=$((TESTS_RUN+1))
+case "$t19out" in
+    *"ai-sandbox-stop"*)
+        _fail "create-ai-sandbox.sh's own output does not name ai-sandbox-stop at the repair site" "$t19out" ;;
+    *) _pass "create-ai-sandbox.sh's own output does not name ai-sandbox-stop at the repair site" ;;
+esac
+assert_contains "create-ai-sandbox.sh's own output names the differing volume" "$t19out" \
+    "$t8container-gradle-caches"
+TESTS_RUN=$((TESTS_RUN+1))
+case "$t19out" in
+    *epair*|*ecreat*) _pass "create-ai-sandbox.sh's own output names repairing/recreating the volume" ;;
+    *) _fail "create-ai-sandbox.sh's own output names repairing/recreating the volume" "$t19out" ;;
+esac
+
+# =============================================================================
+# Task 20: ai-sandbox-rm -- report a leftover instead of aborting (A5)
+# =============================================================================
+
+t20proj="$tmp/work/t20"; mkdir -p "$t20proj"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$t20proj" >"$tmp/t20.out" 2>&1 || cat "$tmp/t20.out"
+t20dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$t20proj")-agent"
+
+# --- happy path: 'y' removes the directory, logging 'down -v' --------------
+: > "$DOCKER_STUB_LOG"
+out=$(cd "$t20proj" && printf 'y\n' | bash "$REPO_ROOT/bin/ai/ai-sandbox-rm" 2>&1); rc=$?
+assert_eq "ai-sandbox-rm with no leftovers exits 0" "$rc" 0
+assert_contains "ai-sandbox-rm logs compose down -v" "$(cat "$DOCKER_STUB_LOG")" "down -v"
+assert_no_file "the sandbox directory is gone" "$t20dir"
+assert_contains "it still reports the host's caches as untouched" "$out" "not touched"
+
+# --- an undeletable leftover (same chmod-000 fixture style as the reset
+# --- test): named, with the fix-up command, instead of aborting mid-way ----
+if [ "$(id -u)" != 0 ]; then
+    t20bproj="$tmp/work/t20b"; mkdir -p "$t20bproj"
+    bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$t20bproj" >"$tmp/t20b.out" 2>&1 || cat "$tmp/t20b.out"
+    t20bdir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$t20bproj")-agent"
+    mkdir -p "$t20bdir/build-caches/gradle-caches/upper/locked/inner"
+    echo stuck > "$t20bdir/build-caches/gradle-caches/upper/locked/inner/file"
+    chmod 000 "$t20bdir/build-caches/gradle-caches/upper/locked"
+    : > "$DOCKER_STUB_LOG"
+    out=$(cd "$t20bproj" && printf 'y\n' | bash "$REPO_ROOT/bin/ai/ai-sandbox-rm" 2>&1); rc=$?
+    assert_ne "ai-sandbox-rm exits non-zero when a leftover remains" "$rc" 0
+    assert_contains "the leftover's path is named" "$out" "locked"
+    assert_contains "the fix-up command is given" "$out" "sudo rm -rf"
+    assert_contains "shared assets are still reported as left in place" "$out" "Shared assets"
+    assert_contains "the host's caches are still reported as untouched" "$out" "not touched"
+    # restore permissions so the final cleanup below can remove the tree
+    chmod 700 "$t20bdir/build-caches/gradle-caches/upper/locked" 2>/dev/null || true
+    rm -rf "$t20bdir" 2>/dev/null || true
+fi
+
 rm -rf "$tmp"
 finish

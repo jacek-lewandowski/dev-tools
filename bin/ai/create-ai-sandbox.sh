@@ -178,6 +178,9 @@ Layout under ~/.ai-sandbox:
   image/                    build context and stamp for the one image every
                             project shares.
   bin/                      the ai-sandbox-* commands listed above.
+  <project>-<hash>-agent/build-caches/  per-sandbox upper/work layers for the
+                            Gradle and Maven overlay mounts (see "Build caches"
+                            below); emptied on every start, never shared.
 
 Mounted live from the host into every sandbox: ~/.gemini/GEMINI.md (the shared
 brain, also read as ~/.claude/CLAUDE.md), the Antigravity brain and
@@ -206,6 +209,14 @@ from the host's when the sandbox is first created. Change one from inside with
 sdkman/candidates/<candidate>/current and re-run. The candidates are on PATH and
 JAVA_HOME is set in every shell, interactive or not, and 'sdk' works from
 scripts too (/usr/local/bin/sdk stands in for the shell function).
+
+Build caches: the host's ~/.gradle/caches, ~/.gradle/wrapper/dists and
+~/.m2/repository are each the read-only lower layer of an overlay mount, so
+'./gradlew --offline' can use what the host has already downloaded. Writes
+inside the sandbox land in build-caches/<key>/upper under the sandbox
+directory and are discarded on every start; nothing is ever written back to
+the host. 'sandbox-doctor' reports each mount; 'ai-sandbox-gc' reclaims
+leftovers from a reset it could not delete outright.
 
 Resources: the container is capped at 6 GB of RAM with no swap, and /dev/shm at
 1 GB, which counts against that cap. Adjust MEMORY_LIMIT, MEMORY_SWAP_LIMIT and
@@ -882,7 +893,13 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`sg\` (ast-grep) and \`comby\` -- structural search and replace.
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
 - \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
-- \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed."
+- \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed.
+- \`./gradlew --offline\` works for what the host has downloaded, and the
+  network stays available; writes to the Gradle and Maven caches are
+  discarded at the next container start; the host's \`gradle.properties\`,
+  \`init.d\` and Maven settings are absent. If \`sandbox-doctor\` reports the
+  caches as not mounted, ask the user to re-run \`create-ai-sandbox.sh\` on the
+  host."
 
 if [ -d "$HOST_SDKMAN" ]; then
     TOOL_NOTES="${TOOL_NOTES}
@@ -959,8 +976,10 @@ Environment notes:
   edits to the user's working tree. The only other host paths mounted are the
   shared AI rules file, the Antigravity brain and conversations, this project's
   Claude Code history and memory, and ~/.gitignore (read-write), plus the
-  dev-tools helpers, IntelliJ IDEA and SDKMAN (read-only, when present). The
-  rest of the host filesystem is not mounted.
+  dev-tools helpers, IntelliJ IDEA and SDKMAN (read-only, when present) and the
+  host's Gradle and Maven caches (overlaid: read-only underneath, with writes
+  kept in this sandbox until its next start). The rest of the host filesystem
+  is not mounted.
 - Only explicitly passed-through serial ports are visible under /dev. No other
   host USB device is reachable: /dev/bus/usb is not mounted.
 - The subagent prompt-cache TTL is already one hour here, set by the
@@ -1437,6 +1456,32 @@ if [ -d "$HOME/.sdkman/candidates" ]; then
 else
     status "sdkman" "not mounted"
 fi
+# Build caches (docs/superpowers/specs/2026-10-02-ai-sandbox-build-caches-design.md):
+# one row per overlay mount, the same three keys as ai_sandbox_build_caches.
+DOCTOR_EOF
+
+# The 'for' loop's key:path list, generated here from the same table every
+# other surface reads (ai_sandbox_build_caches) when this file is written,
+# rather than duplicated by hand -- an unquoted heredoc just for this line, so
+# every other '$VAR' in the script stays literal for the container to expand.
+{
+    printf 'for _bc in'
+    while IFS='|' read -r _key _path; do
+        [ -n "$_key" ] || continue
+        printf ' "%s:%s"' "$_key" "$_path"
+    done < <(ai_sandbox_build_caches)
+    printf '; do\n'
+} >> "$BUILD_DIR/sandbox-doctor"
+unset _key _path
+
+cat >> "$BUILD_DIR/sandbox-doctor" <<'DOCTOR_EOF'
+    _bck=${_bc%%:*}; _bcp=${_bc#*:}
+    if [ "$(findmnt -no FSTYPE "$HOME/$_bcp" 2>/dev/null)" = "overlay" ]; then
+        status "build cache: $_bck" "overlay (writes discarded at the next container start)"
+    else
+        status "build cache: $_bck" "not mounted -- re-run create-ai-sandbox.sh on the host"
+    fi
+done
 status "comby"        "$(comby -version 2>/dev/null || echo 'BROKEN -- rebuild the image (missing shared library?)')"
 status "ast-grep"     "$(sg --version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
 status "pnpm / yarn"  "$(pnpm --version 2>/dev/null || echo '?') / $(yarn --version 2>/dev/null || echo '?')  (corepack)"
@@ -2514,7 +2559,13 @@ flock "$CACHES_LOCK_FD"
 if ai_sandbox_container_running "$CONTAINER_NAME"; then
     die "$CONTAINER_NAME is running. Stop it first: ai-sandbox-stop"
 fi
-if ! ai_sandbox_caches_check "$SANDBOX_DIR" "$CONTAINER_NAME"; then
+# The check's own message ("If it is running, run: ai-sandbox-stop ...") is
+# misleading here: this script is already past I10 and is about to repair the
+# volume itself, so its own stderr is discarded at this call site only; the
+# repair step (ai_sandbox_caches_repair) says, per volume, that it is
+# repairing/recreating it. ai-sandbox and ai-sandbox-restart still show the
+# check's message verbatim (I9: only create-ai-sandbox.sh repairs).
+if ! ai_sandbox_caches_check "$SANDBOX_DIR" "$CONTAINER_NAME" 2>/dev/null; then
     ai_sandbox_caches_repair "$SANDBOX_DIR" "$CONTAINER_NAME"
 fi
 ai_sandbox_caches_reset "$SANDBOX_DIR"

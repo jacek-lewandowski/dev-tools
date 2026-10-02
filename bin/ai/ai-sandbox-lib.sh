@@ -433,7 +433,7 @@ ai_sandbox_caches_repair() {   # <sandbox dir> <container name>
     [ "${#diffs[@]}" -gt 0 ] || return 0
     docker compose -f "$sandbox/docker-compose.yml" --env-file "$sandbox/.env" down
     for vol in "${diffs[@]}"; do
-        echo "Removing build-cache volume $vol (options changed)." >&2
+        echo "Repairing build-cache volume $vol: removing it (options changed) so the next start recreates it." >&2
         docker volume rm "$vol"
     done
 }

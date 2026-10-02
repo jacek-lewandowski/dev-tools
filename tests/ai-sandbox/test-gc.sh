@@ -54,6 +54,34 @@ assert_file    "gc keeps a store an old compose file mounts" "$AI_SANDBOX_ROOT/s
 assert_no_file "gc removes a store nothing mounts"          "$AI_SANDBOX_ROOT/shared/npm/x"
 rm -rf "$AI_SANDBOX_ROOT/shared/cache"
 
+# Trash leftovers (D4/D8): gc lists */build-caches/.trash/* entries, removes
+# them after confirmation, and once nothing remains (no duplicates, no stale
+# stores, no trash, no legacy images) reports "Nothing to reclaim." -- an
+# undeletable entry is reported with "sudo rm -rf" rather than aborting the run.
+mkdir -p "$dir/build-caches/.trash/x"
+echo payload > "$dir/build-caches/.trash/x/file"
+out=$(bash "$REPO_ROOT/bin/ai/ai-sandbox-gc" </dev/null 2>&1)
+assert_contains "gc lists the trash leftover" "$out" "$dir/build-caches/.trash/x"
+assert_file "gc without confirmation leaves the trash entry" "$dir/build-caches/.trash/x/file"
+bash "$REPO_ROOT/bin/ai/ai-sandbox-gc" --yes >/dev/null 2>&1 || true
+assert_no_file "gc --yes removes the trash entry" "$dir/build-caches/.trash/x"
+
+out=$(bash "$REPO_ROOT/bin/ai/ai-sandbox-gc" </dev/null 2>&1)
+assert_contains "nothing to reclaim once trash is gone too" "$out" "Nothing to reclaim."
+
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$dir/build-caches/.trash/y/locked/inner"
+    echo stuck > "$dir/build-caches/.trash/y/locked/inner/file"
+    chmod 000 "$dir/build-caches/.trash/y/locked"
+    out=$(bash "$REPO_ROOT/bin/ai/ai-sandbox-gc" --yes 2>&1); rc=$?
+    assert_eq "gc does not abort on an undeletable trash entry" "$rc" 0
+    assert_contains "gc names sudo rm -rf for the undeletable leftover" "$out" "sudo rm -rf"
+    assert_contains "gc names the leftover path" "$out" "$dir/build-caches/.trash/y"
+    # restore permissions so the final cleanup below can remove the tree
+    chmod 700 "$dir/build-caches/.trash/y/locked" 2>/dev/null || true
+    rm -rf "$dir/build-caches/.trash/y"
+fi
+
 # Idempotence: with nothing left to do, migrate is silent.
 out=$(bash "$REPO_ROOT/bin/ai/ai-sandbox-migrate" 2>&1)
 assert_eq "migrate silent when nothing to do" "$out" ''
