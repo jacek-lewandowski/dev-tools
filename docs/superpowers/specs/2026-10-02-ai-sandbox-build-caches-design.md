@@ -1,7 +1,7 @@
 # ai-sandbox: host build caches through an ephemeral overlay
 
 Date: 2026-10-02
-Status: approved 2026-10-02; phase 1 done, phase 2 next
+Status: approved 2026-10-02; phases 1-3 done, phase 4 host acceptance passed 2026-10-02 (offline Gradle build, reset on start, host caches untouched, rm clean)
 Input: [2026-10-02-ai-sandbox-build-caches-brief.md](2026-10-02-ai-sandbox-build-caches-brief.md)
 (the user's decisions there are fixed and are not restated as open questions)
 Scope: `bin/ai/create-ai-sandbox.sh`, `bin/ai/ai-sandbox-lib.sh`, the start
@@ -93,7 +93,10 @@ existing `compose down -v` removes them.
 
 **D2 Options mismatch.** Before every `compose up`, the scripts compare each
 existing volume's `type`, `device` and `o` options (`docker volume inspect`)
-with the compose file. A missing volume is fine (compose creates it).
+with the compose file. A missing volume is fine (compose creates it). A volume
+that exists but cannot be read as that triple counts as a difference, not as
+missing. That covers options that are null or lack a field, for example a plain
+`local` volume reusing the name.
 
 - `create-ai-sandbox.sh` repairs a difference itself. The container is not
   running (I10), so it removes the stopped container (`compose down` without
@@ -137,11 +140,21 @@ deletion only warns; `ai-sandbox-gc` lists and removes the leftovers, naming
 `sudo rm -rf` when plain removal fails. Swapping `work` together with `upper`
 keeps the pair consistent whatever the kernel's overlay defaults are.
 
-**D5 When the clear runs.** Under a `flock` on `<sandbox dir>/build-caches/.lock`
-the start path re-checks that the container is not running, resets, and runs
-`compose up`. The lock closes the race of two terminals starting one sandbox at
-once, which would otherwise rename an upper while the other's mount is being
-made. Per entry point:
+**D5 When the clear runs.** Each start path takes a `flock` on
+`<sandbox dir>/build-caches/.lock` and holds it until `compose up` has
+returned. In `ai-sandbox-restart` the lock spans from the check, across `down`,
+to `up`. Under the lock, `ai-sandbox` and `create-ai-sandbox.sh` first look
+again at whether the container is running:
+- `ai-sandbox` enters a container now found running, with no check, reset or
+  `up`.
+- `create-ai-sandbox.sh` refuses it exactly as I10 does, since its first I10
+  check ran before the image build.
+
+The lock closes the race of two terminals starting one sandbox at once, which
+would otherwise rename an upper while the other's mount is being made. Anything
+that can leave long-lived children (knowledge sync, `start-display.sh`) runs
+before the lock is taken: the children would inherit the lock's file
+descriptor and keep it held, hanging every later start. Per entry point:
 
 | Entry point | Behaviour |
 |---|---|
@@ -202,6 +215,7 @@ ai_sandbox_caches_opts()         # <sandbox dir> <key> <host lower path>
                                  #   -> "lowerdir=<lower>,upperdir=<sandbox dir>/build-caches/<key>/upper,workdir=<sandbox dir>/build-caches/<key>/work"
 ai_sandbox_caches_enabled()      # <sandbox dir> -> 0 when .env has SANDBOX_BUILD_CACHES=1
 ai_sandbox_caches_prepare()      # <sandbox dir> -> mkdir -p the three lowers and every upper/work; never empties anything
+                                 #   (create-ai-sandbox.sh calls it after writing the .env stamp, since it is a no-op without it)
 ai_sandbox_caches_check()        # <sandbox dir> <container name> -> 0, or 1 with the D2 message on stderr
 ai_sandbox_caches_repair()       # <sandbox dir> <container name> -> D2 repair; precondition: container not running;
                                  #   used only by create-ai-sandbox.sh
@@ -391,8 +405,8 @@ and a stopped container, `create-ai-sandbox.sh` logs `down` (without `-v`), then
 and not `ai-sandbox-rm`, with no `up`, `down` or `volume rm` in the stub log; an
 unstamped sandbox gets no `build-caches/` and no volume queries; a `,` in the
 home path is refused. The whole suite, `bash tests/ai-sandbox/run-tests.sh`,
-stays green apart from failures known before this work (test-tools case 20
-inside a sandbox).
+stays green apart from failures known before this work (test-tools case 23,
+`~/.sdkman` on `PATH`, inside a sandbox; the brief's "case 20" was wrong).
 
 **Assumptions.** A1-A7, A9 and A14 as left by phase 1.
 
@@ -428,8 +442,8 @@ project (refused while its container runs, accepted after `ai-sandbox-stop`); in
 three directories show no entry changed since the start; `ai-sandbox-rm` on a
 throwaway project leaves nothing behind. The exact commands are written by the
 phase 3 plan, batched into one request, like phase 1. The offline build
-needs the image locale fix (a separate task, see A6), or a project with no
-non-ASCII file names.
+relies on the image locale fix (a separate task, see A6), which landed in
+8d724a1.
 
 **Contract from phase 3.** The finished feature.
 
