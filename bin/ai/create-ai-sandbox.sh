@@ -340,6 +340,25 @@ CONTAINER_NAME="${PROJECT_ID}-agent"
 CLAUDE_PROJECT_DIR="$HOME/.claude/projects/$(ai_sandbox_claude_project_key "$PROJECT_ABS_DIR")"
 
 SANDBOX_DIR="$AI_SANDBOX_ROOT/${CONTAINER_NAME}"
+
+# I10: compose would recreate a running container inside 'up', with no gap in
+# which to reset the build caches, so this script refuses before writing
+# anything -- with or without --no-start (docs/superpowers/specs/
+# 2026-10-02-ai-sandbox-build-caches-design.md).
+if ai_sandbox_container_running "$CONTAINER_NAME"; then
+    die "$CONTAINER_NAME is running. Stop it first: ai-sandbox-stop"
+fi
+
+# D9: the overlay driver_opts 'o' string separates fields with ',' and lower
+# layers with ':', so a ',', ':' or whitespace in either path would generate a
+# mount that fails at container start instead of failing here.
+for _p in "$HOME" "$SANDBOX_DIR"; do
+    case "$_p" in
+        *[,:[:space:]]*) die "Cannot use '$_p' for build caches: it contains ',', ':' or whitespace." ;;
+    esac
+done
+unset _p
+
 # ONE build context and ONE image for every project: nothing in the generated
 # Dockerfile is project-specific, so a per-project tag bought nothing but a
 # duplicate of a very large image.
@@ -1844,6 +1863,7 @@ RUN set -eux; \
         echo "${USER_NAME}:100000:65536" >> /etc/subgid; fi; \
     mkdir -p "${USER_HOME}/.config" "${USER_HOME}/.antigravity" "${USER_HOME}/.antigravity-ide" \
              "${USER_HOME}/.gemini" "${USER_HOME}/.claude" \
+             "${USER_HOME}/.gradle" "${USER_HOME}/.gradle/wrapper" "${USER_HOME}/.m2" \
              "${USER_HOME}/tools" "/run/user/${USER_ID}"; \
     chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}" "/run/user/${USER_ID}" "${COREPACK_HOME}"; \
     chmod 700 "/run/user/${USER_ID}"; \
@@ -1910,6 +1930,10 @@ managed = {
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
     "SANDBOX_CPUSET": os.environ.get("CPUSET", ""),
+    # The build-caches stamp (D7): unconditional, so every sandbox this script
+    # (re)creates gets the overlay caches; a sandbox not yet recreated has no
+    # stamp and every caches function is a no-op for it (I8).
+    "SANDBOX_BUILD_CACHES": "1",
 }
 MARKER = "# Managed by create-ai-sandbox.sh"
 kept = [
@@ -1923,6 +1947,12 @@ lines = kept + ["", MARKER] + [
 ]
 open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 PYEOF
+
+# Build-cache lowers and per-sandbox upper/work, created now (not left to
+# Docker, which would make a missing bind source root-owned) and unconditional
+# on --no-start, so a --no-start run gets them too. The stamp this script just
+# wrote above (D7) is what makes this not a no-op (I8).
+ai_sandbox_caches_prepare "$SANDBOX_DIR"
 
 # ---------------------------------------------------------------------------
 # docker-compose.yml
@@ -2017,6 +2047,16 @@ cat <<COMPOSE_VOLS
       - "${SANDBOX_DIR}/npm:${CONTAINER_HOME}/.npm"
 COMPOSE_VOLS
 
+# Build caches (docs/superpowers/specs/2026-10-02-ai-sandbox-build-caches-design.md):
+# an overlay Docker volume per row of ai_sandbox_build_caches, declared under
+# the top-level 'volumes:' section appended below. Host and container paths
+# are identical here (CONTAINER_HOME == HOME).
+while IFS='|' read -r _key _path; do
+    [ -n "$_key" ] || continue
+    printf '      - "%s:%s/%s"\n' "$_key" "$CONTAINER_HOME" "$_path"
+done < <(ai_sandbox_build_caches)
+unset _key _path
+
 if [ "$KNOWLEDGE" = "yes" ]; then
 cat <<COMPOSE_KNOWLEDGE
       # Shared knowledge: the rendered main branch of the knowledge repository,
@@ -2078,6 +2118,19 @@ while IFS='|' read -r _sub _ctr _sb; do
     printf '      - "%s/%s:%s/%s:ro"\n' "$SHARED_DIR" "$_sub" "$CONTAINER_HOME" "$_ctr"
 done < <(ai_sandbox_shared_mounts)
 printf '%s' "$DISPLAY_VOL_LINES"
+
+echo "volumes:"
+while IFS='|' read -r _key _path; do
+    [ -n "$_key" ] || continue
+    printf '  %s:\n' "$_key"
+    printf '    name: "%s"\n' "$(ai_sandbox_caches_volume "$CONTAINER_NAME" "$_key")"
+    echo "    driver: local"
+    echo "    driver_opts:"
+    echo "      type: overlay"
+    echo "      device: overlay"
+    printf '      o: "%s"\n' "$(ai_sandbox_caches_opts "$SANDBOX_DIR" "$_key" "$HOME/$_path")"
+done < <(ai_sandbox_build_caches)
+unset _key _path
 } > "$COMPOSE_FILE"
 
 log "$COMPOSE_FILE"
@@ -2448,7 +2501,25 @@ if ! "$AI_SANDBOX_ROOT/bin/ai-sandbox-extensions"; then
 fi
 
 step "Starting $CONTAINER_NAME"
+# D5/D2: under a lock, so two terminals starting this sandbox at once cannot
+# rename an upper while the other's mount is being made, repair any build-cache
+# volume whose options differ, then reset (D4) before 'up' recreates it. I10's
+# refusal ran minutes ago, before the image build, so it is re-checked here,
+# first thing under the lock: a container started by someone else (an
+# 'ai-sandbox' that raced this run) is refused exactly as I10 refuses above,
+# rather than reset or repaired out from under it.
+mkdir -p "$SANDBOX_DIR/build-caches"
+exec {CACHES_LOCK_FD}>"$SANDBOX_DIR/build-caches/.lock"
+flock "$CACHES_LOCK_FD"
+if ai_sandbox_container_running "$CONTAINER_NAME"; then
+    die "$CONTAINER_NAME is running. Stop it first: ai-sandbox-stop"
+fi
+if ! ai_sandbox_caches_check "$SANDBOX_DIR" "$CONTAINER_NAME"; then
+    ai_sandbox_caches_repair "$SANDBOX_DIR" "$CONTAINER_NAME"
+fi
+ai_sandbox_caches_reset "$SANDBOX_DIR"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+exec {CACHES_LOCK_FD}>&-
 
 if [ "$KNOWLEDGE" = "yes" ]; then
     BRAIN_SUMMARY="$AI_KNOWLEDGE_RENDER/GLOBAL.md  (rendered from the knowledge repository; ~/knowledge is this sandbox's clone)"

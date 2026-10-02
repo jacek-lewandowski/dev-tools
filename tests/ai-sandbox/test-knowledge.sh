@@ -522,7 +522,7 @@ done
 git -C "$clone" fetch -q origin; git -C "$clone" checkout -q -b proposals/px-1111 origin/proposals/px-1111
 rproj="$tmp/work/r"; mkdir -p "$rproj"; git -C "$rproj" init -q
 rdir=$(ai_sandbox_dir_for "$rproj"); mkdir -p "$rdir"
-printf 'services: {}\n' > "$rdir/docker-compose.yml"
+printf 'services:\n  x:\n    container_name: "%s"\n' "$(basename "$rdir")" > "$rdir/docker-compose.yml"
 printf 'SANDBOX_KNOWLEDGE=0\nSANDBOX_PROJECT_DIR=%s\n' "$rproj" > "$rdir/.env"
 : > "$DOCKER_STUB_LOG"
 # no answer to either prompt: the running sandbox is skipped, the remote branches stay, clones still move

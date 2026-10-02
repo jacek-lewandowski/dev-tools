@@ -320,6 +320,149 @@ npm
 DIRS
 }
 
+# Host build-cache overlay volumes (docs/superpowers/specs/2026-10-02-ai-sandbox-build-caches-design.md).
+# Each row is '<key>|<path under $HOME>', the same path on the host (the
+# overlay lower) and in the container (host and container $HOME are equal).
+ai_sandbox_build_caches() {
+    cat <<'CACHES'
+gradle-caches|.gradle/caches
+gradle-wrapper-dists|.gradle/wrapper/dists
+m2-repository|.m2/repository
+CACHES
+}
+
+# <container name> <key> -> the Docker volume name for that cache.
+ai_sandbox_caches_volume() {
+    printf '%s-%s' "$1" "$2"
+}
+
+# <sandbox dir> <key> <host lower path> -> the overlay driver_opts 'o' string.
+ai_sandbox_caches_opts() {
+    printf 'lowerdir=%s,upperdir=%s/build-caches/%s/upper,workdir=%s/build-caches/%s/work' \
+        "$3" "$1" "$2" "$1" "$2"
+}
+
+# <sandbox dir> -> 0 when this sandbox was created with the build-caches
+# stamp (D7). Every other caches function is a no-op otherwise (I8).
+ai_sandbox_caches_enabled() {
+    [ "$(ai_sandbox_env_value "$1" SANDBOX_BUILD_CACHES)" = "1" ]
+}
+
+# <sandbox dir> -> mkdir -p the three lowers (under the real $HOME) and every
+# upper/work directory. Idempotent: an existing upper or work is never
+# touched, only created when absent.
+ai_sandbox_caches_prepare() {
+    local sandbox=$1 key path
+    ai_sandbox_caches_enabled "$sandbox" || return 0
+    while IFS='|' read -r key path; do
+        mkdir -p "$HOME/$path"
+        mkdir -p "$sandbox/build-caches/$key/upper" "$sandbox/build-caches/$key/work"
+    done < <(ai_sandbox_build_caches)
+}
+
+# Internal: the 'type|device|o' triple Docker currently has stored for a
+# build-cache volume, as the compose file's driver_opts carries them (D2
+# compares all three). The real shape ('Options' as {device, o, type}) was
+# confirmed against the host in the phase 1 smoke test (Run 4). Return status
+# is 1 only when the volume itself does not exist (fine, not a difference --
+# compose creates it on 'up'); a volume that exists but whose Options is null
+# or missing a field still returns 0, with empty stdout, so the caller counts
+# it as a difference rather than silently skipping it like a missing volume.
+ai_sandbox_caches_current_triple() {   # <volume name>
+    local out
+    out=$(docker volume inspect "$1" 2>/dev/null) || return 1
+    printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    opts = json.load(sys.stdin)[0]["Options"]
+    t, d, o = opts["type"], opts["device"], opts["o"]
+    if t is None or d is None or o is None:
+        raise ValueError
+    sys.stdout.write("%s|%s|%s" % (t, d, o))
+except Exception:
+    pass
+'
+    return 0
+}
+
+# <sandbox dir> <container name> -> 0, or 1 with the D2 message on stderr.
+# Diffs each build-cache volume's stored type, device and o options against
+# what the compose file now generates (type and device are always the literal
+# "overlay" the compose block writes); a missing volume is not a difference
+# (compose creates it on 'up'), but a volume that exists and cannot be read as
+# that triple -- Options null, or a field missing, e.g. a plain local volume
+# reusing the name -- counts as a difference rather than being skipped as if
+# it were missing. Every other script (ai-sandbox, ai-sandbox-restart) only
+# checks and stops with this message; only create-ai-sandbox.sh repairs (I9).
+ai_sandbox_caches_check() {   # <sandbox dir> <container name>
+    local sandbox=$1 container=$2 key path lower have want project rc=0
+    ai_sandbox_caches_enabled "$sandbox" || return 0
+    project=$(ai_sandbox_env_value "$sandbox" SANDBOX_PROJECT_DIR)
+    while IFS='|' read -r key path; do
+        lower="$HOME/$path"
+        have=$(ai_sandbox_caches_current_triple "$(ai_sandbox_caches_volume "$container" "$key")") || continue
+        want="overlay|overlay|$(ai_sandbox_caches_opts "$sandbox" "$key" "$lower")"
+        if [ "$have" != "$want" ]; then
+            {
+                echo "Build-cache volume $(ai_sandbox_caches_volume "$container" "$key") has different options than the sandbox now expects."
+                echo "If it is running, run: ai-sandbox-stop"
+                echo "Then run: create-ai-sandbox.sh ${project:-<project dir>}"
+            } >&2
+            rc=1
+        fi
+    done < <(ai_sandbox_build_caches)
+    return "$rc"
+}
+
+# <sandbox dir> <container name> -> D2 repair. Precondition: the container is
+# already stopped (I10 guarantees this before create-ai-sandbox.sh calls it;
+# used only there, never by ai-sandbox or ai-sandbox-restart, I9). Removes the
+# stopped container (no '-v', so the lower is never touched) and exactly the
+# volumes whose type, device or o options differ, logging each one; the
+# following 'compose up' recreates them.
+ai_sandbox_caches_repair() {   # <sandbox dir> <container name>
+    local sandbox=$1 container=$2 key path lower have want vol diffs=()
+    ai_sandbox_caches_enabled "$sandbox" || return 0
+    while IFS='|' read -r key path; do
+        lower="$HOME/$path"
+        vol=$(ai_sandbox_caches_volume "$container" "$key")
+        have=$(ai_sandbox_caches_current_triple "$vol") || continue
+        want="overlay|overlay|$(ai_sandbox_caches_opts "$sandbox" "$key" "$lower")"
+        [ "$have" = "$want" ] || diffs+=("$vol")
+    done < <(ai_sandbox_build_caches)
+    [ "${#diffs[@]}" -gt 0 ] || return 0
+    docker compose -f "$sandbox/docker-compose.yml" --env-file "$sandbox/.env" down
+    for vol in "${diffs[@]}"; do
+        echo "Removing build-cache volume $vol (options changed)." >&2
+        docker volume rm "$vol"
+    done
+}
+
+# <sandbox dir> -> D4 reset. Caller holds the '.lock' and has seen the
+# container not running. Renames each 'build-caches/<key>' aside into
+# '.trash' (a rename always succeeds for the host user, even when sudo inside
+# the container left root-owned entries behind), makes a fresh empty
+# upper/work, then deletes the trashed copy. A failed deletion only warns;
+# ai-sandbox-gc collects what is left (phase 3).
+ai_sandbox_caches_reset() {   # <sandbox dir>
+    local sandbox=$1 base key path trash
+    ai_sandbox_caches_enabled "$sandbox" || return 0
+    base="$sandbox/build-caches"
+    mkdir -p "$base/.trash"
+    while IFS='|' read -r key path; do
+        trash=""
+        if [ -d "$base/$key" ]; then
+            trash="$base/.trash/$key-$(date +%s%N 2>/dev/null || date +%s)-$$-$RANDOM"
+            mv "$base/$key" "$trash"
+        fi
+        mkdir -p "$base/$key/upper" "$base/$key/work"
+        if [ -n "$trash" ]; then
+            rm -rf "$trash" 2>/dev/null || echo "Warning: could not remove $trash; finish with: sudo rm -rf $trash" >&2
+        fi
+    done < <(ai_sandbox_build_caches)
+    return 0
+}
+
 # '<path under $HOME on the host>|<path under the sandbox directory>'.
 # Everything here is identity-bearing -- OAuth tokens, account records, the
 # Electron profiles that hold a logged-in session -- so it is seeded from the
