@@ -27,6 +27,10 @@ assert_no_file "no per-project build" "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id 
 assert_contains "USER_HOME build arg" "$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")" 'ARG USER_HOME'
 assert_contains "container home matches the host home" "$(cat "$ca")" ":$HOME/tools:ro"
 
+# Without a UTF-8 LANG, Java reports sun.jnu.encoding=ANSI_X3.4-1968 and cannot
+# open files whose names have non-ASCII characters.
+assert_contains "Dockerfile sets UTF-8 LANG" "$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")" 'LANG=C.UTF-8'
+
 # The hash must be stable across runs, and change when any input changes.
 h1=$(ai_sandbox_build_hash "$AI_SANDBOX_ROOT/image/build" 1000 1000 dev /home/dev base)
 h2=$(ai_sandbox_build_hash "$AI_SANDBOX_ROOT/image/build" 1000 1000 dev /home/dev base)
