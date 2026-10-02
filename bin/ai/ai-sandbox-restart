@@ -2,16 +2,41 @@
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
 ai_sandbox_require_ctx || exit 1
-# Before 'down': a refused restart must leave the sandbox running, not stopped.
-ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
-ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
-ai_sandbox_compose down
 # Knowledge sync before the container comes up, so the rules it reads are the
 # current main and its proposals reach the remote. Never blocks the start.
+# Before the build-caches lock, like 'ai-sandbox': start-display.sh can launch
+# long-lived background processes (Xephyr, Xvfb, the xpra viewer) that would
+# otherwise inherit CACHES_LOCK_FD and keep the flock held long after this
+# script closes its own copy, hanging every later start.
 if ai_knowledge_configured; then
     "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-knowledge" sync "$AI_SANDBOX_PROJECT" || true
 fi
 if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
     "$AI_SANDBOX_DIR/start-display.sh" || exit 1
 fi
+# Before 'down': a refused restart must leave the sandbox running, not stopped.
+ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
+ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
+CACHES_ENABLED=0
+ai_sandbox_caches_enabled "$AI_SANDBOX_DIR" && CACHES_ENABLED=1
+if [ "$CACHES_ENABLED" -eq 1 ]; then
+    # D5/D2: hold the lock from before the check until 'up' has returned, all
+    # the way across 'down' -- a release in between would let a concurrent
+    # start reset the upper while this restart is still working on the same
+    # container. Checked first, like 'require_current' above: a refused
+    # restart must leave the sandbox running, not stopped (this script only
+    # checks and never repairs, I9).
+    mkdir -p "$AI_SANDBOX_DIR/build-caches"
+    exec {CACHES_LOCK_FD}>"$AI_SANDBOX_DIR/build-caches/.lock"
+    flock "$CACHES_LOCK_FD"
+    ai_sandbox_caches_check "$AI_SANDBOX_DIR" "$AI_SANDBOX_NAME" || exit 1
+fi
+ai_sandbox_compose down
+# D4: reset upper/work, still under the same lock, before 'up' recreates it.
+if [ "$CACHES_ENABLED" -eq 1 ]; then
+    ai_sandbox_caches_reset "$AI_SANDBOX_DIR"
+fi
 ai_sandbox_compose up -d
+if [ "$CACHES_ENABLED" -eq 1 ]; then
+    exec {CACHES_LOCK_FD}>&-
+fi

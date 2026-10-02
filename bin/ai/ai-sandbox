@@ -30,8 +30,27 @@ if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/d
     # would come up; a running container is entered whatever its stamp.
     ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
     ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
-    echo "Starting $AI_SANDBOX_NAME..."
-    ai_sandbox_compose up -d || exit 1
+    if ai_sandbox_caches_enabled "$AI_SANDBOX_DIR"; then
+        # D5/D2: hold the lock from before the check until 'up' has returned --
+        # releasing it any earlier would let a concurrent start reset the
+        # upper of a container that just came up under this one's nose. The
+        # inspect above can be stale by the time the lock is free, so the
+        # first thing done under it is to look again: a container found
+        # running now is simply entered below, with no check, reset or 'up'.
+        mkdir -p "$AI_SANDBOX_DIR/build-caches"
+        exec {CACHES_LOCK_FD}>"$AI_SANDBOX_DIR/build-caches/.lock"
+        flock "$CACHES_LOCK_FD"
+        if ! ai_sandbox_container_running "$AI_SANDBOX_NAME"; then
+            ai_sandbox_caches_check "$AI_SANDBOX_DIR" "$AI_SANDBOX_NAME" || exit 1
+            ai_sandbox_caches_reset "$AI_SANDBOX_DIR"
+            echo "Starting $AI_SANDBOX_NAME..."
+            ai_sandbox_compose up -d || exit 1
+        fi
+        exec {CACHES_LOCK_FD}>&-
+    else
+        echo "Starting $AI_SANDBOX_NAME..."
+        ai_sandbox_compose up -d || exit 1
+    fi
 fi
 
 if [ "$#" -eq 0 ]; then

@@ -2,6 +2,9 @@
 # Records every invocation and answers the few queries the script makes.
 set -euo pipefail
 printf '%s\n' "$*" >> "${DOCKER_STUB_LOG:-/dev/null}"
+# Names 'compose down'/'stop'/'rm' has stopped, cleared by 'compose up'/'start'.
+# Lives next to DOCKER_STUB_LOG, so a fresh fake_home starts with none recorded.
+STOPPED_FILE="${DOCKER_STUB_LOG:-/dev/null}.stopped"
 case "$1 $2" in
     "compose version") exit 0 ;;
 esac
@@ -12,13 +15,138 @@ case "$1" in
         case " $DOCKER_STUB_IMAGES " in *" $3 "*) exit 0 ;; *) exit 1 ;; esac
         ;;
     container)
-        # 'docker container inspect -f {{.State.Running}} NAME'
+        # 'docker container inspect -f {{.State.Running}} NAME'. A name a
+        # stubbed 'compose down'/'stop'/'rm' recorded as stopped answers false
+        # regardless of DOCKER_STUB_RUNNING, until a stubbed 'compose up'/'start'
+        # clears it.
+        name="$5"
+        # DOCKER_STUB_RUNNING_FROM_CALL=<n>: simulate a container that starts
+        # running partway through a script -- answer false to every call to
+        # this subcommand until the n-th (across the whole run, counted next
+        # to DOCKER_STUB_LOG), true from then on. Used to test a recheck under
+        # a lock seeing a state the caller's earlier check did not.
+        if [ -n "${DOCKER_STUB_RUNNING_FROM_CALL:-}" ]; then
+            count_file="${DOCKER_STUB_LOG:-/dev/null}.inspect_count"
+            n=0; [ -f "$count_file" ] && n=$(cat "$count_file")
+            n=$((n + 1))
+            printf '%s' "$n" > "$count_file"
+            if [ "$n" -ge "$DOCKER_STUB_RUNNING_FROM_CALL" ]; then echo true; else echo false; fi
+            exit 0
+        fi
+        if [ -n "$name" ] && [ -f "$STOPPED_FILE" ] && grep -qxF "$name" "$STOPPED_FILE" 2>/dev/null; then
+            echo false; exit 0
+        fi
         echo "${DOCKER_STUB_RUNNING:-false}"; exit 0
+        ;;
+    volume)
+        # 'docker volume inspect NAME': missing (exit 1) unless the test seeded
+        # it in DOCKER_STUB_VOLUMES, a newline-separated list of
+        # "<name>=<o-option-string>" entries (split on the first '=' only, since
+        # the 'o' value itself contains '='). Seeded, it prints the real
+        # inspect shape: an 'Options' object of {device, o, type} plus a
+        # 'Labels' object carrying compose's own com.docker.compose.* keys,
+        # confirmed against the host in the phase 1 smoke test (Run 4).
+        # DOCKER_STUB_VOLUME_TYPE / DOCKER_STUB_VOLUME_DEVICE: the same
+        # "<name>=<value>" lookup, overriding Options.type / Options.device for
+        # one seeded name (default "overlay" for both when unseeded) -- used to
+        # simulate a volume whose type or device no longer matches.
+        # DOCKER_STUB_VOLUME_NULL_OPTIONS: a space-separated list of names
+        # whose Options comes back as JSON null instead of an object -- used to
+        # simulate an existing, unparseable volume (e.g. a plain local volume
+        # reusing the name).
+        case "$2" in
+            inspect)
+                name="$3" o="" found=
+                if [ -n "${DOCKER_STUB_VOLUMES:-}" ]; then
+                    while IFS= read -r entry; do
+                        [ -n "$entry" ] || continue
+                        case "$entry" in
+                            "$name="*) o="${entry#*=}"; found=1; break ;;
+                        esac
+                    done < <(printf '%s\n' "$DOCKER_STUB_VOLUMES")
+                fi
+                [ -n "$found" ] || { echo "Error: No such volume: $name" >&2; exit 1; }
+                vtype="overlay"
+                if [ -n "${DOCKER_STUB_VOLUME_TYPE:-}" ]; then
+                    while IFS= read -r entry; do
+                        [ -n "$entry" ] || continue
+                        case "$entry" in "$name="*) vtype="${entry#*=}"; break ;; esac
+                    done < <(printf '%s\n' "$DOCKER_STUB_VOLUME_TYPE")
+                fi
+                vdevice="overlay"
+                if [ -n "${DOCKER_STUB_VOLUME_DEVICE:-}" ]; then
+                    while IFS= read -r entry; do
+                        [ -n "$entry" ] || continue
+                        case "$entry" in "$name="*) vdevice="${entry#*=}"; break ;; esac
+                    done < <(printf '%s\n' "$DOCKER_STUB_VOLUME_DEVICE")
+                fi
+                options_json="{
+            \"device\": \"$vdevice\",
+            \"o\": \"$o\",
+            \"type\": \"$vtype\"
+        }"
+                case " ${DOCKER_STUB_VOLUME_NULL_OPTIONS:-} " in
+                    *" $name "*) options_json="null" ;;
+                esac
+                cat <<JSON
+[
+    {
+        "CreatedAt": "2026-01-01T00:00:00Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.project": "stub",
+            "com.docker.compose.version": "stub",
+            "com.docker.compose.volume": "$name"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/$name/_data",
+        "Name": "$name",
+        "Options": $options_json,
+        "Scope": "local"
+    }
+]
+JSON
+                exit 0
+                ;;
+            *) exit 0 ;;
+        esac
         ;;
     ps)
         # 'docker ps --format {{.Names}}': the running containers, one per line.
         [ -z "${DOCKER_STUB_PS:-}" ] || printf '%s\n' "$DOCKER_STUB_PS"; exit 0
         ;;
-    build|compose|rename|rm|rmi|images|exec|inspect) exit 0 ;;
+    compose)
+        # Every caller goes through 'docker compose -f <file> --env-file <env>
+        # <subcommand...>' (ai_sandbox_compose, and the two direct call sites).
+        # The container name comes from the compose file's own
+        # 'container_name:' line, so down/stop/rm and up/start track the same
+        # name 'docker container inspect' is later asked about.
+        file="" sub="" prev=""
+        for a in "$@"; do
+            [ "$prev" = "-f" ] && file="$a"
+            case "$a" in
+                down|stop|rm|up|start) [ -n "$sub" ] || sub="$a" ;;
+            esac
+            prev="$a"
+        done
+        name=""
+        if [ -n "$file" ] && [ -f "$file" ]; then
+            name=$(sed -n 's/^[[:space:]]*container_name:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$file" | head -1)
+        fi
+        if [ -n "$name" ] && [ "${DOCKER_STUB_LOG:-}" ]; then
+            case "$sub" in
+                down|stop|rm)
+                    grep -qxF "$name" "$STOPPED_FILE" 2>/dev/null || printf '%s\n' "$name" >> "$STOPPED_FILE"
+                    ;;
+                up|start)
+                    if [ -f "$STOPPED_FILE" ]; then
+                        grep -vxF "$name" "$STOPPED_FILE" > "$STOPPED_FILE.tmp" 2>/dev/null || : > "$STOPPED_FILE.tmp"
+                        mv "$STOPPED_FILE.tmp" "$STOPPED_FILE"
+                    fi
+                    ;;
+            esac
+        fi
+        exit 0
+        ;;
+    build|rename|rm|rmi|images|exec|inspect) exit 0 ;;
 esac
 exit 0
