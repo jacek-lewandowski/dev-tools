@@ -53,3 +53,26 @@ dev-tools: c5764bc (T1 render), 117827e (spec C4/C5, review notes, this report).
 - `bash tests/ai-sandbox/run-tests.sh`: every suite `0 failed` except test-tools.sh
   `46 run, 1 failed` (case 30, "a candidate without a default is skipped", known sandbox-only);
   test-knowledge.sh `387 run, 0 failed`; ends `SOME SUITES FAILED` because of case 30 only.
+
+## T8. Host step and smoke runs (2026-10-08)
+
+The user ran `ai-knowledge sync --all` and rebuilt the sandbox. In this sandbox:
+`~/knowledge` main equals `origin/main`; `~/.claude/agents` lists implementer, planner, reviewer,
+runner, scout, second-reviewer, writer; `grep -c '^tools:' ~/.gemini/agents/scout.md` prints 0;
+`/etc/claude-code/managed-settings.json` carries the agy rules (6a6d25b).
+
+Native smoke runs, ad-hoc briefs and pending reports under `.ai-delegate/` (excluded via
+`.git/info/exclude`, D7):
+
+- **scout** (sonnet): question inline. Answer: Git 2.56.0, 2026-09-28, one claim with URL,
+  fetch date and quote. Reading /etc/hostname and running `echo hi` were both impossible (no
+  such tools) - A12 confirmed with the rendered file. The lead wrote the report, envelope from
+  the pending report. Status done.
+- **runner** (haiku): `bash tests/ai-sandbox/test-helpers.sh`, 12 run, 0 failed, exit 0, command
+  unchanged; report overwritten with the envelope kept. Status done. Minor: its final message was
+  prose rather than the one closing line D5 asks for; the report itself conforms.
+- **writer** (sonnet): two-line note translated, line-count check exit 0, report overwritten with
+  the envelope kept. Output: "Runner utrzymuje logi buildów poza kontekstem leada." / "Każda runda
+  review czyta tylko deltę względem poprzedniej." - English terms kept and inflected per D11.
+
+All three reports carry every C4 envelope field. Phase 2 closed.
