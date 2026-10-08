@@ -476,6 +476,9 @@ The envelope is the same for every role:
 
 - `fallback_reason` is one of `null`, `not-signed-in`, `not-allowed`,
   `not-confined`, `tool-error`.
+- `ran_on` is never self-described by the model. On an external run the
+  wrapper sets it. On a native run it is copied from the pending report, by
+  the native agent or, for a scout, by the lead (C5).
 - `session` holds the external tool's `conversation_id`, and is `null` for a
   native run.
 - `usage` holds the per-call token counts of an external run, and is `null`
@@ -549,12 +552,16 @@ ai-delegate run <brief> [--continue <previous report> [--answers <file>]]
 **Hand-over after exit 3 with `pending`.** The pending report carries the
 final `ran_on`: `tool: claude`, the model, and the `fallback_reason`
 (`null` when the route itself is Claude).
-1. The lead spawns the native role with that model and gives it two paths:
-   the same brief and the report.
-2. The native agent copies `ran_on` from the pending report and overwrites
-   the report at that path with its final report. For a scout, the lead writes
-   the returned JSON there.
-3. A report still `pending` afterwards means the native run did not happen.
+1. The lead spawns the native role with that model.
+   - A runner or writer gets two paths: the same brief and the report.
+   - A native scout has web tools only. It gets the question inline in its
+     prompt, not paths.
+2. The native runner or writer copies `ran_on` from the pending report and
+   overwrites the report at that path with its final report.
+3. A native scout returns the report JSON as its final message (D5). The lead
+   writes it to the report path, taking `schema`, `route`, `session`, `usage`
+   and `ran_on` from the pending report.
+4. A report still `pending` afterwards means the native run did not happen.
 
 **Open questions and `other` requests (D25).**
 - The lead answers `open_questions` only from the brief, the spec or plan, and

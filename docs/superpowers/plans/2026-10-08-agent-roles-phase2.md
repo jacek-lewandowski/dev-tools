@@ -82,7 +82,7 @@ The I2 grep (README excluded) on `~/knowledge/roles`, `bash tests/ai-sandbox/tes
 
 1. `ai-knowledge sync --all` on the host, after T1 is committed.
 2. In this sandbox: `ls ~/.claude/agents` lists scout, runner, writer, second-reviewer; `grep -c '^tools:' ~/.gemini/agents/scout.md` prints `0`.
-3. Native smoke runs in a fresh session. No wrapper exists yet, so the lead gives each agent an ad-hoc report path, `.ai-delegate/smoke-<role>.report.json`, with a hand-written `pending` report there naming a Claude model. Scout: a factual question, and a prompt that also asks it to read a local file and run a command, both expected refused (A12 evidence again). Runner: run `bash tests/ai-sandbox/test-helpers.sh`. Writer: translate a two-line note listed in `outputs`, with a `check:` of `diff`. The user pastes the three report paths' status fields.
+3. Native smoke runs in a fresh session. No wrapper exists yet, so the lead gives the runner and writer an ad-hoc report path, `.ai-delegate/smoke-<role>.report.json`, with a hand-written `pending` report there naming a Claude model. Scout: it gets no paths; the lead puts the question inline in its prompt (and also asks it to read a local file and run a command, both expected refused, A12 evidence again), the scout returns the JSON as its final message, and the lead writes `.ai-delegate/smoke-scout.report.json` with `ran_on` set from the pending report. Runner and writer receive the brief and report paths as described. Runner: run `bash tests/ai-sandbox/test-helpers.sh`. Writer: translate a two-line note listed in `outputs`, with a `check:` of `diff`. The user pastes the three report paths' status fields.
 
 ## Assumptions
 
