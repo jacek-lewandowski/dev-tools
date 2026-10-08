@@ -226,6 +226,9 @@ follow the memory: half as many cores as GB of RAM, pinned as a cpuset so that
 sandboxes over the host and remembered in the sandbox's .env. At most three
 sandboxes run at once (AI_SANDBOX_MAX_RUNNING in ai-sandbox-lib.sh): starting a
 fourth is refused, with the running ones listed, until one is stopped.
+A sandbox also yields to the host: lower CPU shares, a lower disk I/O weight
+(effective on cgroup v2 only with the BFQ scheduler), a higher OOM score so it
+is killed first under host memory pressure, and at most 4096 processes.
 USAGE
 }
 
@@ -2042,6 +2045,16 @@ services:
     memswap_limit: "${MEMORY_SWAP_LIMIT}"
     # Half as many cores as GB of RAM, as a cpuset so that nproc agrees.
     cpuset: "${CPUSET}"
+    # The host wins CPU under contention; no cap while it is idle.
+    cpu_shares: 256
+    # Lower disk I/O weight under contention; on cgroup v2 it only takes effect
+    # with the BFQ scheduler, otherwise it is silently ignored.
+    blkio_weight: 100
+    # Under host-wide memory pressure the kernel kills a sandbox before host apps.
+    oom_score_adj: 500
+    # A runaway build or fork bomb cannot exhaust the host's process table
+    # (threads count; IntelliJ plus Gradle uses a few hundred).
+    pids_limit: 4096
     # Bridged, not host, networking: the sandbox can reach the internet but not
     # every service bound to the host's loopback. The host itself is reachable
     # by name when deliberately needed.
