@@ -270,3 +270,196 @@ cache / (input + cache), input is uncached.
   (A7 stays "not reliably shown" for `--conversation`). The user decided on 2026-10-08: **one-shot calls for now;
   a persistent session mode is planned but deferred, not implemented.** The numbers above are the input for that later
   work; the recorded `conversation_id` and `usage` of each wrapper report keep the measurement open.
+
+## S1 (open point 1: A10, A19)
+
+Run on 2026-10-08, `claude` 2.1.287, `--model haiku`, `-p --output-format json`.
+
+### Method
+
+- Scratch dir `<scratchpad>/s1/work` (scratchpad = `/tmp/claude-1000/-home-jlewandowski-dev-public-dev-tools/1b83102d-f68c-4c0f-bcdf-936c8bc7e577/scratchpad`)
+  with its own `CLAUDE.md` carrying `CANARY_PROJECT_7Q`; the user-level `~/.claude/CLAUDE.md` loads as usual
+  (probe: heading "Global Software Engineering Rules").
+- Role canary `ROLE_CANARY_K3` in `s1/role.md` (plain text, for `--append-system-prompt-file`) and in
+  `s1/work/.claude/agents/s1lead.md` (agent definition with front matter `name: s1lead`); `s1/settings-agent.json` is `{"agent":"s1lead"}`.
+- Default-prompt probe: the model is asked, without tools, for the section headings of its system prompt and to quote the
+  "Executing actions with care" sentence ("Carefully consider the reversibility and blast radius of actions"), which only the
+  default Claude Code prompt contains. Total input = `input_tokens + cache_creation + cache_read` of the one request.
+  (The first probe, the "You are Claude Code / Claude agent" line, was useless: every run "quoted" one of them, also the
+  runs that had lost the default prompt, since the SDK identity line survives.)
+- Commands (same prompt `q.txt` / `q2.txt`, cwd `s1/work`):
+  - base: `claude -p "$(cat q.txt)" --model haiku --output-format json`
+  - agent: `... --agent s1lead`
+  - append: `... --append-system-prompt-file s1/role.md`
+  - setting: `... --settings s1/settings-agent.json`
+- Raw outputs are in `s1/*.json` (scratchpad, not committed).
+
+### Observations
+
+| Mechanism | project `CLAUDE.md` canary | `~/.claude/CLAUDE.md` | role canary | default system prompt (headings, "blast radius" sentence) | tools | total input tokens (probe 2) |
+|---|---|---|---|---|---|---|
+| base (nothing) | yes | yes | no | yes (9 headings) | full | 27,879 |
+| `--agent s1lead` | yes | yes | yes | **no** (the model denies it and lists only CLAUDE.md headings) | full | 21,610 |
+| `--append-system-prompt-file` | yes | yes | yes | **yes** (same 9 headings, same quote) | full | 27,903 (+24) |
+| `agent` setting via `--settings` | yes | yes | yes | **no** (denies it) | full | 21,610 |
+
+- `--agent` and the `agent` setting replace the default system prompt with the agent body (6.3k tokens smaller) and keep
+  `CLAUDE.md`. Tool use stays intact.
+- `--append-system-prompt-file` keeps the default prompt and `CLAUDE.md`, and adds the role text; cost is the role's own
+  tokens (24 for the canary line).
+- Caveat: answers come from a haiku model quoting its own context; the two "no default prompt" results and the token drop
+  agree, so I treat them as reliable.
+
+### A19: can a subagent's shell be told apart? Not measured
+
+- Command: `claude -p 'Step 1: with Bash run env | sort > env_main.txt ... Step 2: spawn ONE subagent (Agent tool, general-purpose, haiku) that runs env | sort > env_sub.txt ... ' --model haiku --output-format json` (cwd `s1/work`).
+- Result: headless `-p` refused the Bash tool call in the main session (permission not granted), and the subagent's Bash
+  call was refused too; no env file was written. By the brief's rule I did not work around it (no `--allowedTools`,
+  `--permission-mode` or settings change). No marker was observed, so none is claimed.
+- To finish: the user runs the same command with a flag that allows `Bash(env:*)` and `Bash(echo:*)` for this one
+  scratch run, then `diff s1/env_main.txt s1/env_sub.txt`.
+
+### Decision (the rule of the spec, unchanged)
+
+- **Phase 6 is planned**, on `--append-system-prompt-file <lead role file>`: it is the one mechanism that keeps both the
+  default system prompt and `CLAUDE.md`. `--agent` and the `agent` setting do not qualify (default prompt lost).
+  Note for phase 6: the appended file is added after the default prompt, and it is not an agent definition, so it needs no
+  front matter; in a sandbox the launcher flag is the route (a managed setting cannot add this flag).
+- **A19 / I1:** undecided. Rule applied as written: no marker found, so `ai-delegate`'s subagent refusal stays prose
+  only until the run above shows a marker.
+
+### Assumption table updates
+
+- A10: verified for `--append-system-prompt-file` (S1: default prompt, `CLAUDE.md` and role canary all present, +24 tokens);
+  refuted for `--agent` and the `agent` setting (default prompt dropped, -6.3k tokens).
+- A19: still guessed (S1 attempt blocked by the headless permission refusal; needs the user-approved run).
+
+### Created and removed
+
+- Created only under the scratchpad `s1/` (including `work/CLAUDE.md`, `work/.claude/agents/s1lead.md`, role and settings
+  files, outputs). Nothing under `~/.claude` or the project was touched; nothing removed (scratchpad is session-local).
+
+### S1 / A19 (user-approved re-run, 2026-10-08)
+
+- Allowed for the nested `claude -p` (cwd `s1/work`): `--allowedTools "Bash(env:*)" "Bash(echo:*)" "Agent"`; no settings
+  file, no `--permission-mode`. Redirects (`env > file`) and `$$` were refused (attempts a19b, a19c), so no env files were
+  written; instead both shells ran plain `env` and the models reported variable names (and values for names containing
+  CLAUDE, AGENT, SUB, SESSION, PARENT). Output kept in `s1/a19d.txt` (contains a messaging token; not copied here).
+- Command: `claude -p 'Step 1: run env in Bash, report all NAMES... Step 2: spawn ONE subagent (general-purpose, haiku) that runs env and reports names and the filtered values... Step 3: print both' --model haiku --allowedTools "Bash(env:*)" "Bash(echo:*)" "Agent"`.
+- Observation: the main and subagent shells list the same variable names (the only difference in the model's transcription,
+  `HOST_USER`, is a copying omission: it matches the other `HOST_*` names). The filtered values are identical, including
+  `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`, `CLAUDE_CODE_CHILD_SESSION=1`, `CLAUDE_CODE_ENTRYPOINT=sdk-cli` and
+  `AI_AGENT=claude-code_2-1-287_agent`. The subagent shell shares the main session's Claude Code process (same PID and
+  session id), so none of these distinguishes it. No subagent-specific variable exists.
+- Limit: the lists come from the models' transcription, not a file diff; with names this uniform, a missed name is
+  possible but the identical session id and PID make a hidden per-subagent marker unlikely. No marker in the subagent's
+  context text was reported either.
+- **Decision (rule as written):** no marker found, so `ai-delegate` does not refuse subagent callers; I1 holds as prose
+  for the runner and writer roles only. A19 is refuted for environment variables. Phase 6 decision above is unchanged.
+
+## S3 (A3, A5, A6; invariant I6)
+
+Run 2026-10-08, agy 1.1.22, `--model gemini-3.8-flash-high`, one bare `agy -p "<prompt>" ...` per call. Canaries (unique
+markers, no real secrets) stood in for `~/.claude` and `~/.config/gcloud`, which were not touched: `~/.config/s3-canary/c.txt`
+(for `~/.config`, `~/.claude`, `~/.config/gcloud`), `<repo>/.ai-delegate/s3-canary.txt` (the repository, by absolute path) and
+`<scratchpad>/s3/c.txt`. Working directories: an empty dir under the scratchpad, later an empty dir directly under `$HOME`.
+
+### Output shape and exit codes
+
+- `--output-format json` prints one line: `{"conversation_id","status","response","duration_seconds","num_turns","usage":{...}}`
+  as in S2. Extra keys: `error` when `status` is `ERROR`; with `--json-schema` also `structured_output` and `json_schema`;
+  with a slash command (`-p "/permissions"`) a `command` object.
+- `status`: `SUCCESS`, `CANCELED` (a tool call was auto-denied; `response` empty; the reason is a line on stderr starting
+  `jetski: no output produced - a tool required the "<perm>" permission ...`) and `ERROR`.
+- Exit codes: 0 for `SUCCESS` and for `CANCELED` (a denied tool is not fatal, per the changelog), 1 for `ERROR` (invalid
+  model: `status ERROR`, `error` lists the models, exit 1; `--print-timeout 1s`: `ERROR "timeout waiting for response"`, exit 1).
+  So the wrapper must test `status`, not the exit code.
+- Not signed in (A3), tested with `HOME` pointing at an empty directory, no logout: `agy models` prints
+  "Fetching available models..." then `Error: Please sign in to view available models. Launch the CLI without arguments to
+  sign in.`, exit 1. A3 verified. `agy -p` in that state does not fail fast: it prints an OAuth URL and waits 60 s for a pasted
+  code, then `{"status":"ERROR","error":"authentication failed or timed out"}` (json) and exits non-zero; my outer
+  `timeout 60` killed it first (exit 124). The wrapper needs its own timeout and a sign-in check via `agy models` (exit 1).
+
+### `--json-schema` (A5)
+
+- Requires `--output-format json` or `stream-json` (text: `Error: --json-schema can only be used when --output-format is 'json' or 'stream-json'`).
+- Enforced on a separate field, not on `response`. The model ends the run through a finish tool whose arguments are the schema;
+  the result is `structured_output`, and `response` stays free text (it even carries the same JSON plus `toolAction` and
+  `toolSummary` keys on a second line). `num_turns` is 2.
+- Violating requests: schema `{answer: integer}`, prompt "answer only with the word banana": `response` "banana",
+  `structured_output {"answer":0}`. Schema `{color: enum[red,green]}`, prompt "use the exact word blue": `response` "...blue.",
+  `structured_output {"color":"green"}`. So the shape always conforms (the model coerces; it is not rejected), the value can be
+  wrong. A5 verified for shape, not for content. The wrapper reads `structured_output`, never `response`, and still validates
+  C4 itself (I8).
+
+### Tools per flag combination (empty working directory)
+
+Tool list the model reports, identical in every mode (`--mode plan` too): `view_file`, `run_command`, `manage_task`,
+`send_message`, `schedule`, `invoke_subagent`, `define_subagent`, `manage_subagents`, `write_to_file`, `replace_file_content`,
+`generate_image`, `read_url_content`, `search_web`, `find_by_name`, `grep_search`, `list_dir`, `ask_question`. No flag removes a tool.
+
+| Flags | read `~/.config` canary | read repo canary (abs path) | read scratchpad (`/tmp`) canary | shell `echo s3-marker` | write file | `search_web` | `read_url_content` |
+|---|---|---|---|---|---|---|---|
+| none (default, global settings `toolPermission: request-review`) | denied (`read_file`, CANCELED) | denied | allowed (system temp dir is granted) | denied (`command`, CANCELED) | denied (the model used a shell: `command`; with `write_to_file` forced: `read_file` denied) | allowed | denied (`read_url`, CANCELED) |
+| `--dangerously-skip-permissions` | allowed | allowed | allowed | allowed | allowed (also copied into `~/.gemini/antigravity-cli/scratch/`; one run wrote to `$HOME`) | allowed | allowed |
+| `--mode plan --dangerously-skip-permissions` | allowed | not tried | not tried | allowed | allowed (`~/w2.txt`) | allowed | not tried |
+| `--sandbox --dangerously-skip-permissions` | allowed | allowed | not tried | blocked (`fork/exec /usr/local/bin/agy: operation not permitted`) | allowed (cwd) | not tried | not tried |
+
+- `--mode plan` is no confinement: shell, read and write all ran. (`--mode` accepts only `accept-edits` and `plan`; no mode
+  denies tools.)
+- `--sandbox` restricts the terminal only; file reads anywhere and writes in the cwd still work. Not a confinement.
+- Only the default mode (no skip flag) denies. In a denial the whole run is `CANCELED` with an empty `response`, not a
+  recoverable tool error. One denied call ended each run.
+- Default-mode grants seen, matching the changelog: read inside the workspace (the cwd), read and write in the system
+  temporary directory (`/tmp`), `search_web`. Everything else asks, and headless auto-denies.
+- Project-scope permission rules: `agy -p "/permissions"` lists scopes project, shared, global, but the only settings file the
+  binary names is `~/.gemini/antigravity-cli/settings.json`; a `.agents/settings.json` with `permissions.allow` in the cwd had no
+  effect (`read_url` still denied). The fetch tool can therefore be allowed only by an allow-rule in the user's global
+  `settings.json` (not tried: it changes the user's global agy configuration and would affect the parallel S1 agent), or by
+  `--dangerously-skip-permissions`, which allows everything.
+- The default mode depends on global settings: `agy -p "/config"` prints `toolPermission request-review` and
+  `allowNonWorkspaceAccess false` here. `always-proceed` or `allowNonWorkspaceAccess true` would widen it; `--mode` cannot
+  override them.
+
+### Confinement profile per role (I6)
+
+- Common mechanism that works: default permission mode (no `--dangerously-skip-permissions`, no `--sandbox`/`--mode` reliance),
+  `--output-format json`, working directory an empty directory outside `/tmp`. Verified denials: shell, any write, any read
+  outside the cwd and `/tmp`, directory listing outside the cwd, URL fetch. Residuals that cannot be switched off: `search_web`
+  is allowed, and `/tmp` (system temporary directory) is readable and writable. The scratchpad lies under `/tmp`, so a
+  scratchpad canary was readable even from another directory: wrapper inputs and the report must never sit under `/tmp`
+  while an external run is in flight (or the run directory must not be under it).
+- Writer and second reviewer (profile "no tools"): the tool list cannot be emptied, but every tool that reads the repository,
+  `~/.claude`, `~/.config`, writes or runs a shell is denied by the permission mechanism. Shown for the `~/.config` and repo
+  canaries (stand-ins for `~/.claude` and `~/.config/gcloud`), shell and write. Residual: `search_web` (a query could carry
+  inline-prompt content to Google, the same party that already receives the prompt) and `/tmp`. Prompt prose is not used.
+- Scout (profile "web search and fetch only"): search works in the default mode; fetch does not, without a global
+  `permissions.allow` rule for `read_url`, and the only mode that enables fetch without it also enables everything. Not shown.
+
+### Decision (the rule of the spec, unchanged: a role whose profile is not shown stays on its fallback, `not-confined`)
+
+- Writer and second reviewer: profile shown (default mode, empty cwd outside `/tmp`, status check, wrapper checks
+  `/config` for `toolPermission request-review` and `allowNonWorkspaceAccess false` before each run). May go external, with
+  the residuals above recorded as `search_web` and `/tmp` in the I6 text.
+- Scout: stays on its fallback. It may go external only if the user accepts adding `read_url` to `permissions.allow` in
+  `~/.gemini/antigravity-cli/settings.json` (a global agy setting that lets every agy session fetch URLs without asking, and
+  which still needs a test of its own: the rule syntax `read_url(<target>)` and whether it keeps other tools denied). Until then
+  search-only scout work is the most agy can be given.
+- Runner: unchanged (needs the tree and a shell; already internal per I6).
+
+### Assumption table updates
+
+- A3: verified (`Error: Please sign in to view available models...`, exit 1, `HOME` without credentials). `agy -p` instead
+  waits 60 s on an OAuth prompt.
+- A5: verified for shape only: `structured_output` always conforms, a violating request is coerced (not rejected); `response`
+  is not the schema document; needs `--output-format json`.
+- A6: partly verified. Shell, write, reads outside the cwd and `/tmp`, and fetch are denied in the default mode; not by
+  `--mode plan` or `--sandbox`. Not met as stated: `search_web` and `/tmp` stay reachable, the tool list is never empty,
+  a denial cancels the whole run, and the profile depends on the user's global agy settings. Fetch for the scout not shown.
+
+### Created and removed
+
+- Created and removed: `~/.config/s3-canary/` (c.txt), `<repo>/.ai-delegate/` (s3-canary.txt; the directory did not exist
+  before), scratchpad `s3/` (c.txt, `empty/`, `nohome/`), `~/s3-empty/` (with a throwaway `.agents/settings.json`),
+  `~/s3-schema.json`, and agy's stray outputs `~/w2.txt`, `~/.gemini/antigravity-cli/scratch/w.txt` and `w2.txt`. agy's
+  own conversation records under `~/.gemini/antigravity-cli/` remain. No agy process left running; no code or settings changed.
