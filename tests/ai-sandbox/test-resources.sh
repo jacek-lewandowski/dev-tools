@@ -29,7 +29,12 @@ assert_contains "the shared brain states the cap" "$(cat "$HOME/.gemini/GEMINI.m
 
 # The sandbox must lose to the host under contention and cannot exhaust its process table.
 assert_contains "compose lowers CPU shares"   "$compose" 'cpu_shares: 256'
-assert_contains "compose lowers block I/O weight" "$compose" 'blkio_weight: 100'
+# blkio_weight is rejected or ignored on some hosts, so it must stay out.
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$compose" in
+    *blkio_weight*) _fail "compose has no blkio_weight" "blkio_weight is present" ;;
+    *)              _pass "compose has no blkio_weight" ;;
+esac
 assert_contains "compose raises the OOM score" "$compose" 'oom_score_adj: 500'
 assert_contains "compose limits processes"    "$compose" 'pids_limit: 4096'
 
