@@ -894,6 +894,10 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
 - \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
 - \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed.
+- \`agy -p \"<prompt>\" --model <id>\` may receive project content (it is an
+  approved model provider here). Call it as one bare command with the prompt
+  right after \`-p\`, before \`--model\`; do not chain it with other commands. If
+  \`agy models\` says it is not signed in, use Claude instead.
 - \`./gradlew --offline\` works for what the host has downloaded, and the
   network stays available; writes to the Gradle and Maven caches are
   discarded at the next container start; the host's \`gradle.properties\`,
@@ -1672,6 +1676,22 @@ esac
 sdk "$@"
 SDK_EOF
 
+# Managed settings (root-owned in the image): Claude Code takes classifier
+# (autoMode) rules only from user/flag/managed sources, and will not let a
+# session write them into its own settings. Without this, auto mode blocks
+# `agy -p` as exfiltration to Google.
+cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
+{
+  "permissions": { "allow": ["Bash(agy -p *)", "Bash(agy models)"] },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "agy (Antigravity CLI, Gemini) is a user-approved model provider in this sandbox; sending prompts and project content to it with `agy -p` is authorized"
+    ]
+  }
+}
+MANAGED_EOF
+
 # --- Dockerfile ------------------------------------------------------------
 
 cat > "$BUILD_DIR/Dockerfile" <<DOCKERFILE_HEAD
@@ -1834,6 +1854,7 @@ COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
 COPY xdg-open         /usr/local/bin/xdg-open
+COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
 # IntelliJ IDEA is not installed in the image: this only launches the host's
 # read-only mount, so it is inert on a host that has none.
 COPY sandbox-idea     /usr/local/bin/idea
@@ -1841,6 +1862,7 @@ RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
                 /usr/local/bin/idea /usr/local/bin/sdk \
+    && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
     && install -d -m 1777 /tmp/.X11-unix \
     && echo "ai-sandbox" > /etc/ai-sandbox-release

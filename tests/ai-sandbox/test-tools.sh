@@ -25,6 +25,17 @@ assert_contains "comby's shared libraries are installed" "$df" 'libev4 libpcre3 
 assert_contains "comby is smoke-tested at build time"    "$df" 'comby -version'
 assert_contains "agy is installed from the antigravity tarball" \
     "$df" 'mv /tmp/antigravity /usr/local/bin/agy'
+# Managed settings: the only place Claude Code accepts classifier (autoMode)
+# rules from inside a sandbox, and root-owned so the sandbox user cannot edit it.
+assert_contains "managed settings are installed for Claude Code" "$df" \
+    'COPY claude-managed-settings.json /etc/claude-code/managed-settings.json'
+ms=$(cat "$build/claude-managed-settings.json")
+assert_contains "agy -p is allowed by permission rule"  "$ms" '"Bash(agy -p *)"'
+assert_contains "agy models is allowed by permission rule" "$ms" '"Bash(agy models)"'
+assert_contains "and made read-only to the sandbox user" "$df" 'chmod 0644 /etc/claude-code/managed-settings.json'
+assert_contains "autoMode inherits the defaults"        "$ms" '"$defaults"'
+assert_contains "autoMode authorises agy"               "$ms" 'agy (Antigravity CLI, Gemini) is a user-approved model provider'
+assert_eq "managed settings JSON parses" "$(python3 -m json.tool "$build/claude-managed-settings.json" >/dev/null 2>&1; echo $?)" '0'
 assert_contains "corepack shims are enabled"             "$df" 'corepack enable'
 assert_contains "pnpm and yarn are pre-warmed"           "$df" 'corepack prepare pnpm@latest yarn@stable --activate'
 assert_contains "corepack cache is shared, not root's"   "$df" 'COREPACK_HOME=/usr/local/share/corepack'
@@ -103,6 +114,7 @@ assert_contains "notes mention pnpm via corepack"   "$brain" 'corepack'
 assert_contains "notes mention agy"                 "$brain" '`agy`'
 assert_contains "notes mention codex"               "$brain" '`codex`'
 assert_contains "notes mention nano"                "$brain" '`nano`'
+assert_contains "notes say how to call agy"         "$brain" 'agy -p "<prompt>" --model'
 assert_contains "notes mention net-tools"           "$brain" '`net-tools`'
 
 rm -rf "$tmp"
