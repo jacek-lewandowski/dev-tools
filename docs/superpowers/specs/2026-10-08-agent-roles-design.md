@@ -8,9 +8,14 @@ Revision 4 resolved review 3
 ([2026-10-08-agent-roles-design-review-3.md](2026-10-08-agent-roles-design-review-3.md)).
 Revision 5 applies the user's redesign after review 4
 ([2026-10-08-agent-roles-design-review-4.md](2026-10-08-agent-roles-design-review-4.md)):
-typed requests, D21 and D24. Revision 6 resolves review 5
-([2026-10-08-agent-roles-design-review-5.md](2026-10-08-agent-roles-design-review-5.md))
-and awaits the user's approval.
+typed requests, D21 and D24. Revision 6 resolved review 5
+([2026-10-08-agent-roles-design-review-5.md](2026-10-08-agent-roles-design-review-5.md)).
+It was approved 2026-10-08 (9d7c428). Revision 7 records phase 3 (S4) and the
+user's decisions after it (2026-10-11). Revision 8 resolves review 7
+([2026-10-08-agent-roles-design-review-7.md](2026-10-08-agent-roles-design-review-7.md))
+by adding spike S5 to phase 3. Revision 9 records the user's decision after
+review of revision 8 (2026-10-11): S5 is dropped and A25-A27 are accepted
+residuals (D27). Phase 3 closed with S4.
 Input: [2026-10-08-agent-roles-brief.md](2026-10-08-agent-roles-brief.md)
 (the user's decisions there are fixed and are not restated as open questions)
 Related task: [2026-10-08-ai-sandbox-agy-delegation-brief.md](2026-10-08-ai-sandbox-agy-delegation-brief.md),
@@ -84,23 +89,31 @@ Every report says which agent actually ran.
 - **I6 Confinement by mechanism.**
   - An external route is used only for a role whose profile phase 1 showed
     `agy` enforces (C6): the scout, the writer and the second reviewer.
-  - Measured (S3, S3b), the profile allows reads and searches inside the
-    granted worktree, and `search_web`. Denied: the shell, writes, and reads
-    outside the worktree and `/tmp`.
-  - The read denial is verified for `view_file` and `list_dir` only.
-    `grep_search` and `find_by_name` outside the worktree are checked by S4
-    (A23). If either reaches outside, every external route resolves to
-    `not-confined`.
-  - Fetch (`read_url_content`) is confined per route. Only a scout run may
-    have it; a writer or second-reviewer run with fetch available is not
-    confined (C6, D21).
+  - Measured (S3, S3b, S4), the profile allows reads and searches inside the
+    granted worktree, the per-run `TMPDIR` and `scratch/`, and `search_web`.
+    Denied: the shell, writes outside the per-run `TMPDIR`, and reads
+    elsewhere.
+  - The read denial is verified for `view_file`, `list_dir` and `grep_search`
+    only (S3b, S4). Not measured, and accepted as residuals (D27):
+    - `read_url_content` against `file://` paths and local hosts (A25);
+    - the rest of `~/.gemini/antigravity-cli/` (A26);
+    - sibling directories of the per-run `TMPDIR` (A27).
+  - `find_by_name` returns file names and paths outside the worktree, in the
+    main tree and `$HOME` (S4). The rule is content reach (A23): names visible,
+    contents protected is an accepted residual.
+  - Fetch (`read_url_content`) is allowed for every `agy` run through
+    `read_url(*)` (D21).
   - The wrapper resolves any other external route, and any run whose
-    effective agy settings differ from C6 for its route, to its fallback
-    (`not-confined`), whatever table is in use.
+    effective agy settings differ from C6, to its fallback (`not-confined`),
+    whatever table is in use.
   - Prose in a prompt does not count as confinement.
-  - Residuals no setting removes: `search_web` stays reachable, and the tool
-    list is never empty. `/tmp` stays reachable until S4 shows a mitigation
-    (D24).
+  - Residuals no setting removes:
+    - `search_web` stays reachable;
+    - the tool list is never empty;
+    - file names outside the worktree are visible (A23);
+    - `~/.gemini/antigravity-cli/scratch/` stays readable (D24).
+
+    A fresh per-run `TMPDIR` closes `/tmp` (C6, D24).
 - **I7 Self-contained prompts.**
   - A prompt sent to a non-Claude model states every convention the task
     depends on. It relies neither on `global.md` nor on Claude defaults.
@@ -127,6 +140,10 @@ Every report says which agent actually ran.
     never ignores a failure.
   - The writer edits only the text files its brief names, never code, and
     never reviews its own translation.
+  - Run externally, the writer and the second reviewer can also fetch URLs
+    (D21). Their role bodies say never to send file content to a URL or a
+    search query (D28). This is prose, not confinement; the residual is
+    accepted under D20.
   - The second reviewer comes from a vendor other than Anthropic and is never
     spawned as a Claude subagent. Its findings belong to the Claude reviewer's
     round, so the two-round limit is counted once. `ai-delegate` refuses an
@@ -194,6 +211,11 @@ the review, and the safer option is chosen.
     image's; the user has already consented to it.
   - Alternative: the wrapper reads the user settings for the rule. Rejected,
     because an agent can write those files.
+  - On the host, the entrypoint merge of `read_url(*)` does not exist (C6).
+    External routes therefore fall back to Claude (`not-confined`) unless the
+    host user adds `read_url(*)` to the host's agy settings
+    (`~/.gemini/antigravity-cli/settings.json`). `docs/ai-delegate.md`
+    (phase 4) explains how (review 7).
 - **D4 Tiers.** `global.md` §2 keeps its tier sentence as the default. The
   routing table overrides it where it exists, and the table's Claude rows equal
   the §2 defaults.
@@ -258,6 +280,11 @@ the review, and the safer option is chosen.
   Since D20 the scout can read the project through the worktree anyway, so
   this rule no longer prevents that leak. The user accepts the residual risk
   (D20), and the rule stays to keep scout briefs minimal.
+  - Since D21 the same reasoning applies to the writer: it can fetch, and it
+    gets its inputs inline, which may include files under `.ai-delegate/`
+    that are not tracked.
+  - The writer's inputs stay inline, because its task needs them. The guard is
+    the D28 line in its role body. That is prose, accepted under D20.
 - **D17 One-shot calls for now (user decision, 2026-10-08, after S2).**
   - Every external call is a one-shot `agy -p`.
   - `--continue` is a fresh call with the previous report inlined.
@@ -293,43 +320,46 @@ the review, and the safer option is chosen.
   - Secrets are kept out by the worktree, because deny rules match only exact
     absolute paths and directory-wide tools bypass them (S3b).
   - Excluding untracked and ignored files is confirmed by the user.
-  - The user accepts the residual risk that an injected page makes the scout
-    send project files to a third-party URL.
+  - The user accepts the residual risk that an injected page makes an `agy`
+    run send project files to a third-party URL. Since D21 that applies to all
+    three external roles.
+  - File names outside the worktree are visible to `find_by_name`; contents
+    are not. The user accepted this after S4 (A23).
   - Tracked secrets (review 3; safer option): C6 deletes files that match
     the C3 secret patterns, and symlinks that resolve outside the worktree,
     before `agy` starts. A tracked secret under another name stays readable.
   - Alternative: accept tracked secrets as a residual.
-- **D21 No fetch rule for now (user decision, 2026-10-08, after review 4).**
-  - The scout would fetch through `read_url(*)` in agy's `permissions.allow`,
-    never through `--dangerously-skip-permissions`.
-  - S3b measured that rule as global to every `agy` run, so it is not
-    installed.
-  - Consequences:
-    - the writer and the second reviewer run on `agy`;
-    - the scout runs on Claude Sonnet (`not-confined`) until S4 shows that
-      fetch can be limited to scout runs (A21).
-  - The C6 check is route-dependent:
-    - a scout run requires the rule;
-    - a writer or second-reviewer run requires its absence.
-  - If S4 shows a per-run scope, a spec change lets the scout go external
-    with fetch for scout runs only.
+- **D21 Fetch for every `agy` run (user decision, 2026-10-11, after S4;
+  replaces the 2026-10-08 "no fetch rule for now").**
+  - `read_url(*)` is installed in agy's `permissions.allow` for every `agy`
+    run, never `--dangerously-skip-permissions`.
+  - The scout, the writer and the second reviewer all run on `agy` with
+    fetch.
+  - The user's reasoning: a Claude agent with web access could send project
+    content elsewhere just the same, so fetch for the writer and the second
+    reviewer adds no new channel.
+  - The route-dependent fetch check is dropped. The rule is required on every
+    route (C6).
+  - A per-run settings home is not used. S4 showed that agy honours one under
+    `HOME`, but it then needs agy's login, and the login is never copied
+    (A21). The scout runs from the normal home.
 - **D22 `agy`, not the Gemini API (user decision, 2026-10-08).** `agy` runs on
   the user's subscription sign-in; the API needs a key with separate billing.
 - **D23 MCP exposure deferred (user decision, 2026-10-08, on revision 6).**
   Exposing `ai-delegate` to Claude Code as an MCP tool, instead of a Bash
   call, is moved to the deferred list (entry 2). The wrapper phase ships the
   Bash call only.
-- **D24 `/tmp` exposure accepted until S4 (user decision, 2026-10-08, after
-  review 4).**
-  - S3 measured `/tmp` as readable and writable by every `agy` run. That
-    includes the lead's scratchpad and the persisted tool outputs under
-    `/tmp/claude-*`.
-  - Without the fetch rule (D21), the only outward channel is the search tool.
-  - Spike S4 (phase 3) checks two mitigations:
-    - whether agy's temp grant follows `TMPDIR`;
-    - a private `/tmp` through a mount namespace.
-
-    A mitigation that works enters C6.
+- **D24 `/tmp` closed by a per-run `TMPDIR`; `scratch/` accepted (user
+  decision, 2026-10-11, after S4).**
+  - S3 measured `/tmp` as readable and writable by every `agy` run, including
+    the lead's scratchpad and the tool outputs under `/tmp/claude-*`.
+  - S4 showed that agy's temp grant follows `TMPDIR`: with it set, `/tmp`
+    reads and writes are denied. A fresh per-run `TMPDIR` under
+    `.ai-delegate/` (C6) closes `/tmp`.
+  - A private `/tmp` through a mount namespace is refused by the container
+    (no `CAP_SYS_ADMIN`) and is not used.
+  - `~/.gemini/antigravity-cli/scratch/` stays readable by every `agy` run;
+    `TMPDIR` does not cover it. This is an accepted residual.
 - **D25 Project facts only through the menu or the user (review 5; safer
   option).**
   - `agy` may not obtain project facts through `open_questions`.
@@ -349,6 +379,25 @@ the review, and the safer option is chosen.
     clone refuses the whole external run, C6 steps 3-4 included, not only
     requests. The run resolves to `not-confined`.
   - Alternative: accept the user's own config as trusted.
+- **D27 agy trusted like its managing Claude agent; S5 dropped (user
+  decision, 2026-10-11, after review of revision 8).**
+  - In the sandbox, `agy` gets web access by default (`read_url(*)` for every
+    run), the same as a Claude agent.
+  - The user's reasoning: `agy` is trusted like the Claude agent that manages
+    it.
+  - A25-A27 are accepted as residuals without measuring:
+    - `read_url` reach of `file://` paths and local hosts;
+    - the rest of `~/.gemini/antigravity-cli/`;
+    - the parent and sibling directories of the per-run `TMPDIR`.
+  - Spike S5 is dropped. This was the alternative offered in revision 8. Phase
+    3 closes with S4.
+- **D28 Never send file content to a URL or a search query (review 7; safer
+  option).**
+  - `roles/writer.md` and `roles/second-reviewer.md` gain this line, which
+    `roles/scout.md` already has.
+  - It is a knowledge change in phase 4, approved by the user per I11, with a
+    `decisions.md` entry and a host sync.
+  - Alternative: leave the role bodies as they are.
 
 ## Contracts
 
@@ -436,9 +485,12 @@ glossary: <path; also listed in inputs>
 **Path rules (D15).** A violation exits 2 before anything runs.
 - The brief, `report`, any `--continue` report and any `--answers` file
   resolve, after `realpath`, under `<top>/.ai-delegate/`.
-- No brief, input, report or worktree resolves under `/tmp`, because `agy`
-  reads and writes the system temporary directory (S3). The wrapper refuses a
-  top level under `/tmp`.
+- No brief, input, report or worktree resolves under `/tmp`. S3 measured
+  that `agy` reads and writes the system temporary directory. With the
+  per-run `TMPDIR` set (S4, C6) it no longer does, and the rule stays as a
+  second line of defence. The wrapper refuses a top level under `/tmp`.
+- No brief, input, report, `--continue` report or `--answers` file resolves
+  under `.ai-delegate/tmp-*` or `.ai-delegate/wt-*`.
 - `inputs`:
   - each is a regular file whose realpath is under the top level and not under
     `.git/`;
@@ -664,21 +716,32 @@ call 2 in one of two runs (D17).
   `not-confined` unless:
   - `toolPermission` is `request-review`;
   - `allowNonWorkspaceAccess` is `false`;
-  - `permissions.allow` holds no `command(...)` rule;
-  - the route's fetch requirement holds: `read_url(*)` present for the scout,
-    absent for the writer and the second reviewer (D21).
+  - `permissions.allow` holds `read_url(*)` (D21) and no `command(...)`
+    rule.
 - agy validates rules as `<permission>(<target>)`; a bare `read_url` is
   silently dropped. Deny rules are not used.
-- If a later spec change installs the rule (D21), the sandbox entrypoint
-  merges `read_url(*)`
-  into `~/.gemini/antigravity-cli/settings.json` at every container start,
-  touching no other key. A reseed of `.gemini`, by `create-ai-sandbox.sh` or
-  by `ai-sandbox-account refresh`, is therefore repaired at the next start.
-  Until then the check above catches a missing rule.
+- The sandbox entrypoint merges `read_url(*)` into
+  `~/.gemini/antigravity-cli/settings.json` at every container start,
+  touching no other key (D21).
+  - It writes only the sandbox's own seeded copy: `${SANDBOX_DIR}/.gemini`,
+    which `create-ai-sandbox.sh` bind-mounts at the container's `~/.gemini`.
+    It never writes the host's `~/.gemini`.
+  - It runs as the container user and keeps the file's mode (600) and
+    owner.
+  - A reseed of `.gemini`, by `create-ai-sandbox.sh` or by
+    `ai-sandbox-account refresh`, is therefore repaired at the next start.
+  - Until then the check above catches a missing rule.
+  - `agy` always runs from the normal home; its login is never copied (A21).
 
-**Workspace and step order.** The working directory is a fresh empty
-directory outside `/tmp`. Project access is `--add-dir` on a worktree unique to
-the run, `<top>/.ai-delegate/wt-<run id>`. Every `git` call is hardened (C5).
+**Workspace and step order.**
+- The working directory is a fresh empty directory outside `/tmp`.
+- Project access is `--add-dir` on a worktree unique to the run,
+  `<top>/.ai-delegate/wt-<run id>`.
+- `TMPDIR` for the `agy` process is a fresh, empty directory unique to the
+  run, `<top>/.ai-delegate/tmp-<run id>`. The run can read and write it
+  (S4), so it holds nothing else: inputs, results, answers and reports never
+  go there.
+- Every `git` call is hardened (C5).
 The wrapper takes these steps, in order:
 1. The sign-in check.
 2. The `/config` read. Its OAuth wait when signed out is inferred, not
@@ -691,9 +754,11 @@ The wrapper takes these steps, in order:
    `.ai-delegate-results/` and `.ai-delegate-inputs/` in the worktree.
 6. Delete every file matching the C3 secret patterns, and every symlink that
    resolves outside the worktree.
-7. Start `agy`.
-8. Remove the worktree with `git worktree remove --force`, then prune. This
-   step also runs on failure.
+7. Create the per-run `TMPDIR`, then start `agy` with it set. The `CANCELED`
+   retry gets a fresh `TMPDIR` and keeps the worktree.
+8. Remove the worktree with `git worktree remove --force`, then prune, and
+   remove every per-run `TMPDIR`. This step runs on every exit, including a
+   timeout and a signal.
 
 Untracked and ignored files are never added.
 
@@ -729,7 +794,7 @@ a neighbouring fact) or **guessed**.
 | A3 | When `agy` is not signed in, `agy models` prints "Please sign in" | verified (S3: `Error: Please sign in to view available models...`, exit 1; `agy -p` instead waits 60 s on an OAuth prompt) | S3 |
 | A4 | `--output-format json` exposes the final text, a conversation id and token usage including cached tokens | verified (S2: `response`, `conversation_id`, `usage.cache_read_tokens`; `input_tokens` is the uncached part, and all counters are cumulative over a conversation) | S2 |
 | A5 | `--json-schema` makes the final output conform to the schema | verified for shape only (S3: `structured_output` always conforms, and violating values are coerced, not rejected; `response` stays free text). The wrapper validates C4 itself | S3 |
-| A6 | `agy` can be confined to the C6 profile: no shell, no write, no read outside the granted worktree and `/tmp`, and fetch only with `read_url(*)` | verified with residuals (S3, S3b: denials only in the default mode; the read denial is verified for `view_file` and `list_dir` only, while `grep_search` and `find_by_name` fall under A23; `--mode` and `--sandbox` do not confine; `search_web` and `/tmp` stay reachable; the tool list is never empty; a denial cancels the run; the profile depends on agy's global settings) | S3, S3b |
+| A6 | `agy` can be confined to the C6 profile: no shell, no write, no read outside the granted worktree and `/tmp`, and fetch only with `read_url(*)` | verified with residuals (S3, S3b: denials only in the default mode; the read denial is verified for `view_file` and `list_dir` only, while `grep_search` and `find_by_name` fall under A23; `--mode` and `--sandbox` do not confine; `search_web` stays reachable; `/tmp` was reachable until the per-run `TMPDIR` closed it (S4); the tool list is never empty; a denial cancels the run; the profile depends on agy's global settings) | S3, S3b |
 | A7 | `agy --conversation` reuses a provider-side cache between calls | not reliably shown (S2: call 2 cached 0 % in run A and 77.5 % in run B, corrected shares; later calls 88-90 %); not relied on (D17) | S2 |
 | A8 | `codex exec resume` reuses a provider-side cache | not shown (S2: `codex` help is silent on caching; nothing run, codex not logged in) | S2 |
 | A9 | Claude Code subagents receive the user-level `CLAUDE.md` | verified (it is in this spec author's subagent context, and in the reviewer's) | - |
@@ -744,10 +809,13 @@ a neighbouring fact) or **guessed**.
 | A18 | An explicit style block fixes the uninflected terms and the mixed translations seen in the brief's test | guessed | phase 6 |
 | A19 | A subagent's shell can be told apart from the main session's, for example by an environment variable | refuted (S1 re-run: the same variables and values, including `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID`) | S1 |
 | A20 | A detached worktree of HEAD keeps untracked and ignored files out of agy's reach, and agy cannot reach the main tree from it | verified for `view_file` and `list_dir` (S3b: no `.env` or untracked canary in the worktree; `view_file` on the main tree denied). Tracked secrets are not covered (C6 step 6). `grep_search` and `find_by_name` are A23 | S3b |
-| A23 | `grep_search` and `find_by_name` from the worktree setup cannot reach the main tree or `$HOME` | guessed (S3b marked them "not tried" outside the granted directory; `find_by_name` worked from the project root where `view_file` was denied) | S4 |
+| A23 | From the worktree setup, no tool reads content in the main tree or `$HOME` (rule changed to content reach, user 2026-10-11) | verified for `view_file`, `list_dir` and `grep_search` only (S3b; S4: `grep_search` denied in 4 of 4 outside runs). `read_url_content` is A25. Refuted for names: `find_by_name` returned canary paths in the main tree and `$HOME` in 4 of 4 runs, an accepted residual | S4 |
 | A24 | The C5 hardening works on git 2.34: `GIT_CONFIG_GLOBAL` (2.32+), literal pathspecs, `--no-show-signature`, filter overrides | inferred (git documentation; review 5 tested `--no-show-signature` and fsmonitor with git 2.34) | phase 4 tests |
-| A21 | The `read_url(*)` rule can be limited to scout runs | guessed (S3b: agy reads rules only from its global settings file; a project `.agents/settings.json` had no effect) | S4 |
-| A22 | agy's temporary-directory grant can be moved off the shared `/tmp`, through `TMPDIR` or a private `/tmp` in a mount namespace, without breaking sign-in | guessed | S4 |
+| A21 | The `read_url(*)` rule can be limited to scout runs | partly shown, not used (S4: a per-run settings home under `HOME` is honoured, but the run then needs agy's login, which is never copied; `XDG_CONFIG_HOME` and `ANTIGRAVITY_EXECUTABLE_DATA_DIR` had no effect under the layouts tried; not refuted, since only the `HOME` layout mirrors the real path). Moot after D21 | S4 |
+| A22 | agy's temporary-directory grant can be moved off the shared `/tmp`, through `TMPDIR` or a private `/tmp` in a mount namespace, without breaking sign-in | verified for `TMPDIR` (S4: with it set, `/tmp` reads and writes denied, the `TMPDIR` directory read and written, signed in). A mount namespace is refused by the container (no `CAP_SYS_ADMIN`). `scratch/` is readable regardless | S4 |
+| A25 | `read_url_content` reaches no `file://` path and no local host (`localhost`, `127.0.0.1`, `host.docker.internal`) | guessed; accepted as a residual, not measured (D27; S3b fetched only `https://example.com`) | - |
+| A26 | A run cannot read content in `~/.gemini/antigravity-cli/` outside `scratch/`: its root (the token's directory), `conversations/` and `log/` | guessed; accepted as a residual, not measured (D27; S4 found `scratch/` readable without `--add-dir`) | - |
+| A27 | With `TMPDIR` set, a run cannot read the parent `.ai-delegate/` or a sibling `tmp-<id>` or `wt-<id>` | guessed; accepted as a residual, not measured (D27) | - |
 
 ## Phases
 
@@ -794,8 +862,8 @@ spec.
   - A denial ends the run with `status: CANCELED` and exit 0.
   - `--json-schema` coerces values into shape.
   - When signed out, `agy models` exits 1.
-  - The profile admits the writer and the second reviewer. The scout stays
-    native until S4, because no fetch rule is installed (D21).
+  - The profile admits the writer and the second reviewer. Since S4 and D21,
+    the scout runs on `agy` too.
 
 **Tests.** The spikes file, read against the decision rules.
 
@@ -855,44 +923,31 @@ sync shows the roles in the sandbox.
 
 **Assumptions.** A12, A15.
 
-### Phase 3 -- spike S4: tool reach and the temporary directory (no code)
+### Phase 3 -- spike S4: tool reach and the temporary directory (done 2026-10-11)
 
-**Goal.** Measurement answers A21, A22, A23 and the `scratch/` question
-before the wrapper phase is planned.
-- The answers go to the spikes file, with commands and output lines.
-- The assumption table is updated.
-- Any spec change goes to the user before phase 4 is planned.
+**Goal.** Measurement answered A21, A22, A23 and the `scratch/` question
+before the wrapper phase is planned. Results are in [2026-10-08-agent-roles-spikes.md](2026-10-08-agent-roles-spikes.md) under `## S4`, and the
+user's decisions are in the brief ("Decisions after phase 3").
 
-**Checks and decision rules, fixed before measuring.** All checks run from
-the C6 setup: an empty working directory outside `/tmp`, and `--add-dir` on a
-worktree. Canaries stand in for secrets.
-- **A23, read reach.**
-  - Check: whether `grep_search` finds a main-tree canary, and whether
-    `find_by_name` reaches `<top>` or `$HOME`.
-  - If either reaches outside the worktree, every external route resolves
-    to `not-confined` in phase 4 (I6), and the user decides a spec change.
-- **A22, `/tmp`.**
-  - Check: whether agy's temp grant follows `TMPDIR`, and whether `agy`
-    signs in and runs under a private `/tmp` through `sudo unshare`.
-  - If one works, phase 4 adds it to C6 as a step and D24 closes. Otherwise
-    D24 stays an accepted residual.
-- **A21, fetch scope.**
-  - Check: whether `read_url(*)` can be limited to one run, for example by
-    a per-run settings home.
-  - If it can, a spec change may let the scout go external with fetch
-    (D21). Otherwise the scout stays native.
-- **`scratch/`.**
-  - Check: whether `~/.gemini/antigravity-cli/scratch/` is readable in the
-    default mode.
-  - If it is, it joins the D24 residual, or the `/tmp` mitigation must
-    cover it.
+**Outcomes.** Each check ran under the decision rule fixed in revision 6.
+- **A23, read reach.** `find_by_name` returned canary paths in the main tree
+  and `$HOME` (4 of 4 runs), while `grep_search` was denied there (4 of 4).
+  The rule as written failed. The user changed it to content reach and
+  accepted names as visible; external routes stay open (I6).
+- **A22, `/tmp`.** agy's temp grant follows `TMPDIR`. A mount namespace is
+  refused by the container. Phase 4 adds a fresh per-run `TMPDIR` (C6), and
+  D24 closes for `/tmp`.
+- **A21, fetch scope.** A per-run settings home is honoured, but it needs
+  agy's login, which the user decided is never copied. The user instead
+  installs `read_url(*)` for every `agy` run (D21), so the scout goes
+  external.
+- **`scratch/`.** `view_file`, `grep_search` and `list_dir` all read it. It is
+  an accepted residual (D24).
 
-**Contract needed.** None. agy's settings are restored exactly after any
-edit, as in S3b. Editing them needs auto mode off.
+**S5 dropped.** Spike S5 (A25-A27), added in revision 8, is dropped by the
+user's decision of 2026-10-11 (D27). The three are accepted residuals.
 
 **Tests.** The spikes file, read against the decision rules.
-
-**Assumptions.** `agy` is signed in; the sandbox has passwordless `sudo`.
 
 ### Phase 4 -- `ai-delegate`, routing table and sandbox wiring
 
@@ -908,10 +963,16 @@ edit, as in S3b. Editing them needs auto mode off.
   - a root-owned `/etc/ai-sandbox/delegate-allow`;
   - the C2 additions to the managed settings from 6a6d25b.
 
-  There is no `read_url(*)` rule (D21). Merging one later changes agy's
-  permission settings and needs auto mode off.
+  - the entrypoint merge of `read_url(*)` (C6, D21).
+
+  That merge changes agy's permission settings, so implementing it needs auto
+  mode off.
 - The tool notes and `docs/ai-delegate.md` carry `run` and exit 3, the D25
-  answering rules, and the D3 host opt-in.
+  answering rules, and the D3 host opt-in, including `read_url(*)` in the
+  host's agy settings.
+- `~/knowledge`: the D28 line goes into the writer and second-reviewer
+  roles, with the user's approval (I11), a `decisions.md` entry and a host
+  sync.
 - `PROJECT_MAP.md` is updated.
 
 **Contract from phases 1-3.** S1-S4 as recorded (C5, C6), and the rendered
@@ -922,7 +983,8 @@ role bodies.
 throwaway repository. It checks each C1-C6 rule once, at least:
 - Routing and reports:
   - lookups, exit codes, and the user-writable allow file;
-  - `not-confined` for the runner and a fetch-less scout;
+  - `not-confined` for the runner, and for any route when `read_url(*)` is
+    missing;
   - `pending` with `ran_on`;
   - a second reviewer routed to `claude` is `skipped`;
   - malformed report fields.
@@ -942,14 +1004,18 @@ throwaway repository. It checks each C1-C6 rule once, at least:
   stub program and never misapply the patch. A required filter driver still
   lets `git worktree add` succeed.
 - C6:
-  - each settings condition per route;
+  - each settings condition;
   - the `CANCELED` retry;
-  - steps 3-8, including forced removal.
+  - steps 3-8, including forced removal;
+  - the per-run `TMPDIR`:
+    - fresh, and fresh again on the retry;
+    - removed on every exit;
+    - never holding inputs, results, answers or reports.
 
 `test-tools.sh` covers the image files. Then the whole suite runs.
 
 **Assumptions.** A13, A14, A16 and A24, plus A1-A6 and A20-A23 as phases 1
-and 3 leave them.
+and 3 leave them. A25-A27 are accepted residuals (D27).
 
 ### Phase 5 -- `ai-text-check`
 

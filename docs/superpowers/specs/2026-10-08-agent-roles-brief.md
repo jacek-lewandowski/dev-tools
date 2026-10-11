@@ -141,6 +141,30 @@ defines that block as a contract.
   the search tool.
 - Review-4 findings B and C and the lesser ones are fixed alongside.
 
+## Decisions after phase 3 (S4) (2026-10-11, user)
+
+- **A23: names visible, contents protected - accepted.** S4: `find_by_name` returns file names
+  and paths outside the worktree (main tree, `$HOME`); `grep_search` content reads are denied.
+  The rule changes from "any reach" to "content reach": external routes stay open; that an agy run
+  can learn which files exist (e.g. `~/.ssh/id_ed25519`, `.env`) without reading them is an
+  accepted residual.
+- **A21: no copy of agy's login.** The scout runs from the normal home, not a fake per-run home.
+- **D21 revised: `read_url(*)` installed for every agy run; all three external roles (scout,
+  writer, second reviewer) run on agy with fetch.** The user accepts that the writer and the second
+  reviewer can fetch URLs too: a Claude agent with web access could send project content
+  elsewhere just the same, so this adds no new channel. The route-dependent fetch check is
+  dropped.
+- **D24 updated by S4:** a fresh per-run `TMPDIR` under `.ai-delegate/` closes `/tmp`;
+  `~/.gemini/antigravity-cli/scratch/` stays readable (accepted residual).
+
+## Decision after review of revision 8 (2026-10-11, user)
+
+- **agy is trusted like the Claude agent that manages it.** In the sandbox it gets web access
+  by default (`read_url(*)` for every run), the same as a Claude agent. A25-A27 (read_url reach
+  of file:// paths and local hosts, the rest of `~/.gemini/antigravity-cli`, sibling and parent
+  directories of the per-run TMPDIR) are accepted as residuals without measuring: spike S5 is
+  dropped (the D27 alternative), phase 3 closes with S4. Proceed to phase 4.
+
 ## Verified facts (2026-10-08, in this sandbox)
 
 - `agy` print mode: `-p` takes the prompt as its own value, so the prompt must
