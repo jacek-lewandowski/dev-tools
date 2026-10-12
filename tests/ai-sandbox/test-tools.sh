@@ -120,6 +120,11 @@ assert_contains "notes say how to call agy"         "$brain" 'agy -p "<prompt>" 
 assert_contains "notes mention ai-delegate"         "$brain" 'ai-delegate <role> <task-file>'
 assert_contains "notes say when to fall back"       "$brain" 'only when it exits 3 (agy not'
 assert_contains "notes forbid a second-reviewer subagent" "$brain" 'Never spawn `second-reviewer` as a Claude subagent.'
+assert_contains "notes say only the lead delegates"  "$brain" 'Only the lead runs `ai-delegate`; subagents never call it.'
+assert_contains "notes give the delegate timeout"   "$brain" 'timeout of at least 600000 ms'
+assert_contains "notes say how to run it in the background" "$brain" 'or run it in the background'
+assert_contains "notes name the conversation id line" "$brain" '`ai-delegate: conversation_id=<id>`'
+assert_contains "notes say how round 2 resumes"     "$brain" '`--conversation <id>` to continue round 1'
 assert_contains "ai-delegate is installed in the image" "$df" 'COPY ai-delegate       /usr/local/bin/ai-delegate'
 assert_file     "ai-delegate is a host helper"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
 assert_contains "notes mention net-tools"           "$brain" '`net-tools`'

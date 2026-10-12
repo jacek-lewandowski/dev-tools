@@ -903,6 +903,10 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - For scout, writer and second-reviewer tasks, use \`ai-delegate <role> <task-file>\`
   first; spawn the Claude subagent of the same name only when it exits 3 (agy not
   signed in) or 1 (agy failed). Never spawn \`second-reviewer\` as a Claude subagent.
+  Only the lead runs \`ai-delegate\`; subagents never call it. Give its Bash call a
+  timeout of at least 600000 ms or run it in the background: agy may take 10 minutes.
+  It prints \`ai-delegate: conversation_id=<id>\` on stderr; round 2 of a second
+  review passes that id as \`--conversation <id>\` to continue round 1.
 - \`./gradlew --offline\` works for what the host has downloaded, and the
   network stays available; writes to the Gradle and Maven caches are
   discarded at the next container start; the host's \`gradle.properties\`,
