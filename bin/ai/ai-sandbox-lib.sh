@@ -212,6 +212,7 @@ ai-sandbox-account
 ai-sandbox-gc
 ai-knowledge
 ai-sandbox-extensions
+ai-delegate
 HELPERS
 }
 

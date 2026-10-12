@@ -35,6 +35,8 @@ assert_contains "agy models is allowed by permission rule" "$ms" '"Bash(agy mode
 assert_contains "and made read-only to the sandbox user" "$df" 'chmod 0644 /etc/claude-code/managed-settings.json'
 assert_contains "autoMode inherits the defaults"        "$ms" '"$defaults"'
 assert_contains "autoMode authorises agy"               "$ms" 'agy (Antigravity CLI, Gemini) is a user-approved model provider'
+assert_contains "ai-delegate is allowed by permission rule" "$ms" '"Bash(ai-delegate *)"'
+assert_contains "autoMode authorises ai-delegate"        "$ms" '`agy -p` or `ai-delegate` is authorized'
 assert_eq "managed settings JSON parses" "$(python3 -m json.tool "$build/claude-managed-settings.json" >/dev/null 2>&1; echo $?)" '0'
 assert_contains "corepack shims are enabled"             "$df" 'corepack enable'
 assert_contains "pnpm and yarn are pre-warmed"           "$df" 'corepack prepare pnpm@latest yarn@stable --activate'
@@ -115,7 +117,32 @@ assert_contains "notes mention agy"                 "$brain" '`agy`'
 assert_contains "notes mention codex"               "$brain" '`codex`'
 assert_contains "notes mention nano"                "$brain" '`nano`'
 assert_contains "notes say how to call agy"         "$brain" 'agy -p "<prompt>" --model'
+assert_contains "notes mention ai-delegate"         "$brain" 'ai-delegate <role> <task-file>'
+assert_contains "ai-delegate is installed in the image" "$df" 'COPY ai-delegate       /usr/local/bin/ai-delegate'
+assert_file     "ai-delegate is a host helper"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
 assert_contains "notes mention net-tools"           "$brain" '`net-tools`'
+
+# --- entrypoint merges read_url(*) into the sandbox's own agy settings -----
+ep="$build/entrypoint.sh"
+merge="$tmp/merge.py"
+sed -n "/^python3 - .*antigravity-cli\/settings.json/,/^PYEOF/p" "$ep" | sed '1d;$d' > "$merge"
+assert_contains "entrypoint carries the merge" "$(cat "$ep")" 'read_url(*)'
+mh="$tmp/merge-home"; mkdir -p "$mh/.gemini/antigravity-cli"
+sf="$mh/.gemini/antigravity-cli/settings.json"
+printf '{"colorScheme":"x","permissions":{"allow":["a"],"deny":["d"]}}' > "$sf"; chmod 0640 "$sf"
+python3 "$merge" "$sf"
+assert_eq "rule merged, other keys kept" \
+    "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["colorScheme"],d["permissions"]["allow"],d["permissions"]["deny"])' "$sf")" "x ['a', 'read_url(*)'] ['d']"
+assert_eq "mode kept" "$(stat -c %a "$sf")" '640'
+python3 "$merge" "$sf"
+assert_eq "merge is idempotent" "$(grep -c 'read_url' "$sf")" '1'
+printf '{"colorScheme":"x"}' > "$sf"; python3 "$merge" "$sf"
+assert_contains "allow list created when absent" "$(cat "$sf")" 'read_url(*)'
+printf 'not json' > "$sf"; python3 "$merge" "$sf" 2>/dev/null
+assert_eq "unparsable file left alone" "$(cat "$sf")" 'not json'
+rm -f "$sf"; python3 "$merge" "$sf" 2>/dev/null
+assert_no_file "missing file is never created" "$sf"
+assert_contains "failure cannot fail the start" "$(cat "$ep")" "|| true"
 
 rm -rf "$tmp"
 finish

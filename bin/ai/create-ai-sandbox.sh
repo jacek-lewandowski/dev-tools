@@ -900,6 +900,8 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   approved model provider here). Call it as one bare command with the prompt
   right after \`-p\`, before \`--model\`; do not chain it with other commands. If
   \`agy models\` says it is not signed in, use Claude instead.
+- \`ai-delegate <role> <task-file>\` sends a scout, writer or second-reviewer task to
+  Gemini through agy; on exit 3 use the Claude subagent instead.
 - \`./gradlew --offline\` works for what the host has downloaded, and the
   network stays available; writes to the Gradle and Maven caches are
   discarded at the next container start; the host's \`gradle.properties\`,
@@ -1367,6 +1369,24 @@ if [ "${SANDBOX_WITH_DOCKER:-0}" = "1" ]; then
     fi
 fi
 
+# --- agy web access --------------------------------------------------------
+# Merge read_url(*) into the sandbox's own agy settings; never fail the start.
+python3 - "$HOME/.gemini/antigravity-cli/settings.json" <<'PYEOF' 2>/dev/null || true
+import json, os, sys
+path = sys.argv[1]
+if os.path.isfile(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    perms = data.setdefault("permissions", {})
+    allow = perms.setdefault("allow", [])
+    if "read_url(*)" not in allow:
+        allow.append("read_url(*)")
+        # Rewritten in place so mode and owner stay as they are.
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+PYEOF
+
 exec "$@"
 ENTRYPOINT_EOF
 
@@ -1684,15 +1704,17 @@ SDK_EOF
 # `agy -p` as exfiltration to Google.
 cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
 {
-  "permissions": { "allow": ["Bash(agy -p *)", "Bash(agy models)"] },
+  "permissions": { "allow": ["Bash(agy -p *)", "Bash(agy models)", "Bash(ai-delegate *)"] },
   "autoMode": {
     "allow": [
       "$defaults",
-      "agy (Antigravity CLI, Gemini) is a user-approved model provider in this sandbox; sending prompts and project content to it with `agy -p` is authorized"
+      "agy (Antigravity CLI, Gemini) is a user-approved model provider in this sandbox; sending prompts and project content to it with `agy -p` or `ai-delegate` is authorized"
     ]
   }
 }
 MANAGED_EOF
+
+cp "$SCRIPT_DIR/ai-delegate" "$BUILD_DIR/ai-delegate"
 
 # --- Dockerfile ------------------------------------------------------------
 
@@ -1855,6 +1877,7 @@ COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
 COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
+COPY ai-delegate       /usr/local/bin/ai-delegate
 COPY xdg-open         /usr/local/bin/xdg-open
 COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
 # IntelliJ IDEA is not installed in the image: this only launches the host's
@@ -1863,7 +1886,7 @@ COPY sandbox-idea     /usr/local/bin/idea
 RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
-                /usr/local/bin/idea /usr/local/bin/sdk \
+                /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
     && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
     && install -d -m 1777 /tmp/.X11-unix \

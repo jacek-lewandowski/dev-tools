@@ -1,5 +1,10 @@
 # Agent roles routed to other models and agents
 
+> **2026-10-12: phases 4-7 dropped by the user** as far more than the goal needed. They are replaced
+> by one small wrapper, `bin/ai/ai-delegate` (brief: `docs/superpowers/specs/2026-10-12-ai-delegate-brief.md`).
+> Phases 1-3 and the role files stay; the contracts below for phases 4-7 are not implemented.
+
+
 Date: 2026-10-08
 Status: approved 2026-10-08 (revision 2 after review round 1,
 [2026-10-08-agent-roles-design-review-1.md](2026-10-08-agent-roles-design-review-1.md)).
