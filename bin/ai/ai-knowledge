@@ -461,6 +461,13 @@ def frontmatter(text):
             meta[key.strip()] = value.strip()
     return meta, m.group(2)
 
+def drop_tools_key(text):
+    m = re.match(r"^(---\n)(.*?)(\n---\n?.*)$", text, re.DOTALL)
+    if not m:
+        return text
+    kept = [l for l in m.group(2).split("\n") if not re.match(r"tools\s*:", l)]
+    return m.group(1) + "\n".join(kept) + m.group(3)
+
 def toml_string(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -490,10 +497,13 @@ if os.path.isdir(roles):
         name = meta.get("name") or fn[:-3]
         description = meta.get("description", "")
         body = body.strip("\n") + "\n"
-        # Claude Code subagents and Gemini CLI agents read the canonical format as is.
-        for d in ("claude/agents", "gemini/agents"):
-            with open(os.path.join(out, d, name + ".md"), "w", encoding="utf-8") as f:
-                f.write(text)
+        # Claude Code subagents read the canonical format as is. Gemini CLI
+        # gets it without the front matter's tools: key, because its tool
+        # names differ from Claude's.
+        with open(os.path.join(out, "claude/agents", name + ".md"), "w", encoding="utf-8") as f:
+            f.write(text)
+        with open(os.path.join(out, "gemini/agents", name + ".md"), "w", encoding="utf-8") as f:
+            f.write(drop_tools_key(text))
         # Antigravity has no agent types; a model-decision rule with the role's
         # description is the closest thing, for projects that link it in.
         with open(os.path.join(out, "antigravity/rules", name + ".md"), "w", encoding="utf-8") as f:

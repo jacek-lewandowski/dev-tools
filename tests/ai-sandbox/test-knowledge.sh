@@ -52,6 +52,25 @@ assert_file "gemini role rendered" "$AI_KNOWLEDGE_RENDER/gemini/agents/planner.m
 assert_contains "antigravity role rendered with model_decision" \
     "$(cat "$AI_KNOWLEDGE_RENDER/antigravity/rules/planner.md")" "trigger: model_decision"
 assert_contains "codex role rendered as toml" "$(cat "$AI_KNOWLEDGE_RENDER/codex/agents/planner.toml")" 'developer_instructions = '
+
+# --- D10: `tools:` reaches the Claude copy only; Gemini's tool names differ
+# (fixture role in the test's own checkout, removed again right after)
+cp "$AI_KNOWLEDGE_ROOT/main/roles/planner.md" "$tmp/planner.orig"
+printf -- '---\nname: probe\ndescription: probe role\ntools: Read, Grep\n---\ntools: a body line stays\nbody\n' > "$AI_KNOWLEDGE_ROOT/main/roles/probe.md"
+knowledge render >"$tmp/render-tools.out" 2>&1 || cat "$tmp/render-tools.out"
+assert_contains "tools key kept in the claude copy" "$(cat "$AI_KNOWLEDGE_RENDER/claude/agents/probe.md")" "tools: Read, Grep"
+assert_eq "tools key absent from the front matter of the gemini copy" "$(awk 'NR==1{next} /^---$/{exit} /^tools:/{n++} END{print n+0}' "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md")" 0
+assert_same_bytes() {   # <name> <a> <b>: cmp, because $(...) drops trailing newlines
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if cmp -s "$2" "$3"; then _pass "$1"; else _fail "$1" "$2 and $3 differ byte for byte"; fi
+}
+grep -v -x 'tools: Read, Grep' "$AI_KNOWLEDGE_RENDER/claude/agents/probe.md" > "$tmp/probe.expected"
+assert_same_bytes "gemini copy is the claude copy minus that line" "$tmp/probe.expected" "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md"
+assert_contains "a body line starting with tools: stays in the gemini copy" "$(cat "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md")" "tools: a body line stays"
+assert_same_bytes "role without the key identical in claude and gemini copies" "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md" "$AI_KNOWLEDGE_RENDER/gemini/agents/planner.md"
+assert_same_bytes "role without the key unchanged from its source" "$tmp/planner.orig" "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md"
+rm -f "$AI_KNOWLEDGE_ROOT/main/roles/probe.md"
+knowledge render >/dev/null 2>&1
 assert_link "host claude agent symlink" "$HOME/.claude/agents/planner.md" "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md"
 assert_file "own skill copied into ~/.agents" "$HOME/.agents/skills/propose-rule/SKILL.md"
 assert_file "own skill copied into the shared store" "$AI_SANDBOX_ROOT/shared/agent-skills/skills/propose-rule/SKILL.md"

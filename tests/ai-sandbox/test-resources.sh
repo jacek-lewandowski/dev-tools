@@ -27,6 +27,17 @@ esac
 assert_contains "the shared brain states the cap" "$(cat "$HOME/.gemini/GEMINI.md")" \
     "capped at 6g of RAM with no swap"
 
+# The sandbox must lose to the host under contention and cannot exhaust its process table.
+assert_contains "compose lowers CPU shares"   "$compose" 'cpu_shares: 256'
+# blkio_weight is rejected or ignored on some hosts, so it must stay out.
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$compose" in
+    *blkio_weight*) _fail "compose has no blkio_weight" "blkio_weight is present" ;;
+    *)              _pass "compose has no blkio_weight" ;;
+esac
+assert_contains "compose raises the OOM score" "$compose" 'oom_score_adj: 500'
+assert_contains "compose limits processes"    "$compose" 'pids_limit: 4096'
+
 # --- CPUs: half the GB of RAM, as a cpuset so nproc inside agrees ------------
 host_cpus=$(nproc)
 want=3; [ "$want" -le "$host_cpus" ] || want=$host_cpus
