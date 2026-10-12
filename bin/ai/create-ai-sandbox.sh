@@ -900,8 +900,9 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   approved model provider here). Call it as one bare command with the prompt
   right after \`-p\`, before \`--model\`; do not chain it with other commands. If
   \`agy models\` says it is not signed in, use Claude instead.
-- \`ai-delegate <role> <task-file>\` sends a scout, writer or second-reviewer task to
-  Gemini through agy; on exit 3 use the Claude subagent instead.
+- For scout, writer and second-reviewer tasks, use \`ai-delegate <role> <task-file>\`
+  first; spawn the Claude subagent of the same name only when it exits 3 (agy not
+  signed in) or 1 (agy failed). Never spawn \`second-reviewer\` as a Claude subagent.
 - \`./gradlew --offline\` works for what the host has downloaded, and the
   network stays available; writes to the Gradle and Maven caches are
   discarded at the next container start; the host's \`gradle.properties\`,

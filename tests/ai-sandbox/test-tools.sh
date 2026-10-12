@@ -118,6 +118,8 @@ assert_contains "notes mention codex"               "$brain" '`codex`'
 assert_contains "notes mention nano"                "$brain" '`nano`'
 assert_contains "notes say how to call agy"         "$brain" 'agy -p "<prompt>" --model'
 assert_contains "notes mention ai-delegate"         "$brain" 'ai-delegate <role> <task-file>'
+assert_contains "notes say when to fall back"       "$brain" 'only when it exits 3 (agy not'
+assert_contains "notes forbid a second-reviewer subagent" "$brain" 'Never spawn `second-reviewer` as a Claude subagent.'
 assert_contains "ai-delegate is installed in the image" "$df" 'COPY ai-delegate       /usr/local/bin/ai-delegate'
 assert_file     "ai-delegate is a host helper"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
 assert_contains "notes mention net-tools"           "$brain" '`net-tools`'
