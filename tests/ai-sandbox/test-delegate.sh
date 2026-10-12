@@ -90,5 +90,42 @@ assert_contains "not signed in message"   "$(cat "$tmp/e")" 'agy not signed in; 
 "$DELEGATE" writer "$tmp/task.md" >/dev/null 2>"$tmp/e"; rc=$?
 assert_eq       "missing role exits 2"    "$rc" '2'
 
+for resp in '' '  \n\t '; do
+    STUB_OUT="{\"status\":\"SUCCESS\",\"response\":\"$resp\"}" "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
+    assert_eq       "empty response exits 1 ($resp)"     "$rc" '1'
+    assert_contains "empty response message ($resp)"    "$(cat "$tmp/e")" 'ai-delegate: agy returned an empty response'
+    assert_eq       "empty response prints nothing ($resp)" "$(cat "$tmp/o")" ''
+done
+
+writer_line='You cannot write files or run commands here'
+printf -- '---\nname: writer\n---\n\nROLE-BODY-WRITER\n' > "$HOME/.gemini/agents/writer.md"
+"$DELEGATE" writer "$tmp/task.md" >/dev/null 2>&1; rc=$?
+assert_eq       "writer succeeds"         "$rc" '0'
+assert_contains "writer prompt has role body" "$(cat "$tmp/prompt")" 'ROLE-BODY-WRITER'
+assert_contains "writer prompt has no-tools line" "$(cat "$tmp/prompt")" "$writer_line"
+# shellcheck disable=SC2016  # literal backquotes, not an expansion
+assert_contains "writer prompt asks for content" "$(cat "$tmp/prompt")" '`content`'
+for r in scout second-reviewer; do
+    "$DELEGATE" "$r" "$tmp/task.md" >/dev/null 2>&1
+    case "$(cat "$tmp/prompt")" in
+        *"$writer_line"*) _fail "$r prompt has no writer line" "writer line leaked";;
+        *) TESTS_RUN=$((TESTS_RUN+1)); _pass "$r prompt has no writer line";;
+    esac
+done
+
+STUB_OUT='{"conversation_id":"c0ffee-123","status":"SUCCESS","response":"ok"}' "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
+assert_eq       "with conversation id exits 0" "$rc" '0'
+assert_eq       "stdout is only the response"  "$(cat "$tmp/o")" 'ok'
+assert_eq       "conversation id on stderr"    "$(sed -n 's/^ai-delegate: conversation_id=//p' "$tmp/e")" 'c0ffee-123'
+STUB_OUT='{"conversation_id":"dead-456","status":"CANCELED","message":"x"}' "$DELEGATE" scout "$tmp/task.md" >/dev/null 2>"$tmp/e"
+assert_eq       "conversation id on stderr after failure" "$(sed -n 's/^ai-delegate: conversation_id=//p' "$tmp/e")" 'dead-456'
+"$DELEGATE" scout "$tmp/task.md" >/dev/null 2>&1
+case "$(cat "$tmp/argv")" in *--conversation*) _fail "no --conversation by default" "flag passed";; *) TESTS_RUN=$((TESTS_RUN+1)); _pass "no --conversation by default";; esac
+"$DELEGATE" second-reviewer "$tmp/task.md" --conversation c0ffee-123 >/dev/null 2>&1; rc=$?
+assert_eq       "--conversation run exits 0"   "$rc" '0'
+assert_contains "--conversation reaches agy"   "$(cat "$tmp/argv")" "$(printf -- '--conversation\nc0ffee-123')"
+"$DELEGATE" scout "$tmp/task.md" --conversation >/dev/null 2>&1; rc=$?
+assert_eq       "--conversation without id exits 2" "$rc" '2'
+
 cd /; rm -rf "$tmp"
 finish
