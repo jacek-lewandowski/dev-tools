@@ -226,6 +226,8 @@ follow the memory: half as many cores as GB of RAM, pinned as a cpuset so that
 sandboxes over the host and remembered in the sandbox's .env. At most three
 sandboxes run at once (AI_SANDBOX_MAX_RUNNING in ai-sandbox-lib.sh): starting a
 fourth is refused, with the running ones listed, until one is stopped.
+A sandbox also yields to the host: lower CPU shares, a higher OOM score so it
+is killed first under host memory pressure, and at most 4096 processes.
 USAGE
 }
 
@@ -894,6 +896,17 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
 - \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
 - \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed.
+- \`agy -p \"<prompt>\" --model <id>\` may receive project content (it is an
+  approved model provider here). Call it as one bare command with the prompt
+  right after \`-p\`, before \`--model\`; do not chain it with other commands. If
+  \`agy models\` says it is not signed in, use Claude instead.
+- For scout, writer and second-reviewer tasks, use \`ai-delegate <role> <task-file>\`
+  first; spawn the Claude subagent of the same name only when it exits 3 (agy not
+  signed in) or 1 (agy failed). Never spawn \`second-reviewer\` as a Claude subagent.
+  Only the lead runs \`ai-delegate\`; subagents never call it. Give its Bash call a
+  timeout of at least 600000 ms or run it in the background: agy may take 9 minutes.
+  It prints \`ai-delegate: conversation_id=<id>\` on stderr; round 2 of a second
+  review passes that id as \`--conversation <id>\` to continue round 1.
 - \`./gradlew --offline\` works for what the host has downloaded, and the
   network stays available; writes to the Gradle and Maven caches are
   discarded at the next container start; the host's \`gradle.properties\`,
@@ -1361,6 +1374,24 @@ if [ "${SANDBOX_WITH_DOCKER:-0}" = "1" ]; then
     fi
 fi
 
+# --- agy web access --------------------------------------------------------
+# Merge read_url(*) into the sandbox's own agy settings; never fail the start.
+python3 - "$HOME/.gemini/antigravity-cli/settings.json" <<'PYEOF' 2>/dev/null || true
+import json, os, sys
+path = sys.argv[1]
+if os.path.isfile(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    perms = data.setdefault("permissions", {})
+    allow = perms.setdefault("allow", [])
+    if "read_url(*)" not in allow:
+        allow.append("read_url(*)")
+        # Rewritten in place so mode and owner stay as they are.
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+PYEOF
+
 exec "$@"
 ENTRYPOINT_EOF
 
@@ -1672,6 +1703,24 @@ esac
 sdk "$@"
 SDK_EOF
 
+# Managed settings (root-owned in the image): Claude Code takes classifier
+# (autoMode) rules only from user/flag/managed sources, and will not let a
+# session write them into its own settings. Without this, auto mode blocks
+# `agy -p` as exfiltration to Google.
+cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
+{
+  "permissions": { "allow": ["Bash(agy -p *)", "Bash(agy models)", "Bash(ai-delegate *)"] },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "agy (Antigravity CLI, Gemini) is a user-approved model provider in this sandbox; sending prompts and project content to it with `agy -p` or `ai-delegate` is authorized"
+    ]
+  }
+}
+MANAGED_EOF
+
+cp "$SCRIPT_DIR/ai-delegate" "$BUILD_DIR/ai-delegate"
+
 # --- Dockerfile ------------------------------------------------------------
 
 cat > "$BUILD_DIR/Dockerfile" <<DOCKERFILE_HEAD
@@ -1833,14 +1882,17 @@ COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
 COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
+COPY ai-delegate       /usr/local/bin/ai-delegate
 COPY xdg-open         /usr/local/bin/xdg-open
+COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
 # IntelliJ IDEA is not installed in the image: this only launches the host's
 # read-only mount, so it is inert on a host that has none.
 COPY sandbox-idea     /usr/local/bin/idea
 RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
-                /usr/local/bin/idea /usr/local/bin/sdk \
+                /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+    && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
     && install -d -m 1777 /tmp/.X11-unix \
     && echo "ai-sandbox" > /etc/ai-sandbox-release
@@ -2020,6 +2072,13 @@ services:
     memswap_limit: "${MEMORY_SWAP_LIMIT}"
     # Half as many cores as GB of RAM, as a cpuset so that nproc agrees.
     cpuset: "${CPUSET}"
+    # The host wins CPU under contention; no cap while it is idle.
+    cpu_shares: 256
+    # Under host-wide memory pressure the kernel kills a sandbox before host apps.
+    oom_score_adj: 500
+    # A runaway build or fork bomb cannot exhaust the host's process table
+    # (threads count; IntelliJ plus Gradle uses a few hundred).
+    pids_limit: 4096
     # Bridged, not host, networking: the sandbox can reach the internet but not
     # every service bound to the host's loopback. The host itself is reachable
     # by name when deliberately needed.
