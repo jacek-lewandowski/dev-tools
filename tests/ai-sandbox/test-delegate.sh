@@ -49,7 +49,7 @@ assert_contains "add-dir is the git top"  "$argv" "$(git rev-parse --show-toplev
 assert_contains "argv has json output"    "$argv" '--output-format'
 assert_contains "argv has json value"     "$argv" 'json'
 assert_contains "argv has print-timeout"  "$argv" '--print-timeout'
-assert_contains "print-timeout is 10m"    "$argv" '10m'
+assert_contains "print-timeout is 9m"     "$argv" '9m'
 assert_contains "cwd is under .ai-delegate" "$(cat "$tmp/cwd")" '.ai-delegate/'
 assert_eq       "cwd was empty"           "$(tr -d ' ' < "$tmp/cwd_entries")" '0'
 assert_contains "TMPDIR is under .ai-delegate" "$(cat "$tmp/tmpdir")" '.ai-delegate/'

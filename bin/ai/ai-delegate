@@ -73,7 +73,7 @@ resume=()
 
 rc=0
 resp=$(cd "$run/work" && TMPDIR="$run/tmp" agy -p "$prompt" --model "$model" --output-format json \
-    --print-timeout 10m --add-dir "$top" "${resume[@]}") || rc=$?
+    --print-timeout 9m --add-dir "$top" "${resume[@]}") || rc=$?
 
 printf '%s' "$resp" | python3 -c '
 import json, sys
