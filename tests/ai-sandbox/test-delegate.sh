@@ -113,6 +113,18 @@ for r in scout second-reviewer; do
     esac
 done
 
+reviewer_line='You cannot run commands, search with a shell, list directories or write files here'
+"$DELEGATE" second-reviewer "$tmp/task.md" >/dev/null 2>&1; rc=$?
+assert_eq       "second-reviewer succeeds" "$rc" '0'
+assert_contains "second-reviewer prompt has no-commands line" "$(cat "$tmp/prompt")" "$reviewer_line"
+for r in scout writer; do
+    "$DELEGATE" "$r" "$tmp/task.md" >/dev/null 2>&1
+    case "$(cat "$tmp/prompt")" in
+        *"$reviewer_line"*) _fail "$r prompt has no reviewer line" "reviewer line leaked";;
+        *) TESTS_RUN=$((TESTS_RUN+1)); _pass "$r prompt has no reviewer line";;
+    esac
+done
+
 STUB_OUT='{"conversation_id":"c0ffee-123","status":"SUCCESS","response":"ok"}' "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
 assert_eq       "with conversation id exits 0" "$rc" '0'
 assert_eq       "stdout is only the response"  "$(cat "$tmp/o")" 'ok'
