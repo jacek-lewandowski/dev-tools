@@ -61,6 +61,12 @@ if [ "$role" = "writer" ]; then
 You cannot write files or run commands here: each such call is denied and cancels the whole run, so do not try. Return each output's full text as \`content\` in \`body.outputs\`, and leave the check's \`exit_code\` and \`output\` as \`null\`; the lead writes the files and runs the check."
 fi
 
+if [ "$role" = "second-reviewer" ]; then
+    prompt="$prompt
+
+You cannot run commands, search with a shell, list directories or write files here: each such call is denied and cancels the whole run, so do not try. Read the files your task names one by one with your file-reading tool and return the JSON report as your final message. Where a claim would need a run you cannot make, say so in the report instead of trying."
+fi
+
 # One argument is capped at 128 KiB by the kernel.
 # Counted in bytes, not characters.
 if [ "$(printf '%s' "$prompt" | wc -c)" -gt 100000 ]; then
