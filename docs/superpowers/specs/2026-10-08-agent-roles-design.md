@@ -428,7 +428,7 @@ planner.phase        claude  sonnet                 -       -
 implementer          claude  sonnet                 -       -
 reviewer.diff        claude  opus                   -       -
 reviewer.plan        claude  sonnet                 -       -
-second-reviewer.diff agy     gemini-3.1-pro-high    -       none
+second-reviewer.diff agy     gemini-3.8-flash-high  -       none
 second-reviewer.plan agy     gemini-3.8-flash-high  -       none
 scout                agy     gemini-3.8-flash-high  -       claude:sonnet
 writer               agy     gemini-3.8-flash-high  -       claude:sonnet
@@ -795,7 +795,7 @@ a neighbouring fact) or **guessed**.
 | # | Assumption | Status | Checked by |
 |---|---|---|---|
 | A1 | `agy` print mode: `-p` with the prompt right after it, `--model`, `--effort`, `--output-format text\|json\|stream-json`, `--json-schema`, `--print-timeout`, `--conversation`, `--mode`, `--sandbox`, `--dangerously-skip-permissions` | verified (`agy --help`, agy 1.1.22) | - |
-| A2 | `agy models` lists `gemini-3.1-pro-high` and `gemini-3.8-flash-high` | verified (run 2026-10-08) | - |
+| A2 | `agy models` lists `gemini-3.1-pro-high` and `gemini-3.8-flash-high` | verified (run 2026-10-08); gemini-3.1-pro-high was gone from `agy models` on 2026-10-13, second-reviewer default moved to gemini-3.8-flash-high | - |
 | A3 | When `agy` is not signed in, `agy models` prints "Please sign in" | verified (S3: `Error: Please sign in to view available models...`, exit 1; `agy -p` instead waits 60 s on an OAuth prompt) | S3 |
 | A4 | `--output-format json` exposes the final text, a conversation id and token usage including cached tokens | verified (S2: `response`, `conversation_id`, `usage.cache_read_tokens`; `input_tokens` is the uncached part, and all counters are cumulative over a conversation) | S2 |
 | A5 | `--json-schema` makes the final output conform to the schema | verified for shape only (S3: `structured_output` always conforms, and violating values are coerced, not rejected; `response` stays free text). The wrapper validates C4 itself | S3 |

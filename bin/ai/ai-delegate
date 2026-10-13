@@ -28,7 +28,7 @@ role_file="$HOME/.gemini/agents/$role.md"
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "ai-delegate: not inside a git repository" >&2; exit 2; }
 
 if [ -z "$model" ]; then
-    if [ "$role" = "second-reviewer" ]; then model="gemini-3.1-pro-high"; else model="gemini-3.8-flash-high"; fi
+    if [ "$role" = "second-reviewer" ]; then model="gemini-3.8-flash-high"; else model="gemini-3.8-flash-high"; fi
 fi
 
 if ! models_out=$(agy models 2>&1) || printf '%s' "$models_out" | grep -qi 'not signed in'; then

@@ -59,7 +59,7 @@ assert_contains ".ai-delegate/ excluded"  "$(cat "$tmp/repo/.git/info/exclude")"
 assert_eq       "exclude entry not duplicated" "$(grep -c '^\.ai-delegate/$' "$tmp/repo/.git/info/exclude")" '1'
 
 "$DELEGATE" second-reviewer "$tmp/task.md" >/dev/null 2>&1
-assert_contains "second-reviewer default model" "$(cat "$tmp/argv")" 'gemini-3.1-pro-high'
+assert_contains "second-reviewer default model" "$(cat "$tmp/argv")" 'gemini-3.8-flash-high'
 "$DELEGATE" scout "$tmp/task.md" --model custom-model >/dev/null 2>&1
 assert_contains "--model overrides"       "$(cat "$tmp/argv")" 'custom-model'
 
