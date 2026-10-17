@@ -22,8 +22,8 @@ readonly BASHRC_BEGIN='# >>> dev-tools ai-sandbox helpers >>>'
 readonly BASHRC_END='# <<< dev-tools ai-sandbox helpers <<<'
 
 # Pinned upstream versions. Bump deliberately; do not float.
-readonly ANTIGRAVITY_CLI_VERSION='1.1.22-5711547746615296'
-readonly ANTIGRAVITY_HUB_VERSION='2.8.1-6512087774658560'
+readonly ANTIGRAVITY_CLI_VERSION='1.4.0-5281842794987520'
+readonly ANTIGRAVITY_HUB_VERSION='2.24.0-5780333019398144'
 readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
 readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
