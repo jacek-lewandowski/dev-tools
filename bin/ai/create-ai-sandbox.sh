@@ -2293,6 +2293,12 @@ exit-with-children = no
 # 1:1 but logs 'failed to parse scaling value' on the way.
 desktop-scaling = 1
 dpi = 96
+# The viewer runs on the host GPU, and on Intel xpra prints "vendor 'Intel' is
+# greylisted, you may want to turn off OpenGL if you encounter bugs". With GL
+# on, a forwarded window flickers, leaves artefacts and disturbs other
+# GPU-composited windows (Chrome) on a two-monitor GNOME session. Software
+# rendering is plenty for IDE and terminal windows.
+opengl = no
 XPRACONF_EOF
     log "xpra overrides: $XPRA_CONF_DIR/xpra.conf"
 fi
@@ -2440,7 +2446,7 @@ else
     # assumed, because an xpra that does not recognise a flag refuses to attach.
     attach_opts=()
     attach_help=$( { xpra attach --help || true; xpra --help || true; } 2>&1 )
-    for opt in --desktop-scaling=1 --dpi=96; do
+    for opt in --desktop-scaling=1 --dpi=96 --opengl=no; do
         case "$attach_help" in
             *"${opt%%=*}"*) attach_opts+=("$opt") ;;
         esac
