@@ -138,8 +138,10 @@ mh="$tmp/merge-home"; mkdir -p "$mh/.gemini/antigravity-cli"
 sf="$mh/.gemini/antigravity-cli/settings.json"
 printf '{"colorScheme":"x","permissions":{"allow":["a"],"deny":["d"]}}' > "$sf"; chmod 0640 "$sf"
 python3 "$merge" "$sf"
-assert_eq "rule merged, other keys kept" \
-    "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["colorScheme"],d["permissions"]["allow"],d["permissions"]["deny"])' "$sf")" "x ['a', 'read_url(*)'] ['d']"
+assert_eq "rules merged, other keys kept" \
+    "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));a=d["permissions"]["allow"];print(d["colorScheme"],a[:2],a[-1],len(a),d["permissions"]["deny"])' "$sf")" "x ['a', 'read_url(*)'] command(jq) 28 ['d']"
+assert_contains "ls is granted" "$(cat "$sf")" 'command(ls)'
+assert_eq "no write-capable tool is granted" "$(grep -c -E 'command\\((sed|awk|tee|xargs|git|rm|mv|cp|bash|sh|python3?)\\)' "$sf")" '0'
 assert_eq "mode kept" "$(stat -c %a "$sf")" '640'
 python3 "$merge" "$sf"
 assert_eq "merge is idempotent" "$(grep -c 'read_url' "$sf")" '1'
