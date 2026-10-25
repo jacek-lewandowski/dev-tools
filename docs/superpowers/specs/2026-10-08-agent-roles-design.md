@@ -403,6 +403,29 @@ the review, and the safer option is chosen.
   - It is a knowledge change in phase 4, approved by the user per I11, with a
     `decisions.md` entry and a host sync.
   - Alternative: leave the role bodies as they are.
+- **D29 Sandbox agy may run read-only shell tools (user decision,
+  2026-10-25).**
+  - The user wanted agy in a sandbox to read project files, ground on the
+    web, fetch URLs and run basic Linux tools; the host keeps none of these.
+    Reads inside the granted worktree, `search_web` and `read_url(*)` were
+    already in C6; commands were the gap.
+  - Verified on agy 1.4.0: a grant is `command(<program>)` and matches the
+    program name whatever its arguments; `command(ls *)`, `command(ls:*)` and
+    `command(ls -1 *)` are accepted as syntax but match nothing; agy demands a
+    grant for every program in a line, so `ls && touch x`, `ls; touch x`,
+    `ls $(touch x)` and `ls | tee x` are all denied under `command(ls)`.
+  - The entrypoint therefore merges `command(<name>)` for a closed list of
+    read-only tools (ls, cat, head, tail, wc, grep, rg, find, sort, uniq,
+    cut, tr, diff, file, stat, du, df, which, pwd, date, echo, tree,
+    realpath, basename, dirname, jq) next to `read_url(*)`. No sed, awk,
+    tee, xargs, git or interpreter: each can write or run other programs.
+  - `ai-delegate` tells the writer and the second reviewer what they may
+    run; the second reviewer still cannot run tests or builds.
+  - Revises D21/C6: the profile now includes these commands. The
+    `not-confined` resolution in C6 was never implemented by `ai-delegate`
+    and is unchanged in wording.
+  - Alternative: `command(*)`, a full shell for the Google model in the
+    project tree; declined, the roles never need more.
 
 ## Contracts
 

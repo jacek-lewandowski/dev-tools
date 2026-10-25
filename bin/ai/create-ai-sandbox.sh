@@ -899,7 +899,10 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`agy -p \"<prompt>\" --model <id>\` may receive project content (it is an
   approved model provider here). Call it as one bare command with the prompt
   right after \`-p\`, before \`--model\`; do not chain it with other commands. If
-  \`agy models\` says it is not signed in, use Claude instead.
+  \`agy models\` says it is not signed in, use Claude instead. Headless agy may
+  fetch URLs and run read-only shell tools (\`ls\`, \`cat\`, \`grep\`, \`find\`,
+  \`diff\` and the like; the list is in the entrypoint); it cannot write files
+  or run anything else, and a denied call cancels its run.
 - For scout, writer and second-reviewer tasks, use \`ai-delegate <role> <task-file>\`
   first; spawn the Claude subagent of the same name only when it exits 3 (agy not
   signed in) or 1 (agy failed). Never spawn \`second-reviewer\` as a Claude subagent.
@@ -1374,18 +1377,26 @@ if [ "${SANDBOX_WITH_DOCKER:-0}" = "1" ]; then
     fi
 fi
 
-# --- agy web access --------------------------------------------------------
-# Merge read_url(*) into the sandbox's own agy settings; never fail the start.
+# --- agy grants ------------------------------------------------------------
+# Merge the sandbox's agy grants into its own agy settings; never fail the
+# start. read_url(*) is web access (agent-roles design D21). command(<name>)
+# lets agy run that program headlessly, whatever its arguments; agy requires a
+# grant for every program in a line, so "ls && touch x" is denied while
+# "ls -la" runs (verified on agy 1.4.0, D29). The list holds read-only tools:
+# no sed, awk, tee, xargs or git, which can write or run other programs.
 python3 - "$HOME/.gemini/antigravity-cli/settings.json" <<'PYEOF' 2>/dev/null || true
 import json, os, sys
+TOOLS = "ls cat head tail wc grep rg find sort uniq cut tr diff file stat du df which pwd date echo tree realpath basename dirname jq".split()
+GRANTS = ["read_url(*)"] + ["command(%s)" % t for t in TOOLS]
 path = sys.argv[1]
 if os.path.isfile(path):
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     perms = data.setdefault("permissions", {})
     allow = perms.setdefault("allow", [])
-    if "read_url(*)" not in allow:
-        allow.append("read_url(*)")
+    missing = [g for g in GRANTS if g not in allow]
+    if missing:
+        allow.extend(missing)
         # Rewritten in place so mode and owner stay as they are.
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
