@@ -10,17 +10,10 @@ background subshell: marketplace ensured (list, add if absent), then
 `plugin install <id> -y` run only for absent ids. Log: /tmp/claude-plugins.log.
 
 ## P1
-`bash tests/ai-sandbox/test-plugins.sh` -> `28 run, 0 failed`. Covers: empty list adds + updates
-the marketplace and installs all five with -y; list with one enabled and one disabled plugin
-installs exactly the three missing and never installs the two present (no marketplace add when
-known); all present -> no install, no update; a stub failing every command -> exit 0 and no
-install; entrypoint hands off in under a second.
+After the review fixes (commit c78a9dd): `bash tests/ai-sandbox/test-plugins.sh` -> `33 run, 0 failed`. Same cases as before, now isolated: the entrypoint honours `SANDBOX_RUNTIME_DIR` (tests only), the suite puts a stub `dbus-launch` on PATH and unsets the optional-service variables. New cases: the live `/run/user/1000/sandbox-env.sh` (mtime and size) is unchanged, the `dbus-daemon` count is unchanged (31 before and after), the stub was the one called, the snapshot landed in the overridden dir. Network steps now run under `timeout` and the marketplace check no longer feeds stderr to the JSON parser (stub cases unchanged and green).
 
 ## P2
-Same suite: each of the five ids appears exactly once in the generated build directory
-(`grep -rhoF "<id>@claude-plugins-official" $build | wc -l` = 1, five cases ok), Dockerfile has
-`COPY claude-plugins.list /usr/local/share/claude-plugins.list`, sandbox-doctor has
-`status "claude plugins"`. All ok.
+After the fixes: the five ids still appear exactly once in the build context (cases 1-5 ok). The TOOL_NOTES plugins line is now rendered from `CLAUDE_PLUGINS` (`CLAUDE_PLUGIN_NAMES`), and a new case compares the names on the generated notes line with those in `claude-plugins.list`; it passes. (With a sixth plugin added to the constant temporarily, the count cases failed as expected and the notes case stayed green because the line follows the constant; reverted.)
 
 ## P3
 Plugin section extracted from a freshly generated entrypoint and run against the real ~/.claude
@@ -45,8 +38,4 @@ superpowers@claude-plugins-official user True
 A second run installed nothing (log: only `done`); it took 1.5 s, in the background section.
 
 ## P4
-`bash tests/ai-sandbox/run-tests.sh` -> three failures, all pre-existing and unrelated:
-test-tools 35 (SDKMAN, known) and test-delegate 43 and 48 (also fail at f5f6cfb, see the
-gitleaks evidence). test-plugins.sh is picked up by the runner and passes.
-
-Host step (not performed): re-run create-ai-sandbox.sh to rebuild the image with the new entrypoint.
+`bash tests/ai-sandbox/run-tests.sh` after the fixes -> three failures, all pre-existing: test-tools 39 (the known SDKMAN case, renumbered), test-delegate 43 and 48. test-plugins.sh passes (33 cases). `/run/user/1000/sandbox-env.sh` was not modified by the run (mtime 07:17, left as the lead asked).
