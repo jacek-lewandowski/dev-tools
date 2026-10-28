@@ -28,6 +28,8 @@ readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
 readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
 readonly GITLEAKS_VERSION='8.30.1'
+# From the release's gitleaks_${GITLEAKS_VERSION}_checksums.txt; bump with the version.
+readonly GITLEAKS_LINUX_X64_SHA256='551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
 readonly NODE_MAJOR='24'
 
@@ -1815,6 +1817,7 @@ ARG ANTIGRAVITY_IDE_VERSION=${ANTIGRAVITY_IDE_VERSION}
 ARG COMBY_VERSION=${COMBY_VERSION}
 ARG EARTHLY_VERSION=${EARTHLY_VERSION}
 ARG GITLEAKS_VERSION=${GITLEAKS_VERSION}
+ARG GITLEAKS_LINUX_X64_SHA256=${GITLEAKS_LINUX_X64_SHA256}
 ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
 DOCKERFILE_HEAD
 
@@ -1904,7 +1907,8 @@ RUN set -eux; \
 # Static binary; the git hooks in .githooks/ refuse to run without it.
 RUN set -eux; \
     wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
-    tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks; \
+    echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gitleaks.tar.gz --no-same-owner -C /usr/local/bin gitleaks; \
     rm /tmp/gitleaks.tar.gz; \
     gitleaks version
 
