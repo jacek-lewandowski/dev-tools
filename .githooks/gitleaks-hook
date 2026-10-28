@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# The one script behind both git hooks (pre-commit and pre-push dispatch here):
+# refuses a commit or push that adds a secret, using the pinned gitleaks.
+# Activate per clone: git config core.hooksPath .githooks
+set -uo pipefail
+
+mode="${1:-}"; [ $# -gt 0 ] && shift
+readonly ZERO='0000000000000000000000000000000000000000'
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    cat >&2 <<MSG
+gitleaks is not on PATH, so this $mode is refused (the hooks fail closed).
+  host:    install gitleaks v8.30.1 from https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+  sandbox: rebuild the image by re-running create-ai-sandbox.sh on the host
+MSG
+    exit 1
+fi
+
+scan() {
+    gitleaks git --no-banner --verbose --redact "$@" || {
+        echo "gitleaks: secret found, $mode refused (suppress a known fake with a gitleaks:allow comment on its line)." >&2
+        exit 1
+    }
+}
+
+case "$mode" in
+    pre-commit)
+        scan --pre-commit --staged
+        ;;
+    pre-push)
+        # stdin: <local ref> <local sha> <remote ref> <remote sha> per pushed ref.
+        while read -r _ local_sha _ remote_sha; do
+            [ "$local_sha" = "$ZERO" ] && continue   # ref deletion pushes no commits
+            if [ "$remote_sha" != "$ZERO" ] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+                range="${remote_sha}..${local_sha}"
+            else
+                # New branch (or unknown remote tip): everything not on any remote yet.
+                range="${local_sha} --not --remotes"
+            fi
+            scan --log-opts="$range"
+        done
+        ;;
+    *)
+        echo "usage: gitleaks-hook pre-commit|pre-push" >&2
+        exit 2
+        ;;
+esac
