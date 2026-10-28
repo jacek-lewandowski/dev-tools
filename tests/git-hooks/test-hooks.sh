@@ -13,7 +13,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 
 # Composed at runtime so this file never contains a token-shaped literal.
 secret="ghp_$(printf '%s' 'x7Kq9ZpL2mVb' 'R4tYw8NcD3sFh6JgA1eU')"
-printf 'token = "%s"\n' "$secret" > "$tmp/leaky"
+printf '# fixture\ntoken = "%s"\n' "$secret" > "$tmp/leaky"
 
 git init -q --bare "$tmp/remote.git"
 git init -q -b main "$tmp/work"
@@ -31,6 +31,7 @@ cp "$tmp/leaky" leak.txt; git add leak.txt
 rc=$(commit leak)
 assert_ne "a staged secret is refused at commit" "$rc" 0
 assert_contains "the file is named" "$(cat "$tmp/out")" "leak.txt"
+assert_eq "the line is named" "$(grep -cE '^Line: +2$' "$tmp/out")" 1
 assert_eq "the secret is redacted" "$(grep -c "$secret" "$tmp/out")" 0
 git reset -q; rm leak.txt
 
