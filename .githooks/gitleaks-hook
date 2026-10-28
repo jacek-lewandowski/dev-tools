@@ -16,11 +16,20 @@ MSG
     exit 1
 fi
 
+# Findings get their own exit code (2): gitleaks' own failures exit 1 or 126,
+# so the default of 1 for findings could not be told from a tool error.
+readonly FINDINGS_RC=2
+
 scan() {
-    gitleaks git --no-banner --verbose --redact "$@" || {
+    local rc=0
+    gitleaks git --no-banner --verbose --redact --exit-code "$FINDINGS_RC" "$@" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    if [ "$rc" -eq "$FINDINGS_RC" ]; then
         echo "gitleaks: secret found, $mode refused (suppress a known fake with a gitleaks:allow comment on its line)." >&2
-        exit 1
-    }
+    else
+        echo "gitleaks itself failed (exit $rc), $mode refused; its output is above." >&2
+    fi
+    exit 1
 }
 
 case "$mode" in
