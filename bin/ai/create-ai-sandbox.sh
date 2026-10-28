@@ -27,6 +27,7 @@ readonly ANTIGRAVITY_HUB_VERSION='2.24.0-5780333019398144'
 readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
 readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
+readonly GITLEAKS_VERSION='8.30.1'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
 readonly NODE_MAJOR='24'
 
@@ -895,6 +896,7 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`sg\` (ast-grep) and \`comby\` -- structural search and replace.
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
 - \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
+- \`gitleaks\` -- secret scanner behind the repository's git hooks (\`git config core.hooksPath .githooks\`).
 - \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed.
 - \`agy -p \"<prompt>\" --model <id>\` may receive project content (it is an
   approved model provider here). Call it as one bare command with the prompt
@@ -1525,6 +1527,7 @@ cat >> "$BUILD_DIR/sandbox-doctor" <<'DOCTOR_EOF'
     fi
 done
 status "comby"        "$(comby -version 2>/dev/null || echo 'BROKEN -- rebuild the image (missing shared library?)')"
+status "gitleaks"     "$(gitleaks version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
 status "ast-grep"     "$(sg --version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
 status "pnpm / yarn"  "$(pnpm --version 2>/dev/null || echo '?') / $(yarn --version 2>/dev/null || echo '?')  (corepack)"
 status "audio"        "$( [ -n "${PULSE_SERVER:-}" ] && pactl info >/dev/null 2>&1 && echo ok || echo unavailable )"
@@ -1753,6 +1756,7 @@ ARG ANTIGRAVITY_HUB_VERSION=${ANTIGRAVITY_HUB_VERSION}
 ARG ANTIGRAVITY_IDE_VERSION=${ANTIGRAVITY_IDE_VERSION}
 ARG COMBY_VERSION=${COMBY_VERSION}
 ARG EARTHLY_VERSION=${EARTHLY_VERSION}
+ARG GITLEAKS_VERSION=${GITLEAKS_VERSION}
 ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
 DOCKERFILE_HEAD
 
@@ -1839,6 +1843,13 @@ RUN set -eux; \
     chmod +x /usr/local/bin/comby; \
     comby -version
 
+# Static binary; the git hooks in .githooks/ refuse to run without it.
+RUN set -eux; \
+    wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
+    tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks; \
+    rm /tmp/gitleaks.tar.gz; \
+    gitleaks version
+
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
     tar -xzf /tmp/cli.tar.gz -C /tmp; \
@@ -1917,6 +1928,7 @@ ENV BASH_ENV=/etc/ai-sandbox-env.sh
 # missing a shared library, or the corepack shims not resolving.
 RUN set -eux; \
     comby -version; \
+    gitleaks version; \
     sg --version; \
     node --version; \
     pnpm --version; \
