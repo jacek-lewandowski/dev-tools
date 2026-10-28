@@ -70,5 +70,15 @@ assert_ne "commit is refused when gitleaks is missing" "$rc" 0
 assert_contains "the message names the releases page" "$(cat "$tmp/out")" "github.com/gitleaks/gitleaks/releases"
 assert_contains "the message names the sandbox rebuild" "$(cat "$tmp/out")" "create-ai-sandbox.sh"
 
+# --- a gitleaks that errors is told apart from a finding, and still refuses
+errbin="$tmp/errbin"; mkdir -p "$errbin"
+printf '#!/bin/sh\necho "boom from stub" >&2\nexit 126\n' > "$errbin/gitleaks"; chmod +x "$errbin/gitleaks"
+echo d > d.txt; git add d.txt
+PATH="$errbin:$PATH" git commit -q -m err >"$tmp/out" 2>&1; rc=$?
+assert_ne "commit is refused when gitleaks itself fails" "$rc" 0
+assert_contains "the message says gitleaks failed" "$(cat "$tmp/out")" "gitleaks itself failed (exit 126)"
+assert_contains "the tool's output is shown" "$(cat "$tmp/out")" "boom from stub"
+assert_eq "a tool error is not reported as a secret" "$(grep -c 'secret found' "$tmp/out")" 0
+
 cd /; rm -rf "$tmp"
 finish

@@ -19,6 +19,8 @@ for a new one.
 ## H1
 After the review fixes (commit 5befc8c): `bash tests/git-hooks/test-hooks.sh` -> `15 run, 0 failed` (15 cases). The refused-commit case now also asserts the line (`Line: 2`, the fixture secret sits on line 2). Earlier run and cases as before: clean commit, secret refused at commit with file named and secret redacted, clean push, `--no-verify` leak refused at push, new branch with an earlier leak refused, ref deletion not blocked, missing gitleaks refused with the install source named. Original commit bb6b78c.
 
+Review finding 4 fix: observed `gitleaks git --bogus` -> exit 126 and `gitleaks git /nonexistent` -> exit 1, so gitleaks' own errors can use 1 and the default findings code (1) cannot be told apart. The hook now passes `--exit-code 2` for findings: 2 -> "secret found", anything else -> "gitleaks itself failed (exit N)" with its output shown; both refuse. Added a case with a stub gitleaks exiting 126. `bash tests/git-hooks/test-hooks.sh` -> `19 run, 0 failed`.
+
 ## H2
 After the review fixes (commit 5befc8c): `bash tests/ai-sandbox/test-tools.sh` -> `not ok 39 - a candidate without a default is skipped
 76 run, 1 failed`; the only failure is the known SDKMAN case. New assertions: tarball verified with `sha256sum -c -` against the pinned `GITLEAKS_LINUX_X64_SHA256` (value from the release checksums file, matches the downloaded tarball), `--no-same-owner` extraction, and a check that every version copy in `.githooks/*` and `README.md` equals `GITLEAKS_VERSION` (negative check: changing one README copy to v8.30.2 made it `not ok`, reverted).
