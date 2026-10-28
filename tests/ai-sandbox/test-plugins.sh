@@ -31,6 +31,20 @@ esac
 exit 0
 STUB
 chmod +x "$stub/claude"
+# The entrypoint's other sections must not touch the live sandbox: a runtime-dir
+# override, a stub dbus-launch, and none of the optional services requested.
+cat > "$stub/dbus-launch" <<'STUB'
+#!/bin/bash
+echo called >> "$STUB_DBUS_LOG"
+echo "DBUS_SESSION_BUS_ADDRESS='unix:path=/nonexistent';"
+STUB
+chmod +x "$stub/dbus-launch"
+export STUB_DBUS_LOG="$tmp/dbus.log" SANDBOX_RUNTIME_DIR="$tmp/run"
+unset SANDBOX_START_XWAYLAND SANDBOX_START_WM SANDBOX_WITH_DOCKER
+real_env="/run/user/$(id -u)/sandbox-env.sh"
+real_before=$(stat -c '%y %s' "$real_env" 2>&1)
+count_dbus() { ps -eo comm= | grep -cx dbus-daemon; }
+dbus_before=$(count_dbus)
 export STUB_LOG="$tmp/stub.log" STUB_MARKETPLACES="$tmp/mk.json" STUB_PLUGINS="$tmp/pl.json"
 export CLAUDE_PLUGINS_LIST="$build/claude-plugins.list" CLAUDE_PLUGINS_LOG="$tmp/plugins.log"
 
@@ -77,6 +91,17 @@ assert_eq "nothing is installed when the list cannot be read" "$(installs)" 0
 # The start is not delayed: with everything present, entrypoint returns quickly.
 t0=$(date +%s%N); PATH="$stub:$PATH" bash "$build/entrypoint.sh" true; t1=$(date +%s%N)
 assert_eq "the entrypoint hands off in under a second" "$(( (t1 - t0) / 1000000 < 1000 ))" 1
+
+assert_eq "the live sandbox-env.sh is untouched" "$(stat -c '%y %s' "$real_env" 2>&1)" "$real_before"
+assert_eq "no dbus-daemon was started" "$(count_dbus)" "$dbus_before"
+assert_contains "the stub dbus-launch was the one called" "$(cat "$STUB_DBUS_LOG")" called
+assert_file "the snapshot went to the overridden runtime dir" "$tmp/run/sandbox-env.sh"
+
+# --- the tool notes follow CLAUDE_PLUGINS (via claude-plugins.list) ---------
+want=$(sed 's/@.*//' "$build/claude-plugins.list" | paste -sd, | sed 's/,/, /g')
+line=$(grep -- '- Claude Code plugins ' "$HOME/.gemini/GEMINI.md")
+got=$(printf '%s' "$line" | sed -e 's/^- Claude Code plugins //' -e 's/ are installed.*//' -e 's/`//g')
+assert_eq "the notes line lists exactly the configured plugins" "$got" "$want"
 
 rm -rf "$tmp"
 finish

@@ -898,6 +898,12 @@ fi
 # Build the tooling notes from the feature set that is actually enabled, so the
 # agents are never told about tools that were not installed.
 HOST_SDKMAN="$HOME/.sdkman"      # the SDKMAN section below keys off the same path
+# Bare plugin names for the notes, derived from CLAUDE_PLUGINS.
+CLAUDE_PLUGIN_NAMES=""
+for _p in "${CLAUDE_PLUGINS[@]}"; do
+    CLAUDE_PLUGIN_NAMES+="${CLAUDE_PLUGIN_NAMES:+, }\`${_p%@*}\`"
+done
+unset _p
 TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   (\`headroom wrap <tool>\`, \`headroom proxy --port 8787\`, \`headroom doctor\`, \`headroom mcp\`),
   or \`from headroom import compress\`. Use it to shrink large JSON payloads, logs or
@@ -911,7 +917,7 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
 - \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
 - \`gitleaks\` -- secret scanner behind the repository's git hooks (\`git config core.hooksPath .githooks\`).
-- Claude Code plugins \`superpowers\`, \`frontend-design\`, \`code-simplifier\`, \`playwright\` and \`claude-md-management\` are installed at container start (log: \`/tmp/claude-plugins.log\`); \`sandbox-doctor\` lists any missing.
+- Claude Code plugins ${CLAUDE_PLUGIN_NAMES} are installed at container start (log: \`/tmp/claude-plugins.log\`); \`sandbox-doctor\` lists any missing.
 - \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed.
 - \`agy -p \"<prompt>\" --model <id>\` may receive project content (it is an
   approved model provider here). Call it as one bare command with the prompt
@@ -1331,7 +1337,7 @@ cat > "$BUILD_DIR/entrypoint.sh" <<'ENTRYPOINT_EOF'
 # resulting environment for interactive shells, then hands off.
 set -u
 
-RUNTIME_DIR="/run/user/$(id -u)"
+RUNTIME_DIR="${SANDBOX_RUNTIME_DIR:-/run/user/$(id -u)}"   # override: tests only
 mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
 ENV_SNAPSHOT="$RUNTIME_DIR/sandbox-env.sh"
@@ -1430,11 +1436,11 @@ PYEOF
 (
     command -v claude >/dev/null 2>&1 && [ -r "$CLAUDE_PLUGINS_LIST" ] || exit 0
     echo "--- $(date -u +%FT%TZ)"
-    if claude plugin marketplace list --json 2>&1 \
+    if timeout 60 claude plugin marketplace list --json \
         | python3 -c 'import json,sys; sys.exit(0 if any(m.get("name") == sys.argv[1] for m in json.load(sys.stdin)) else 1)' @MARKETPLACE@; then
         :
     else
-        claude plugin marketplace add @MARKETPLACE_SOURCE@ 2>&1 || true
+        timeout 120 claude plugin marketplace add @MARKETPLACE_SOURCE@ 2>&1 || true
     fi
     installed=$(claude plugin list --json 2>/dev/null) || { echo "plugin list failed; not installing"; exit 0; }
     missing=$(printf '%s' "$installed" | python3 -c '
@@ -1445,9 +1451,9 @@ for line in open(sys.argv[1]):
     if line and line not in have:
         print(line)' "$CLAUDE_PLUGINS_LIST") || { echo "plugin list unparsable; not installing"; exit 0; }
     if [ -n "$missing" ]; then
-        claude plugin marketplace update @MARKETPLACE@ 2>&1 || true
+        timeout 120 claude plugin marketplace update @MARKETPLACE@ 2>&1 || true
         for id in $missing; do
-            claude plugin install "$id" -y 2>&1 || true
+            timeout 180 claude plugin install "$id" -y 2>&1 || true
         done
     fi
     echo "done"
