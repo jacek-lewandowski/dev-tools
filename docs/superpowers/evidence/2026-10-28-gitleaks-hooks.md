@@ -17,26 +17,19 @@ the finding (file, line) at all; `--redact` hides the secret. pre-push uses
 for a new one.
 
 ## H1
-`bash tests/git-hooks/test-hooks.sh` -> 14 cases, `14 run, 0 failed`: clean commit ok;
-staged secret refused at commit, file named, secret redacted; clean push ok;
-`--no-verify` secret commit refused at push, remote untouched; new branch with
-secret in an earlier commit refused, branch not created; ref deletion not blocked;
-with gitleaks off PATH the commit is refused and the message names the releases
-page and create-ai-sandbox.sh. (First run, before `--verbose` was added, failed
-"the file is named": the hook printed no location; fixed.) Fixture token is composed
-at runtime. Commit bb6b78c.
+After the review fixes (commit 5befc8c): `bash tests/git-hooks/test-hooks.sh` -> `15 run, 0 failed` (15 cases). The refused-commit case now also asserts the line (`Line: 2`, the fixture secret sits on line 2). Earlier run and cases as before: clean commit, secret refused at commit with file named and secret redacted, clean push, `--no-verify` leak refused at push, new branch with an earlier leak refused, ref deletion not blocked, missing gitleaks refused with the install source named. Original commit bb6b78c.
 
 ## H2
-`bash tests/ai-sandbox/test-tools.sh` -> `72 run, 1 failed`; the only failure is
-`not ok 35 - a candidate without a default is skipped` (the known sandbox-only
-SDKMAN case). New assertions (gitleaks download URL at the pinned release,
-`ARG GITLEAKS_VERSION=8.30.1`, `gitleaks version;` smoke test, notes mention)
-all `ok`. Commit c5ed2ab.
+After the review fixes (commit 5befc8c): `bash tests/ai-sandbox/test-tools.sh` -> `not ok 39 - a candidate without a default is skipped
+76 run, 1 failed`; the only failure is the known SDKMAN case. New assertions: tarball verified with `sha256sum -c -` against the pinned `GITLEAKS_LINUX_X64_SHA256` (value from the release checksums file, matches the downloaded tarball), `--no-same-owner` extraction, and a check that every version copy in `.githooks/*` and `README.md` equals `GITLEAKS_VERSION` (negative check: changing one README copy to v8.30.2 made it `not ok`, reverted).
 
 ## H3
-`gitleaks dir . --redact --no-banner` -> `INF scanned ~1091 bytes ... no leaks found`
-(and over the whole tree after the commits: `scanned ~1038761 bytes (1.04 MB) ... no leaks found`).
-Also `gitleaks git --redact --no-banner` -> `221 commits scanned ... no leaks found`.
+`gitleaks dir . --redact --no-banner` at the repository root after the fixes, whole tree:
+```
+7:16AM INF scanned ~1063633 bytes (1.06 MB) in 248ms
+7:16AM INF no leaks found
+```
+Also `gitleaks git --redact --no-banner` earlier: `221 commits scanned ... no leaks found`. (The earlier entry's ~1091 bytes figure was the staged diff of c5ed2ab scanned by the pre-commit hook, not the tree scan.)
 
 ## H4
 `git config core.hooksPath` -> `.githooks`. Both commits of this task went
