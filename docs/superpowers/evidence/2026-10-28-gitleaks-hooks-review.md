@@ -1,4 +1,4 @@
-# Review: gitleaks hooks (f5f6cfb..7dccf1c)
+# Review: gitleaks hooks (f5f6cfb..178d657)
 
 Fiona, reviewer 1. Against `docs/superpowers/specs/2026-10-28-gitleaks-hooks-brief.md`
 and `docs/superpowers/evidence/2026-10-28-gitleaks-hooks.md`.
@@ -23,13 +23,13 @@ The tarball's sha256 (551f6fc8...) matches the release's checksums file.
 - H4 `git config core.hooksPath` gives `.githooks`. `.githooks/pre-commit` run from the
   repository root exits 0. I cannot re-run the historical commit output; the claim is
   accepted on the config and the hook running.
-- H5, on a clean `git archive 7dccf1c` export (the working tree holds another task's
+- H5, on a clean `git archive 178d657` export (the working tree holds another task's
   uncommitted changes): `run-tests.sh` fails only on test-delegate 43 and 48 and
   test-tools 35, all known. `test-sync.sh` gives `37 run, 0 failed`.
 
 ## Findings (none blocking)
 
-1. Minor: commit hygiene, 7dccf1c. The evidence commit also adds the unrelated
+1. Minor: commit hygiene, 178d657. The evidence commit also adds the unrelated
    81-line `docs/superpowers/specs/2026-10-28-claude-plugins-brief.md`, which breaks
    "one logical change each" (§3 Commits). The code is not affected. Fixing it means
    rewriting two unpushed commits underneath work that is in progress, so the lead
@@ -68,7 +68,7 @@ The tarball's sha256 (551f6fc8...) matches the release's checksums file.
 - The test isolates git config (`GIT_CONFIG_GLOBAL=/dev/null`).
 - The fixture token is composed at runtime, so it is not a matchable literal.
 
-## Round 2 (delta 7dccf1c..602ccdf: 5befc8c, 602ccdf)
+## Round 2 (delta 178d657..d143001: aeaa1d9, d143001)
 
 Verdict: **accept, no blocking findings.** Findings 2, 3, 5 and 6 are resolved.
 Findings 1 and 4 stay with the user, as decided.
@@ -79,7 +79,7 @@ Findings 1 and 4 stay with the user, as decided.
   `GITLEAKS_LINUX_X64_SHA256`. I simulated the generated `RUN` steps on that tarball:
   `sha256sum -c -` prints OK, and a corrupted hash makes it exit 1.
   `tar ... --no-same-owner` now extracts with the caller's uid, not 501.
-- Finding 2, version copies: `git grep 8.30.1` at 602ccdf (docs excluded) finds the
+- Finding 2, version copies: `git grep 8.30.1` at d143001 (docs excluded) finds the
   hook (line 13), `README.md` (lines 7, 17, 18), the generator constant and
   test-tools assertion 6. The new assertion 10 covers the hook and README copies.
   The test-tools literal enumerates itself, because it fails on a bump. Negative

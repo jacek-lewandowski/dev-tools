@@ -1,4 +1,4 @@
-# Review: Claude Code plugins at sandbox start (7dc3cfb..ea01f01)
+# Review: Claude Code plugins at sandbox start (33ea393..d35da26)
 
 Arek, reviewer 2. Brief `docs/superpowers/specs/2026-10-28-claude-plugins-brief.md`,
 evidence `docs/superpowers/evidence/2026-10-28-claude-plugins.md`. Verdict: **blocked**, two Important findings.
@@ -9,7 +9,7 @@ evidence `docs/superpowers/evidence/2026-10-28-claude-plugins.md`. Verdict: **bl
    generated `entrypoint.sh` in the live sandbox.** The entrypoint's earlier sections are not
    isolated: `RUNTIME_DIR="/run/user/$(id -u)"` and `: > "$ENV_SNAPSHOT"` truncate and rewrite the
    real `/run/user/1000/sandbox-env.sh`, and `eval "$(dbus-launch --sh-syntax)"` starts a session
-   bus that is never stopped. Reproduced at ea01f01: one run of the suite took the
+   bus that is never stopped. Reproduced at d35da26: one run of the suite took the
    `dbus-daemon` count from 26 to 31 and rewrote `sandbox-env.sh` (mtime 07:17:44), which now points
    at a stray bus instead of the one the container started (PID 17). In a sandbox started with
    `--with-docker` or in wayland mode the `DOCKER_HOST` / `DISPLAY=:99` lines are lost the same way,
@@ -40,7 +40,7 @@ evidence `docs/superpowers/evidence/2026-10-28-claude-plugins.md`. Verdict: **bl
 
 ## Obligations re-run
 
-- P1: `bash tests/ai-sandbox/test-plugins.sh` at ea01f01 (detached worktree) -> `28 run, 0 failed`.
+- P1: `bash tests/ai-sandbox/test-plugins.sh` at d35da26 (detached worktree) -> `28 run, 0 failed`.
   Read: the stub answers only the two list calls from fixtures and records argv; cases cover the
   empty list (add + update + five `install <id> -y`), one enabled and one disabled present (three
   installs, none for the two, no add), all present (no install, no update), every command failing
@@ -48,8 +48,8 @@ evidence `docs/superpowers/evidence/2026-10-28-claude-plugins.md`. Verdict: **bl
 - P2: same run, cases 1-7 pass; I confirmed by reading that the ids exist once in
   `CLAUDE_PLUGINS` and once in `claude-plugins.list`, apart from the notes copy in finding 2.
 - P3: `claude plugin list --json` here now lists all five at `scope: user`, `enabled: true`.
-- P4: `bash tests/ai-sandbox/test-tools.sh` at ea01f01 -> `72 run, 1 failed` (35, the known SDKMAN
-  case). A first run against the live tree, while commits 5befc8c/602ccdf landed, failed 52 cases
+- P4: `bash tests/ai-sandbox/test-tools.sh` at d35da26 -> `72 run, 1 failed` (35, the known SDKMAN
+  case). A first run against the live tree, while commits aeaa1d9/d143001 landed, failed 52 cases
   with build files missing mid-run; two reruns were clean apart from the SDKMAN case, so I put that
   down to the concurrent work, not to this diff.
 
@@ -60,14 +60,14 @@ when something is missing, no direct writes to `~/.claude/settings.json`, `@MARK
 substitution, the Dockerfile COPY, the build hash covering the new file (it hashes the whole build
 dir), and the PROJECT_MAP entries.
 
-## Round 2 (delta ea01f01..e5a7b72: c78a9dd, e5a7b72; gitleaks commits excluded)
+## Round 2 (delta d35da26..8bda9c3: 0a31fa8, 8bda9c3; gitleaks commits excluded)
 
 Verdict: **accepted**. Findings 1 and 2 are resolved. 3 and the rest of 4 were left on
 purpose and stay non-blocking.
 
 - Finding 1 resolved. `entrypoint.sh` reads `RUNTIME_DIR="${SANDBOX_RUNTIME_DIR:-/run/user/$(id -u)}"`.
   The test exports it to `$tmp/run`, stubs `dbus-launch` and unsets the optional services.
-  `bash tests/ai-sandbox/test-plugins.sh` at e5a7b72 (detached worktree): `33 run, 0 failed`.
+  `bash tests/ai-sandbox/test-plugins.sh` at 8bda9c3 (detached worktree): `33 run, 0 failed`.
   Measured around the run myself: `/run/user/1000/sandbox-env.sh` stat `07:22:33.795 69` before
   and after; `dbus-daemon` count 1 before, 1 after. The new cases 29-32 assert the same.
 - The override cannot be abused. `grep -rn SANDBOX_RUNTIME_DIR bin tests` finds only the
@@ -83,7 +83,7 @@ purpose and stay non-blocking.
 - Finding 4, partially fixed: `2>&1` is gone from the marketplace parse; `timeout` 60/120/120/180 s
   wraps list, add, update and install. Without `pipefail`, the `if` tests the parser's exit
   status, as before.
-- `bash tests/ai-sandbox/test-tools.sh` at e5a7b72: `76 run, 1 failed`. The failure is case 39,
+- `bash tests/ai-sandbox/test-tools.sh` at 8bda9c3: `76 run, 1 failed`. The failure is case 39,
   the known SDKMAN case.
 - Non-blocking: case 30 counts every `dbus-daemon` on the machine, so another process starting or
   killing one during the run, as the coordinator's clean-up could, would make it flaky.

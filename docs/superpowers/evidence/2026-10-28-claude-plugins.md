@@ -1,6 +1,6 @@
 # Evidence: Claude Code plugins at sandbox start (brief 2026-10-28-claude-plugins-brief.md)
 
-Commit de75852 (entrypoint section, constant, list file, doctor line, notes line, test, PROJECT_MAP).
+Commit 6862cd8 (entrypoint section, constant, list file, doctor line, notes line, test, PROJECT_MAP).
 
 Design: the five ids live in the `CLAUDE_PLUGINS` constant in create-ai-sandbox.sh and are
 rendered once into `claude-plugins.list` (copied to /usr/local/share/ in the image); the
@@ -10,7 +10,7 @@ background subshell: marketplace ensured (list, add if absent), then
 `plugin install <id> -y` run only for absent ids. Log: /tmp/claude-plugins.log.
 
 ## P1
-After the review fixes (commit c78a9dd): `bash tests/ai-sandbox/test-plugins.sh` -> `33 run, 0 failed`. Same cases as before, now isolated: the entrypoint honours `SANDBOX_RUNTIME_DIR` (tests only), the suite puts a stub `dbus-launch` on PATH and unsets the optional-service variables. New cases: the live `/run/user/1000/sandbox-env.sh` (mtime and size) is unchanged, the `dbus-daemon` count is unchanged (31 before and after), the stub was the one called, the snapshot landed in the overridden dir. Network steps now run under `timeout` and the marketplace check no longer feeds stderr to the JSON parser (stub cases unchanged and green).
+After the review fixes (commit 0a31fa8): `bash tests/ai-sandbox/test-plugins.sh` -> `33 run, 0 failed`. Same cases as before, now isolated: the entrypoint honours `SANDBOX_RUNTIME_DIR` (tests only), the suite puts a stub `dbus-launch` on PATH and unsets the optional-service variables. New cases: the live `/run/user/1000/sandbox-env.sh` (mtime and size) is unchanged, the `dbus-daemon` count is unchanged (31 before and after), the stub was the one called, the snapshot landed in the overridden dir. Network steps now run under `timeout` and the marketplace check no longer feeds stderr to the JSON parser (stub cases unchanged and green).
 
 ## P2
 After the fixes: the five ids still appear exactly once in the build context (cases 1-5 ok). The TOOL_NOTES plugins line is now rendered from `CLAUDE_PLUGINS` (`CLAUDE_PLUGIN_NAMES`), and a new case compares the names on the generated notes line with those in `claude-plugins.list`; it passes. (With a sixth plugin added to the constant temporarily, the count cases failed as expected and the notes case stayed green because the line follows the constant; reverted.)
