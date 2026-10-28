@@ -31,6 +31,18 @@ readonly GITLEAKS_VERSION='8.30.1'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
 readonly NODE_MAJOR='24'
 
+# Claude Code plugins every sandbox gets at container start (entrypoint.sh).
+# The one place the list lives; it is rendered into claude-plugins.list.
+readonly CLAUDE_PLUGINS_MARKETPLACE='claude-plugins-official'
+readonly CLAUDE_PLUGINS_MARKETPLACE_SOURCE='anthropics/claude-plugins-official'
+readonly -a CLAUDE_PLUGINS=(
+    "superpowers@${CLAUDE_PLUGINS_MARKETPLACE}"
+    "frontend-design@${CLAUDE_PLUGINS_MARKETPLACE}"
+    "code-simplifier@${CLAUDE_PLUGINS_MARKETPLACE}"
+    "playwright@${CLAUDE_PLUGINS_MARKETPLACE}"
+    "claude-md-management@${CLAUDE_PLUGINS_MARKETPLACE}"
+)
+
 # Resource limits for the container. Docker imposes none by default, so a
 # runaway build or an Electron leak can take the whole host down with it.
 #   MEMORY_LIMIT      RAM the sandbox may use.
@@ -897,6 +909,7 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
 - \`pnpm\` and \`yarn\` -- through corepack; a project's \`packageManager\` field is honoured.
 - \`firebase\`, \`gcloud\`, \`gh\`, \`cloudflared\`, \`agy\`, \`codex\` -- already installed; do not reinstall them.
 - \`gitleaks\` -- secret scanner behind the repository's git hooks (\`git config core.hooksPath .githooks\`).
+- Claude Code plugins \`superpowers\`, \`frontend-design\`, \`code-simplifier\`, \`playwright\` and \`claude-md-management\` are installed at container start (log: \`/tmp/claude-plugins.log\`); \`sandbox-doctor\` lists any missing.
 - \`nano\` and \`net-tools\` (\`ifconfig\`, \`netstat\`, \`route\`) are also installed.
 - \`agy -p \"<prompt>\" --model <id>\` may receive project content (it is an
   approved model provider here). Call it as one bare command with the prompt
@@ -1405,8 +1418,43 @@ if os.path.isfile(path):
             f.write("\n")
 PYEOF
 
+# --- Claude Code plugins -----------------------------------------------------
+# ~/.claude is a bind mount, so plugins cannot be baked into the image. In the
+# background (network), add the marketplace if unknown and install only the
+# plugins absent from the list: `plugin install` re-enables a disabled plugin,
+# which would undo the user's `claude plugin disable`. Never fails the start.
+: "${CLAUDE_PLUGINS_LIST:=/usr/local/share/claude-plugins.list}"
+: "${CLAUDE_PLUGINS_LOG:=/tmp/claude-plugins.log}"
+(
+    command -v claude >/dev/null 2>&1 && [ -r "$CLAUDE_PLUGINS_LIST" ] || exit 0
+    echo "--- $(date -u +%FT%TZ)"
+    if claude plugin marketplace list --json 2>&1 \
+        | python3 -c 'import json,sys; sys.exit(0 if any(m.get("name") == sys.argv[1] for m in json.load(sys.stdin)) else 1)' @MARKETPLACE@; then
+        :
+    else
+        claude plugin marketplace add @MARKETPLACE_SOURCE@ 2>&1 || true
+    fi
+    installed=$(claude plugin list --json 2>/dev/null) || { echo "plugin list failed; not installing"; exit 0; }
+    missing=$(printf '%s' "$installed" | python3 -c '
+import json, sys
+have = {p.get("id") for p in json.load(sys.stdin)}
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line and line not in have:
+        print(line)' "$CLAUDE_PLUGINS_LIST") || { echo "plugin list unparsable; not installing"; exit 0; }
+    if [ -n "$missing" ]; then
+        claude plugin marketplace update @MARKETPLACE@ 2>&1 || true
+        for id in $missing; do
+            claude plugin install "$id" -y 2>&1 || true
+        done
+    fi
+    echo "done"
+) >>"$CLAUDE_PLUGINS_LOG" 2>&1 &
+
 exec "$@"
 ENTRYPOINT_EOF
+sed -i -e "s|@MARKETPLACE_SOURCE@|$CLAUDE_PLUGINS_MARKETPLACE_SOURCE|" -e "s|@MARKETPLACE@|$CLAUDE_PLUGINS_MARKETPLACE|" "$BUILD_DIR/entrypoint.sh"
+printf '%s\n' "${CLAUDE_PLUGINS[@]}" > "$BUILD_DIR/claude-plugins.list"
 
 cat > "$BUILD_DIR/sandbox-doctor" <<'DOCTOR_EOF'
 #!/bin/bash
@@ -1528,6 +1576,16 @@ cat >> "$BUILD_DIR/sandbox-doctor" <<'DOCTOR_EOF'
 done
 status "comby"        "$(comby -version 2>/dev/null || echo 'BROKEN -- rebuild the image (missing shared library?)')"
 status "gitleaks"     "$(gitleaks version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
+_plug=$(claude plugin list --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    have = {p["id"] for p in json.load(sys.stdin)}
+except Exception:
+    sys.exit(1)
+want = [l.strip() for l in open("/usr/local/share/claude-plugins.list") if l.strip()]
+miss = [w for w in want if w not in have]
+print("all %d installed" % len(want) if not miss else "MISSING: " + ", ".join(miss) + " (see /tmp/claude-plugins.log)")' 2>/dev/null) || _plug='unknown (claude CLI unavailable)'
+status "claude plugins" "$_plug"
 status "ast-grep"     "$(sg --version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
 status "pnpm / yarn"  "$(pnpm --version 2>/dev/null || echo '?') / $(yarn --version 2>/dev/null || echo '?')  (corepack)"
 status "audio"        "$( [ -n "${PULSE_SERVER:-}" ] && pactl info >/dev/null 2>&1 && echo ok || echo unavailable )"
@@ -1900,6 +1958,7 @@ RUN mv /usr/bin/google-chrome /usr/bin/google-chrome-original \
 
 COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 COPY sandbox-doctor   /usr/local/bin/sandbox-doctor
+COPY claude-plugins.list /usr/local/share/claude-plugins.list
 COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
 COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
