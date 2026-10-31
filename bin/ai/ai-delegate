@@ -37,10 +37,16 @@ if ! models_out=$(agy models 2>&1) || printf '%s' "$models_out" | grep -qi 'not 
 fi
 
 # `agy models` once answered while a run hung, so prove agy can take a turn.
-# The outer timeout guards against agy ignoring its own --print-timeout.
-if ! preflight_out=$(timeout 16s agy -p "Reply with exactly the word OK and nothing else." --model "$model" \
-        --print-timeout 15s --disable-slash-commands 2>&1) || ! printf '%s' "$preflight_out" | grep -qw 'OK'; then
+# The outer timeout guards against agy ignoring its own --print-timeout; -k kills it if it ignores SIGTERM.
+preflight_rc=0
+preflight_out=$(timeout -k 5s 16s agy -p "Reply with exactly the word OK and nothing else." --model "$model" \
+    --print-timeout 15s --disable-slash-commands 2>&1) || preflight_rc=$?
+if [ "$preflight_rc" -eq 124 ] || [ "$preflight_rc" -eq 137 ]; then
     echo "agy did not answer the preflight within 15 seconds; use the Claude subagent" >&2
+    exit 3
+elif [ "$preflight_rc" -ne 0 ] || ! printf '%s' "$preflight_out" | grep -qw 'OK'; then
+    last=$(printf '%s\n' "$preflight_out" | awk 'NF {l=$0} END {print l}')
+    echo "agy failed the preflight (exit $preflight_rc)${last:+: $last}; use the Claude subagent" >&2
     exit 3
 fi
 
