@@ -19,7 +19,12 @@ for a in "$@"; do
     prev="$a"
 done
 if [ "$prompt" = "Reply with exactly the word OK and nothing else." ]; then
-    case "${STUB_PREFLIGHT:-}" in hang) sleep 60; exit 0 ;; wrong) echo "Hello"; exit 0 ;; esac
+    case "${STUB_PREFLIGHT:-}" in
+        hang) sleep 60; exit 0 ;;
+        stuck) trap '' TERM; while :; do sleep 1; done ;;
+        wrong) echo "Hello"; exit 0 ;;
+        error) echo "Error: model not found: custom-model" >&2; exit 1 ;;
+    esac
     echo "OK"; exit 0
 fi
 printf '%s\n' "$@" > "$STUB_DIR/argv"
@@ -92,15 +97,24 @@ STUB_SIGNED_OUT=1 "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
 assert_eq       "not signed in exits 3"   "$rc" '3'
 assert_contains "not signed in message"   "$(cat "$tmp/e")" 'agy not signed in; use the Claude subagent'
 
-preflight_msg='agy did not answer the preflight within 15 seconds; use the Claude subagent'
+timeout_msg='agy did not answer the preflight within 15 seconds; use the Claude subagent'
 t0=$(date +%s)
 STUB_PREFLIGHT=hang "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
 assert_eq       "hung preflight exits 3"  "$rc" '3'
-assert_contains "hung preflight message"  "$(cat "$tmp/e")" "$preflight_msg"
-assert_eq       "hung preflight cut within 20 s" "$(( $(date +%s) - t0 < 20 ))" '1'
+assert_contains "hung preflight message"  "$(cat "$tmp/e")" "$timeout_msg"
+assert_eq       "hung preflight cut within 25 s" "$(( $(date +%s) - t0 < 25 ))" '1'
+t0=$(date +%s)
+STUB_PREFLIGHT=stuck "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
+assert_eq       "preflight ignoring SIGTERM exits 3" "$rc" '3'
+assert_contains "preflight ignoring SIGTERM message" "$(cat "$tmp/e")" "$timeout_msg"
+assert_eq       "preflight ignoring SIGTERM killed within 25 s" "$(( $(date +%s) - t0 < 25 ))" '1'
 STUB_PREFLIGHT=wrong "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
 assert_eq       "preflight without OK exits 3" "$rc" '3'
-assert_contains "preflight without OK message" "$(cat "$tmp/e")" "$preflight_msg"
+assert_contains "preflight without OK message" "$(cat "$tmp/e")" 'agy failed the preflight (exit 0): Hello; use the Claude subagent'
+STUB_PREFLIGHT=error "$DELEGATE" scout "$tmp/task.md" --model custom-model >"$tmp/o" 2>"$tmp/e"; rc=$?
+assert_eq       "failed preflight exits 3" "$rc" '3'
+assert_contains "failed preflight quotes agy" "$(cat "$tmp/e")" 'agy failed the preflight (exit 1): Error: model not found: custom-model; use the Claude subagent'
+case "$(cat "$tmp/e")" in *'within 15 seconds'*) _fail "failed preflight is not called a timeout" "timeout message";; *) TESTS_RUN=$((TESTS_RUN+1)); _pass "failed preflight is not called a timeout";; esac
 
 "$DELEGATE" writer "$tmp/task.md" >/dev/null 2>"$tmp/e"; rc=$?
 assert_eq       "missing role exits 2"    "$rc" '2'
