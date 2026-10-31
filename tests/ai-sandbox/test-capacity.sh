@@ -72,6 +72,21 @@ out=$(cd "$proj" && DOCKER_STUB_PS=$'aaa-agent\nbbb-agent\nccc-agent' DOCKER_STU
       bash "$helper/ai-sandbox" true 2>&1); rc=$?
 assert_eq       "the sandbox's own .env size is what counts" "$rc" 0
 assert_contains "a smaller sandbox fits beside them"         "$(stub_docker_log)" ' up -d'
+# A hand-edited size that is not a whole number of GB counts as the default,
+# with one warning naming the file, rather than breaking the arithmetic.
+: > "$DOCKER_STUB_LOG"
+sed -i '/^SANDBOX_MEMORY_GB=/d' "$AI_SANDBOX_ROOT/$name/.env"
+printf 'SANDBOX_MEMORY_GB=abc\n' >> "$AI_SANDBOX_ROOT/$name/.env"
+out=$(cd "$proj" && DOCKER_STUB_PS=$'aaa-agent\nbbb-agent\nccc-agent' DOCKER_STUB_MEMORY="$mem" \
+      bash "$helper/ai-sandbox" true 2>&1); rc=$?
+assert_ne       "an invalid SANDBOX_MEMORY_GB counts as 6 GB"     "$rc" 0
+assert_contains "the invalid size is named with its file"         "$out" "SANDBOX_MEMORY_GB is 'abc' in $AI_SANDBOX_ROOT/$name/.env, not a whole number of GB; counting 6 GB."
+assert_contains "and the refusal counts 6 GB"                     "$out" "Cannot start $name (6 GB): 15 GB of the 18 GB memory budget is in use."
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$out" in
+    *'arithmetic'*|*'syntax error'*) _fail "no arithmetic error on an invalid size" "$out" ;;
+    *)                               _pass "no arithmetic error on an invalid size" ;;
+esac
 # A sandbox created before the key existed is what its compose file says: 6 GB.
 : > "$DOCKER_STUB_LOG"
 sed -i '/^SANDBOX_MEMORY_GB=/d' "$AI_SANDBOX_ROOT/$name/.env"

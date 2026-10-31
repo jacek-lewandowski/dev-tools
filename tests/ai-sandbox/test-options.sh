@@ -29,6 +29,17 @@ assert_contains "memory is sticky"               "$(envfile)" 'SANDBOX_MEMORY_GB
 assert_contains "a bare re-run says what it kept" "$(cat "$tmp/out")" 'keeping 8 GB of memory (pass --memory=... to change it)'
 run --display=none --no-start --memory=6 "$proj"
 assert_contains "--memory=6 changes it" "$(envfile)" 'SANDBOX_MEMORY_GB=6'
+# A hand-edited size that is not a whole number of GB is replaced by the
+# default, with the same one-line warning the start scripts print, not kept.
+sed -i 's/^SANDBOX_MEMORY_GB=.*/SANDBOX_MEMORY_GB=abc/' "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent/.env"
+run --display=none --no-start "$proj"
+assert_contains "an invalid remembered size falls back to 6" "$(envfile)" 'SANDBOX_MEMORY_GB=6'
+assert_contains "and is named with its file"                 "$(cat "$tmp/out")" "SANDBOX_MEMORY_GB is 'abc' in $AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent/.env, not a whole number of GB; counting 6 GB."
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$(cat "$tmp/out")" in
+    *'keeping abc'*) _fail "an invalid size is not reported as kept" "$(cat "$tmp/out")" ;;
+    *)               _pass "an invalid size is not reported as kept" ;;
+esac
 for bad in 0 '' 6g; do
     bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory="$bad" "$proj" \
         >"$tmp/bad" 2>&1 && rc=0 || rc=$?

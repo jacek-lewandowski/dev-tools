@@ -284,11 +284,6 @@ case "$DISPLAY_MODE" in
     auto|wayland|xpra|nested|host|none) ;;
     *) echo "Invalid --display=$DISPLAY_MODE" >&2; exit 2 ;;
 esac
-if [ "$MEMORY_GB_EXPLICIT" = "yes" ]; then
-    case "$MEMORY_GB" in
-        ''|*[!0-9]*|0*) echo "Invalid --memory=$MEMORY_GB: a whole number of GB" >&2; exit 2 ;;
-    esac
-fi
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -348,6 +343,12 @@ DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 # can never compute a different id for the same project.
 # shellcheck source=bin/ai/ai-sandbox-lib.sh
 . "$SCRIPT_DIR/ai-sandbox-lib.sh"
+
+# Checked here, not with the other options above, because the rule for a
+# memory size lives in the lib.
+if [ "$MEMORY_GB_EXPLICIT" = "yes" ] && ! ai_sandbox_whole_gb "$MEMORY_GB"; then
+    echo "Invalid --memory=$MEMORY_GB: a whole number of GB" >&2; exit 2
+fi
 
 # The host's memory budget gates every run, --no-start included, before
 # anything is written: a host without one learns what to write first.
@@ -499,16 +500,17 @@ fi
 # ---------------------------------------------------------------------------
 
 # The size chosen once stays chosen, like the options above; a sandbox created
-# before the key existed, or a fresh one, gets the default. See the comment on
-# the resource limits at the top of this script.
+# before the key existed, or a fresh one, gets the default, and so does a
+# hand-edited size the lib rejects (it warns, like the start scripts do). See
+# the comment on the resource limits at the top of this script.
 if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
-    STORED_MEMORY=""
-    [ -f "$ENV_FILE" ] && STORED_MEMORY=$(sed -n 's/^SANDBOX_MEMORY_GB=//p' "$ENV_FILE" | tail -n 1)
-    case "$STORED_MEMORY" in
-        ''|*[!0-9]*|0*) MEMORY_GB=6 ;;
-        *) MEMORY_GB=$STORED_MEMORY; log "keeping $MEMORY_GB GB of memory (pass --memory=... to change it)" ;;
-    esac
-    unset STORED_MEMORY
+    MEMORY_GB=6
+    if [ -f "$ENV_FILE" ]; then
+        STORED_MEMORY=$(ai_sandbox_env_value "$SANDBOX_DIR" SANDBOX_MEMORY_GB)
+        MEMORY_GB=$(ai_sandbox_memory_gb "$SANDBOX_DIR")
+        [ "$STORED_MEMORY" != "$MEMORY_GB" ] || log "keeping $MEMORY_GB GB of memory (pass --memory=... to change it)"
+        unset STORED_MEMORY
+    fi
 fi
 readonly MEMORY_GB
 readonly MEMORY_LIMIT="${MEMORY_GB}g"
@@ -2651,10 +2653,12 @@ rsync -a --delete "$SCRIPT_DIR/knowledge-seed/" "$AI_SANDBOX_ROOT/bin/knowledge-
 # where the repository lives. Only this script's own line is replaced: the
 # file also holds the user's hand-written AI_SANDBOX_MEMORY_BUDGET_GB. Written
 # beside the file and moved into place, so a concurrent helper reading or
-# sourcing it never sees it truncated.
+# sourcing it never sees it truncated. awk, not sed: a hand-written last line
+# may lack its newline, and awk terminates every line it keeps, so the new
+# line never gets glued onto the budget.
 CONFIG_TMP=$(mktemp "$AI_SANDBOX_CONFIG.XXXXXX")
 {
-    [ ! -f "$AI_SANDBOX_CONFIG" ] || sed '/^DEV_TOOLS_DIR=/d' "$AI_SANDBOX_CONFIG"
+    [ ! -f "$AI_SANDBOX_CONFIG" ] || awk '!/^DEV_TOOLS_DIR=/' "$AI_SANDBOX_CONFIG"
     printf 'DEV_TOOLS_DIR=%s\n' "$DEV_TOOLS_DIR"
 } > "$CONFIG_TMP"
 chmod 0644 "$CONFIG_TMP"
