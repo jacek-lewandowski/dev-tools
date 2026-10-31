@@ -98,7 +98,7 @@ DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
-WITH_AUDIO="no"         # host sound socket and devices, microphone included
+WITH_AUDIO="yes"        # host sound socket and devices, microphone included
 WITH_AUDIO_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
@@ -145,10 +145,10 @@ Options:
                    per sandbox.
   --no-docker      Undo a remembered --with-docker.
   --audio          Share the host's PulseAudio/PipeWire socket and ALSA devices
-                   with the sandbox. Off by default: the socket carries capture
-                   as well as playback, so anything in the sandbox could record
-                   from your microphone. Remembered.
-  --no-audio       Undo a remembered --audio.
+                   with the sandbox. On by default; note that the socket carries
+                   capture as well as playback, so anything in the sandbox can
+                   record from your microphone. Remembered.
+  --no-audio       Keep the host's sound out of the sandbox. Remembered.
   --rebuild        Force a no-cache rebuild of the image. That image is
                    shared by every project, so other sandboxes pick up the new
                    one on their next start.
@@ -482,7 +482,7 @@ if [ "$WITH_AUDIO_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_AUDIO=$(sed -n 's/^SANDBOX_WITH_AUDIO=//p' "$ENV_FILE" | tail -n 1)
     case "$STORED_AUDIO" in
         1) WITH_AUDIO="yes"; log "keeping host audio (pass --no-audio to drop it)" ;;
-        0) WITH_AUDIO="no" ;;
+        0) WITH_AUDIO="no";  log "keeping host audio off (pass --audio to share it)" ;;
     esac
 fi
 
@@ -731,18 +731,18 @@ fi
 # Audio
 # ---------------------------------------------------------------------------
 
-# Opt-in only. The socket carries capture as well as playback, and neither
-# PulseAudio nor PipeWire's compatibility socket can restrict one client to
-# playback, so sharing it is sharing the microphone.
+# On by default, --no-audio turns it off. The socket carries capture as well
+# as playback, and neither PulseAudio nor PipeWire's compatibility socket can
+# restrict one client to playback, so sharing it is sharing the microphone.
 PULSE_SOCKET_HOST="${XDG_RUNTIME_DIR:-/run/user/$HOST_UID}/pulse/native"
 if [ "$WITH_AUDIO" != "yes" ]; then
-    log "Audio: not shared (pass --audio to share the host's sound, microphone included)."
+    log "Audio: not shared (--no-audio; pass --audio to share the host's sound, microphone included)."
 elif [ -S "$PULSE_SOCKET_HOST" ]; then
     add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
     add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
-    log "Audio: PulseAudio/PipeWire socket shared (--audio)."
+    log "Audio: PulseAudio/PipeWire socket shared, microphone included (pass --no-audio to drop it)."
 else
-    warn "--audio, but there is no PulseAudio/PipeWire socket at $PULSE_SOCKET_HOST."
+    warn "Audio is on, but there is no PulseAudio/PipeWire socket at $PULSE_SOCKET_HOST (pass --no-audio to silence this)."
 fi
 
 # ---------------------------------------------------------------------------
