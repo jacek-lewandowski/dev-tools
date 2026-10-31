@@ -121,9 +121,9 @@ assert_contains "the host's zoneinfo file is mounted read-only, symlink resolved
     "$compose" "- \"$zi/Warsaw:/etc/localtime:ro\""
 assert_contains "the shared brain states the zone"          "$(cat "$HOME/.gemini/GEMINI.md")" "host's timezone (TZ=Europe/Warsaw)"
 assert_contains "the image installs tzdata"                 "$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")" ' tzdata'
-# The "Ready" summary (zone, and the one-time --rebuild for tzdata) is printed
-# only after a build and start, which --no-start never reaches; the log line of
-# the timezone step is what a --no-start run shows.
+# The "Ready" summary (with its Timezone line) is printed only after a build
+# and start, which --no-start never reaches; the log line of the timezone step
+# is what a --no-start run shows.
 assert_contains "the log names the zone and the file"       "$(cat "$tmp/out.tz")" "Timezone: Europe/Warsaw (TZ), zoneinfo mounted read-only from $zi/Warsaw"
 assert_eq       "the zone is not remembered in .env"        "$(grep -c 'TZ=' "$dir/.env")" '0'
 # 2. timedatectl fails (no systemd): /etc/timezone names the zone.

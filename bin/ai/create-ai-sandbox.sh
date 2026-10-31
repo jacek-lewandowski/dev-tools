@@ -811,8 +811,10 @@ LOCALTIME_HOST=$(readlink -f "$HOST_ETC_DIR/localtime" 2>/dev/null || true)
 if [ -n "$LOCALTIME_HOST" ] && [ -f "$LOCALTIME_HOST" ]; then
     add_vol "\"${LOCALTIME_HOST}:/etc/localtime:ro\""
     log "Timezone: $HOST_TZ (TZ), zoneinfo mounted read-only from $LOCALTIME_HOST"
+    TZ_SUMMARY="$HOST_TZ (the host's, by TZ and /etc/localtime)"
 else
     warn "No zoneinfo file behind $HOST_ETC_DIR/localtime: /etc/localtime is not mounted, the sandbox relies on TZ=$HOST_TZ alone."
+    TZ_SUMMARY="$HOST_TZ (the host's, by TZ)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -2833,8 +2835,7 @@ cat <<SUMMARY
   Rootless Docker:    $WITH_DOCKER
   Memory limit:       $MEMORY_GB GB RAM, no swap (/dev/shm $SHM_SIZE, counted against it; --memory=GB changes it)
   CPU limit:          $CPUSET_WANT core(s) for $MEMORY_GB GB: host cores $CPUSET (nproc inside agrees)
-  Timezone:           $HOST_TZ (the host's, by TZ and /etc/localtime; an image built before
-                      tzdata was added needs one 'create-ai-sandbox.sh --rebuild' to resolve TZ)
+  Timezone:           $TZ_SUMMARY
 SUMMARY
 
 case "$DISPLAY_MODE" in
