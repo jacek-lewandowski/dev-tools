@@ -47,18 +47,21 @@ readonly -a CLAUDE_PLUGINS=(
 
 # Resource limits for the container. Docker imposes none by default, so a
 # runaway build or an Electron leak can take the whole host down with it.
-#   MEMORY_LIMIT      RAM the sandbox may use.
+#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 6,
+#                     remembered per sandbox (SANDBOX_MEMORY_GB in .env).
+#                     MEMORY_LIMIT is the same number in Docker's notation.
 #   MEMORY_SWAP_LIMIT RAM+swap ceiling. Equal to MEMORY_LIMIT means the
-#                     container gets no swap, so the limit is a real 6 GB rather
-#                     than 6 GB of RAM plus the 2x swap Docker would otherwise
-#                     allow -- which on a host whose swap is already full would
-#                     buy nothing but thrashing.
+#                     container gets no swap, so the limit is a real MEMORY_GB
+#                     rather than that much RAM plus the 2x swap Docker would
+#                     otherwise allow -- which on a host whose swap is already
+#                     full would buy nothing but thrashing.
 #   SHM_SIZE          /dev/shm is a tmpfs inside the container's own cgroup, so
 #                     its pages count against MEMORY_LIMIT. Keeping it well
 #                     under the limit stops one large shm allocation from
 #                     OOM-killing the sandbox by itself.
-#   CPU_LIMIT         Derived: half as many cores as GB of RAM, so a 6g sandbox
-#                     sees three. Applied as a cpuset rather than a CPU quota,
+#   CPU_LIMIT         Derived: half as many cores as GB of RAM, rounded up and
+#                     never fewer than one, so a sandbox of 6 GB sees three.
+#                     Applied as a cpuset rather than a CPU quota,
 #                     because a quota is invisible to nproc, make -j, cargo,
 #                     Node and every other tool that sizes its parallelism by
 #                     core count: they would see the host's cores and build
@@ -66,29 +69,17 @@ readonly -a CLAUDE_PLUGINS=(
 #                     container can see, so nproc and the cap agree. The cores
 #                     themselves are chosen to spread sandboxes over the host
 #                     (see "CPU set" below).
-# How many sandboxes may run at once is AI_SANDBOX_MAX_RUNNING in
-# ai-sandbox-lib.sh, sized to these limits.
+# The three memory values are set under "Memory" below, once the remembered
+# size is known. How much RAM all running sandboxes may use together is
+# AI_SANDBOX_MEMORY_BUDGET_GB in ~/.ai-sandbox/config, checked by
+# ai_sandbox_check_capacity in ai-sandbox-lib.sh before every start.
 # The host's IntelliJ IDEA installation. Mounted read-only when it exists, so
 # the sandbox can run the IDE without being able to modify or update it, and
 # skipped entirely when it does not. Override for a different install path:
 #   IDEA_HOST_DIR=/opt/idea-2025.1 create-ai-sandbox.sh
 readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
 
-readonly MEMORY_LIMIT='6g'
-readonly MEMORY_SWAP_LIMIT='6g'
 readonly SHM_SIZE='1gb'
-
-mem_limit_gb() {
-    local n=${1%%[!0-9]*} unit=${1##*[0-9]}
-    case "$unit" in
-        g|G|gb|GB) echo "$n" ;;
-        m|M|mb|MB) echo $(( n / 1024 )) ;;
-        *) echo "MEMORY_LIMIT '$1' must end in g or m" >&2; exit 1 ;;
-    esac
-}
-CPU_LIMIT=$(( $(mem_limit_gb "$MEMORY_LIMIT") / 2 ))
-[ "$CPU_LIMIT" -ge 1 ] || CPU_LIMIT=1
-readonly CPU_LIMIT
 
 # ---------------------------------------------------------------------------
 # Options
@@ -100,6 +91,8 @@ WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
 WITH_AUDIO="yes"        # host sound socket and devices, microphone included
 WITH_AUDIO_EXPLICIT="no"
+MEMORY_GB=""            # --memory=GB; the remembered size, else 6, when empty
+MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
 PROJECT_ARG=""
@@ -149,6 +142,9 @@ Options:
                    capture as well as playback, so anything in the sandbox can
                    record from your microphone. Remembered.
   --no-audio       Keep the host's sound out of the sandbox. Remembered.
+  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 6.
+                   Remembered. The sandbox gets half as many CPU cores as GB,
+                   rounded up (see Resources below).
   --rebuild        Force a no-cache rebuild of the image. That image is
                    shared by every project, so other sandboxes pick up the new
                    one on their next start.
@@ -233,14 +229,16 @@ directory and are discarded on every start; nothing is ever written back to
 the host. 'sandbox-doctor' reports each mount; 'ai-sandbox-gc' reclaims
 leftovers from a reset it could not delete outright.
 
-Resources: the container is capped at 6 GB of RAM with no swap, and /dev/shm at
-1 GB, which counts against that cap. Adjust MEMORY_LIMIT, MEMORY_SWAP_LIMIT and
-SHM_SIZE at the top of this script; the cap applies from the next start. CPUs
-follow the memory: half as many cores as GB of RAM, pinned as a cpuset so that
+Resources: the container is capped at --memory GB of RAM (default 6) with no
+swap, and /dev/shm at 1 GB, which counts against that cap; a changed size
+applies from the next start. CPUs follow the memory: half as many cores as GB,
+rounded up and never more than the host has, pinned as a cpuset so that
 'nproc' inside reports the same number. The cores are chosen to spread the
-sandboxes over the host and remembered in the sandbox's .env. At most three
-sandboxes run at once (AI_SANDBOX_MAX_RUNNING in ai-sandbox-lib.sh): starting a
-fourth is refused, with the running ones listed, until one is stopped.
+sandboxes over the host and remembered in the sandbox's .env. All running
+sandboxes together may use at most AI_SANDBOX_MEMORY_BUDGET_GB, which you write
+by hand into ~/.ai-sandbox/config (no default; nothing is created or started
+until it is set): a start that would exceed it is refused, with the running
+sandboxes and their sizes listed, until one is stopped or the budget is raised.
 A sandbox also yields to the host: lower CPU shares, a higher OOM score so it
 is killed first under host memory pressure, and at most 4096 processes.
 USAGE
@@ -253,6 +251,7 @@ for arg in "$@"; do
         --no-docker)   WITH_DOCKER="no";  WITH_DOCKER_EXPLICIT="yes" ;;
         --audio)       WITH_AUDIO="yes"; WITH_AUDIO_EXPLICIT="yes" ;;
         --no-audio)    WITH_AUDIO="no";  WITH_AUDIO_EXPLICIT="yes" ;;
+        --memory=*)   MEMORY_GB="${arg#*=}"; MEMORY_GB_EXPLICIT="yes" ;;
         --rebuild)    FORCE_REBUILD="yes" ;;
         --no-start)   NO_START="yes" ;;
         -h|--help)    usage; exit 0 ;;
@@ -285,6 +284,11 @@ case "$DISPLAY_MODE" in
     auto|wayland|xpra|nested|host|none) ;;
     *) echo "Invalid --display=$DISPLAY_MODE" >&2; exit 2 ;;
 esac
+if [ "$MEMORY_GB_EXPLICIT" = "yes" ]; then
+    case "$MEMORY_GB" in
+        ''|*[!0-9]*|0*) echo "Invalid --memory=$MEMORY_GB: a whole number of GB" >&2; exit 2 ;;
+    esac
+fi
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -490,6 +494,29 @@ if [ "$WITH_AUDIO_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     esac
 fi
 
+# ---------------------------------------------------------------------------
+# Memory
+# ---------------------------------------------------------------------------
+
+# The size chosen once stays chosen, like the options above; a sandbox created
+# before the key existed, or a fresh one, gets the default. See the comment on
+# the resource limits at the top of this script.
+if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
+    STORED_MEMORY=""
+    [ -f "$ENV_FILE" ] && STORED_MEMORY=$(sed -n 's/^SANDBOX_MEMORY_GB=//p' "$ENV_FILE" | tail -n 1)
+    case "$STORED_MEMORY" in
+        ''|*[!0-9]*|0*) MEMORY_GB=6 ;;
+        *) MEMORY_GB=$STORED_MEMORY; log "keeping $MEMORY_GB GB of memory (pass --memory=... to change it)" ;;
+    esac
+    unset STORED_MEMORY
+fi
+readonly MEMORY_GB
+readonly MEMORY_LIMIT="${MEMORY_GB}g"
+readonly MEMORY_SWAP_LIMIT=$MEMORY_LIMIT
+CPU_LIMIT=$(( (MEMORY_GB + 1) / 2 ))
+[ "$CPU_LIMIT" -ge 1 ] || CPU_LIMIT=1
+readonly CPU_LIMIT
+
 # The uid suffix keeps two host users sharing one Docker daemon from fighting
 # over a single tag, since the image bakes in USER_ID.
 if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
@@ -614,7 +641,7 @@ if ! cpuset_valid "$CPUSET"; then
         chosen+=("$best")
     done
     CPUSET=$(printf '%s\n' "${chosen[@]}" | sort -n | paste -sd, -)
-    log "CPU set: cores $CPUSET of the host's $HOST_CPUS (${CPU_LIMIT} = ${MEMORY_LIMIT} / 2)"
+    log "CPU set: cores $CPUSET of the host's $HOST_CPUS (${CPUSET_WANT} for ${MEMORY_GB} GB: half the GB, rounded up)"
     unset CPU_LOAD chosen other_env other_dir best c k
 fi
 unset _ids
@@ -2104,6 +2131,7 @@ PROJECT_ABS_DIR="$PROJECT_ABS_DIR" \
 DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
+MEM_GB="$MEMORY_GB" \
 python3 - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
@@ -2123,6 +2151,8 @@ managed = {
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
     "SANDBOX_CPUSET": os.environ.get("CPUSET", ""),
+    # The size the start scripts count against the host's memory budget.
+    "SANDBOX_MEMORY_GB": os.environ.get("MEM_GB", ""),
     # The build-caches stamp (D7): unconditional, so every sandbox this script
     # (re)creates gets the overlay caches; a sandbox not yet recreated has no
     # stamp and every caches function is a no-op for it (I8).
@@ -2166,7 +2196,7 @@ services:
     shm_size: '${SHM_SIZE}'
     mem_limit: "${MEMORY_LIMIT}"
     memswap_limit: "${MEMORY_SWAP_LIMIT}"
-    # Half as many cores as GB of RAM, as a cpuset so that nproc agrees.
+    # Half as many cores as GB of RAM, rounded up, as a cpuset so that nproc agrees.
     cpuset: "${CPUSET}"
     # The host wins CPU under contention; no cap while it is idle.
     cpu_shares: 256
@@ -2672,7 +2702,7 @@ if [ "$NO_START" = "yes" ]; then
 fi
 
 # Before the image build: a full host should cost a message, not a build.
-ai_sandbox_check_capacity "$CONTAINER_NAME" "$(mem_limit_gb "$MEMORY_LIMIT")" || exit 1
+ai_sandbox_check_capacity "$CONTAINER_NAME" "$MEMORY_GB" || exit 1
 
 # The display must exist before the container starts: Docker creates any missing
 # bind-mount source itself, as root, which would then block Xephyr from binding.
@@ -2759,8 +2789,8 @@ cat <<SUMMARY
   Sandbox files:      $SANDBOX_DIR
   Display mode:       $DISPLAY_MODE
   Rootless Docker:    $WITH_DOCKER
-  Memory limit:       $MEMORY_LIMIT RAM, no swap (/dev/shm $SHM_SIZE, counted against it)
-  CPU limit:          $CPUSET_WANT core(s): host cores $CPUSET (nproc inside agrees)
+  Memory limit:       $MEMORY_GB GB RAM, no swap (/dev/shm $SHM_SIZE, counted against it; --memory=GB changes it)
+  CPU limit:          $CPUSET_WANT core(s) for $MEMORY_GB GB: host cores $CPUSET (nproc inside agrees)
 SUMMARY
 
 case "$DISPLAY_MODE" in

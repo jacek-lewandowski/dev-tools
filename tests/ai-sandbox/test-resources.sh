@@ -63,6 +63,34 @@ bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" 
 assert_contains "a set of the wrong size is re-allocated" "$(cat "$dir/docker-compose.yml")" "cpuset: \"$expect_first\""
 rm -rf "$dir2"
 
+# --- --memory=GB: the limit, the cores and the rules text follow the option --
+assert_contains "the default size is remembered in .env" "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=6'
+mem_create() {   # <gb>: re-create proj with --memory=<gb>, reload compose
+    bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory="$1" "$proj" >"$tmp/out.m$1" 2>&1 || true
+    compose=$(cat "$dir/docker-compose.yml")
+}
+mem_create 8
+want8=4; [ "$want8" -le "$host_cpus" ] || want8=$host_cpus
+expect8=$(seq -s, 0 $((want8 - 1)))
+assert_contains "--memory=8 caps memory at 8g"        "$compose" 'mem_limit: "8g"'
+assert_contains "--memory=8 forbids swap at 8g"       "$compose" 'memswap_limit: "8g"'
+assert_contains "the set recorded for 6 is re-allocated to ceil(8/2) cores" "$compose" "cpuset: \"$expect8\""
+assert_contains "--memory=8 is remembered in .env"    "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=8'
+assert_contains "the shared brain states the new cap" "$(cat "$HOME/.gemini/GEMINI.md")" \
+    "capped at 8g of RAM with no swap and $want8 CPU core(s)"
+mem_create 5
+assert_contains "--memory=5 caps memory at 5g"        "$compose" 'mem_limit: "5g"'
+assert_contains "--memory=5 gets ceil(5/2) cores"     "$compose" "cpuset: \"$expect_first\""
+assert_contains "--memory=5 is remembered in .env"    "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=5'
+mem_create 1
+assert_contains "--memory=1 caps memory at 1g"        "$compose" 'mem_limit: "1g"'
+assert_contains "--memory=1 gets one core"            "$compose" 'cpuset: "0"'
+assert_contains "--memory=1 is remembered in .env"    "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=1'
+assert_contains "the shared brain states one core"    "$(cat "$HOME/.gemini/GEMINI.md")" \
+    "capped at 1g of RAM with no swap and 1 CPU core(s)"
+# Back to the default for the sections below.
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory=6 "$proj" >"$tmp/out.m6" 2>&1 || true
+
 doctor="$AI_SANDBOX_ROOT/image/build/sandbox-doctor"
 assert_file "sandbox-doctor generated" "$doctor"
 assert_contains "doctor reports memory" "$(cat "$doctor")" 'status "memory"'
