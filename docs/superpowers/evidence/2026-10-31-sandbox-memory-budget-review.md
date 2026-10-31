@@ -1,0 +1,13 @@
+# Arek, reviewer 2 — brief-class diff review of 585c4a4..5dbfe89 (memory budget), round 1
+(saved by the lead from the hand-back, 2026-10-31)
+
+Ran at 5dbfe89: test-capacity 52/0, test-helpers 17/0, test-options 27/0, test-resources 47/0 (match the evidence); B9 greps empty; B10 totals read (1097 run, 3 failed = baseline delegate 54/59, tools 39); B11 read; B12 awaits the host.
+
+Important (blocking): bin/ai/create-ai-sandbox.sh config rewrite (~2621–2632, 26f797c): `sed '/^DEV_TOOLS_DIR=/d'` preserves a missing final newline, so a hand-written config whose last line lacks one gets DEV_TOOLS_DIR glued onto the budget line (`AI_SANDBOX_MEMORY_BUDGET_GB=18DEV_TOOLS_DIR=/new`); every start is then refused as "not a whole number of GB", DEV_TOOLS_DIR no longer matches, and a later create cannot heal it. Reachable by an editor that strips the final newline, printf, echo -n, or a copied config. Resolve: terminate kept lines unconditionally (awk '!/^DEV_TOOLS_DIR=/' or sed -e '$a\' -e '/^DEV_TOOLS_DIR=/d') plus a test-helpers.sh case seeding the budget without a trailing newline and asserting both keys stand on their own lines after a create. Delta re-review only.
+
+Minor: ai_sandbox_memory_gb does not validate the .env value; a hand-edited non-numeric SANDBOX_MEMORY_GB makes check_capacity die on arithmetic while create treats it as 6 without the "keeping" log. create:517 `[ "$CPU_LIMIT" -ge 1 ]` unreachable after validation; harmless.
+
+Checked and fine: contract block verbatim; three callers read the budget before any write; over-budget check sums docker ps only, lists name (N GB)/(no limit), legacy = 6; CPU_LIMIT derived after the remembered read and before the nproc cap; --memory validation; emitted rules block interpolates the real GB and cores; temp file + mv, set -e safe; the deviation (config rewrite in commit 1) correctly justified and recorded; 11 files, all in scope.
+
+## Round 2 (delta f0da926): not blocked
+Re-run on f0da926: test-helpers 20/0, test-capacity 56/0, test-options 30/0, matching the recorded green lines; the recorded red runs reproduce the glue and the silent gb=abc → 0 over-budget start. awk rewrite probed: a file with no final newline, two DEV_TOOLS_DIR lines and an unrelated key comes out newline-terminated with both old lines removed; an empty file yields the one new line. ai_sandbox_whole_gb keeps the old --memory pattern (`''|*[!0-9]*|0*`), defined once and used by the budget, the remembered value and --memory. Moving the --memory check below the lib source changes no write ordering; a usage error still exits 2 before the budget read. The review of the brief diff closes with f0da926; B12 remains the host's.
