@@ -1,7 +1,7 @@
 # Task classes: one class per task, parameters per class
 
 Date: 2026-10-31
-Status: approved 2026-10-31 (plan review by Fiona, two rounds; every closed question answered as recommended)
+Status: approved 2026-10-31 (plan review by Fiona, two rounds; every closed question answered as recommended); amendment 1 after the phase review, approved and landed (`e777927`); amendment 2 after the whole-rule-set review, pending the user's approval
 Inputs: `.tmp/process-report-synthesis.md` and the four reports behind it
 (`process-report1.md` amen-app, `process-repor2t.md` omega-psir,
 `process-report3.md` analogiesio-assets, `process-report4.md` nieznajomi,
@@ -121,6 +121,53 @@ the integrator does):
   P1, I1–I2, R1–R2; discharges O3, O4.
 - T3 `decisions.md`: prepend D1–D10 under "## Entries"; run `ai-knowledge
   render`; discharges O5, O6. One commit per file.
+- T4 (amendment 1) `roles/planner.md`, `roles/reviewer.md`,
+  `roles/implementer.md`, `decisions.md`: apply P2, R3, R4, R5, I3 and
+  prepend D11; run `ai-knowledge render`; discharges O8, O9 and re-evidences
+  O6 and O7.
+- T5 (amendment 2) `rules/global.md`, `roles/planner.md`,
+  `roles/reviewer.md`, `roles/implementer.md`, `decisions.md`: first widen
+  `apply_blocks.py`'s heading pattern from `R\d` to `R\d+` (R10 and R11 are
+  otherwise not found) and re-run its check at `e777927` for every
+  amendment-2 block; then apply G14–G20, P3–P6, R6–R11, I4–I5 and prepend
+  D12; run `ai-knowledge render`; discharges O1, O10, O11 and re-evidences O6
+  and O7.
+
+Amendment 1 (2026-10-31, after phase review round 1 at `a4942d5`,
+`.tmp/task-classes/phase-review-1-fiona.md`): the landed text contradicted
+itself on who runs the phase gate. planner.md "Obligations" ("the phase review
+runs them itself") and the new reviewer bullet and Phase-diff row ("a
+phase-level obligation you run yourself") had the reviewer run the gate
+before accepting, while G10 and G13 have it run once after acceptance by the
+implementer the lead names or a runner. P2, R3 and R4 carve the gate out of
+what the phase review runs; R5 and I3 fold in the review's two lesser notes
+(the blocking-finding path for a small diff; the mechanical config carve-out
+in the implementer's Small row). `rules/global.md` is untouched, so the word
+ledger and the simulation stand at 4389.
+
+Amendment 2 (2026-10-31, after the whole-rule-set review at `e777927`,
+`.tmp/task-classes/whole-review-marta.md`). Two contradictions in the
+contract text: A, §5 made a lesser fix both "fixed without a re-review" and
+"a commit added later" that gets one, and had dropped "or reported to the
+user" (G14); B, suites outside CI sat inside the gate in §4 but beside it in
+the planner's Phase row and Obligations and the reviewer's bullet and
+Phase-diff row (P3, P4, R6, R7). Taken with them, one clause each: C the
+refactor pins' result run is the gate on the result, which for a phase follows
+the review (I4, R11); D brief writing and
+brief and spec reviews on the cheaper tier, a lifetime clause for the brief
+and the brief writers in the planner name pool (G15, G16, G20); E "recorded where the task is stated" (G15); F the gate runs once
+per accepted tree (G17); G a spike is a task of the phase being planned, which
+gives it its class, and no review of its own (P5); H the re-run rule lives in the reviewer
+role with its two exceptions named, and §4 defers to it (G18, R8, R9, R10);
+L second half, the lead commits the evidence files with the reports (G19,
+I5); and the planner's stop-and-say sentence for a brief that turns out to be
+design work or a contract change (P6). Left out: I (roles/README.md "pure
+prose" waits for the host's render, O6); J and K (duplicated sentences and
+pre-existing rationale, cosmetic, a later cleanup); L first half
+(skills/propose-rule/SKILL.md step 3 names three of seven roles: outside this
+spec, noted for the integrator). `rules/global.md` changes in six blocks; the
+amendment-2 ledger names what pays for each addition, and the simulation
+stands at 4394.
 
 Obligations:
 
@@ -142,7 +189,37 @@ Obligations:
 - O7 (read, phase-level): the class bullet and the three tables agree on
   every parameter (gate, re-runs, rounds, second reviewer), and each accepted
   candidate's sentence stands in the blocks its table row names; the phase
-  review reads them side by side.
+  review reads them side by side. After amendment 1: planner.md "Obligations",
+  the reviewer bullet, the Phase-diff row, G10 and G13 all say the gate runs
+  once after acceptance, by the implementer the lead names or a runner.
+- O8 (executable, amendment 1 residue): `grep -c -F "the phase review runs
+  them itself." roles/planner.md` → 0; `grep -c -F "a phase-level obligation
+  you run yourself" roles/reviewer.md` → 0; `grep -c -F "search) yourself; a
+  recorded check" roles/reviewer.md` → 0; `grep -c -F "One; lesser findings
+  never reopen it." roles/reviewer.md` → 0; `grep -c -F "| Where behaviour
+  changes. |" roles/implementer.md` → 0.
+- O9 (read, amendment 1 contract): each new text of P2, R3, R4, R5 and I3
+  is present once in its file (`grep -c -F` on its first line → 1), and D11
+  sits directly under "## Entries" above D1.
+- O10 (executable, amendment 2 residue): `grep -c -F "fixed without a
+  re-review" rules/global.md` → 0; `grep -c -F "recorded in its brief or
+  plan" rules/global.md` → 0; `grep -c -F "to avoid write conflicts"
+  rules/global.md` → 0; `grep -c -F "the tree the phase review accepted" rules/global.md` → 0;
+  `grep -c -F "re-runs a check only when its recorded" rules/global.md` → 0;
+  `grep -c -F "commits the spec, the plans and the reports" rules/global.md`
+  → 0; `grep -c -F "phase planners share the pool" rules/global.md` → 0; `grep -c -F "The gate, every suite outside CI and" roles/planner.md`
+  → 0; `grep -c -F "except the gate, which runs once" roles/planner.md` → 0;
+  `grep -c -F "as a task of its own" roles/planner.md` → 0; `grep -c -F
+  "other than the gate you run yourself" roles/reviewer.md` → 0; `grep -c -F
+  "other than the gate (residue" roles/reviewer.md` → 0; `grep -c -F "base
+  run and result run." roles/reviewer.md` → 0; `grep -c -F "the
+  plans and the reports." roles/implementer.md` → 0.
+- O11 (read, amendment 2 contract): each new text of G14–G20, P3–P6, R6–R11
+  and I4–I5 is present once in its file (`grep -c -F` on its first line → 1),
+  and D12 sits directly under "## Entries" above D11; O7 re-read: §4, §5, the
+  planner's Phase row and Obligations and the reviewer's bullet and Phase-diff
+  row agree that the suites outside CI are part of the gate and that a lesser
+  fix gets no re-review.
 
 Impact set: static references: none, rule text. Names in strings: the removed
 sentences, searched in O4 (skills → 0 before the change). Outside the
@@ -951,4 +1028,611 @@ Prepended under "## Entries", in this order, in the file's format.
   (G6/T3, G9 plan, G10 plan) are not known to be re-reviews of lesser fixes;
   the reports do not say whether the object changed between rounds. The rationale sentence "a review per task
   multiplies context loads without finding more" moved here from global.md.
+```
+
+## Appendix A, amendment 1: contract blocks P2, R3, R4, R5, I3
+
+Old texts are copied from `~/knowledge` at `a4942d5` (the tree after T1–T3); each block is one whole-line replacement.
+
+### P2 `roles/planner.md`
+
+Anchor: "## Obligations", the three lines from "evidenced by the task the plan marks as completing it." to "the phase review runs them itself."; the gate is carved out of what the phase review runs.
+
+Old (at `a4942d5`):
+
+```markdown
+evidenced by the task the plan marks as completing it. Residue obligations and
+any obligation that only the finished phase can satisfy are phase-level: the
+plan marks them so, no task cites them, and the phase review runs them itself.
+```
+
+New:
+
+```markdown
+evidenced by the task the plan marks as completing it. Residue obligations and
+any obligation that only the finished phase can satisfy are phase-level: the
+plan marks them so, no task cites them, and the phase review runs them itself,
+except the gate, which runs once after the review accepts the tree, by the
+implementer the lead names or else by a runner.
+```
+
+### R3 `roles/reviewer.md`
+
+Anchor: the first bullet (R2 as landed), its last three lines from "a finding; a phase-level obligation" to "does not replace the reading."
+
+Old (at `a4942d5`):
+
+```markdown
+  a finding; a phase-level obligation you run yourself and record in your
+  report. Then read the hand-edit commits in full; the evidence tells you
+  where to look, it does not replace the reading.
+```
+
+New:
+
+```markdown
+  a finding; a phase-level obligation other than the gate you run yourself and
+  record in your report, and the gate runs after you accept, by the implementer
+  the lead names or else by a runner. Then read the hand-edit commits in full;
+  the evidence tells you where to look, it does not replace the reading.
+```
+
+### R4 `roles/reviewer.md`
+
+Anchor: the class table, the row "Phase diff", whole line.
+
+Old (at `a4942d5`):
+
+```markdown
+| Phase diff | The hand-edit commits in full; every task's evidence file; the coverage check against the phase goal. | The phase-level obligations (residue searches, the `AGENT-MARK` search) yourself; a recorded check only when its output does not settle the claim; no mutants, coverage scripts or renders of your own for a claim the evidence settles. | As the brief; at most two rounds. |
+```
+
+New:
+
+```markdown
+| Phase diff | The hand-edit commits in full; every task's evidence file; the coverage check against the phase goal. | The phase-level obligations other than the gate (residue searches, the `AGENT-MARK` search) yourself, the gate running after acceptance; a recorded check only when its output does not settle the claim; no mutants, coverage scripts or renders of your own for a claim the evidence settles. | As the brief; at most two rounds. |
+```
+
+### R5 `roles/reviewer.md`
+
+Anchor: the class table, the row "Small diff, or a branch of small changes", whole line (phase review lesser note 1).
+
+Old (at `a4942d5`):
+
+```markdown
+| Small diff, or a branch of small changes | The diff and the recorded results; the rendered or running result where the change is visible. | Nothing recorded with its output, unless the output does not settle the claim. | One; lesser findings never reopen it. |
+```
+
+New:
+
+```markdown
+| Small diff, or a branch of small changes | The diff and the recorded results; the rendered or running result where the change is visible. | Nothing recorded with its output, unless the output does not settle the claim. | One; a blocking finding gets a delta re-review, lesser findings never reopen it. |
+```
+
+### I3 `roles/implementer.md`
+
+Anchor: the class table, the row "Small", whole line (phase review lesser note 2).
+
+Old (at `a4942d5`):
+
+```markdown
+| Small | The lead's message; the evidence file at the path it names, holding the project's checks, the touched packages' unit suites, one diff showing only the intended parts changed, and one look at the result where the change is visible. | Where behaviour changes. | The project's own checks and the touched packages' unit suites once; no runner follows. | One diff review, or one review of the branch for a series of small changes. |
+```
+
+New:
+
+```markdown
+| Small | The lead's message; the evidence file at the path it names, holding the project's checks, the touched packages' unit suites, one diff showing only the intended parts changed, and one look at the result where the change is visible. | Where behaviour changes; none for a mechanical config value change. | The project's own checks and the touched packages' unit suites once, or for a mechanical config value change only the check that exercises the new value; no runner follows. | One diff review, or one review of the branch for a series of small changes; none for a mechanical config value change. |
+```
+
+## Appendix B, amendment 1: `decisions.md` entry D11
+
+Prepended under "## Entries", above D1.
+
+```markdown
+- 2026-10-31 task-classes-gate-after-acceptance integrated
+  roles/planner.md, roles/reviewer.md, roles/implementer.md: the phase review
+  of the task-classes phase found the contract text contradicting itself on
+  who runs the phase gate: planner.md "Obligations" and the new reviewer
+  bullet and Phase-diff row had the phase review run every phase-level
+  obligation itself, while global.md §4 has the gate run once after
+  acceptance by the implementer the lead names or a runner. The gate is now
+  carved out of what the phase review runs, in all three places. Folded in:
+  the Small-diff row names the delta re-review for a blocking finding, and the
+  implementer's Small row carves out the mechanical config value change (no
+  test, only the check that exercises the value, no review), as the class
+  bullet states. Amendment 1 of the spec, approved by the user.
+```
+
+## Appendix A, amendment 2: contract blocks G14–G20, P3–P6, R6–R11, I4–I5
+
+Old texts are copied from `~/knowledge` at `e777927` (the tree after T4); each occurs there once. Multi-line blocks replace whole lines; the markdown wrapping is part of the text.
+
+### Word ledger, amendment 2 (`rules/global.md`)
+
+| Block | Old words | New words |
+|---|---|---|
+| G14 | 98 | 104 |
+| G15 | 95 | 88 |
+| G16 | 35 | 39 |
+| G17 | 179 | 178 |
+| G18 | 135 | 133 |
+| G19 | 77 | 80 |
+| G20 | 14 | 16 |
+| Whole file | 4389 (at `e777927`) | 4394 |
+
+### G14 `rules/global.md`
+
+Anchor: §5, the bullet "**Review once per phase**" (finding A).
+
+Old (at `e777927`):
+
+```markdown
+- **Review once per phase**, on the whole diff of the phase, against its
+  obligations and evidence files, ending with a check that the obligations
+  cover the phase goal. A task of a phase is reviewed on its own only when it
+  is design work or changes a contract. A round with no Critical or Important
+  finding closes the review of the object as reviewed: lesser findings are
+  fixed without a re-review; blocking ones return to the implementer, and the
+  re-review reads only that delta; commits or plan text added later get a
+  review of their own delta.
+```
+
+New:
+
+```markdown
+- **Review once per phase**, on the whole diff of the phase, against its
+  obligations and evidence files, ending with a check that the obligations
+  cover the phase goal. A task of a phase is reviewed on its own only when it
+  is design work or changes a contract. A round with no Critical or Important
+  finding closes the review of the object as reviewed: lesser findings are
+  fixed, or reported to the user, without a re-review; blocking ones return to
+  the implementer, and the re-review reads only that delta; other commits or
+  plan text added later get a review of their own delta.
+```
+
+### G15 `rules/global.md`
+
+Anchor: §2, the bullet "**Decomposition.**" (findings D and E). Dropped: "and nothing else does" (said by the next clause), "to avoid write conflicts" (rationale) and "where it has one" (a table that does not exist overrides nothing).
+
+Old (at `e777927`):
+
+```markdown
+- **Decomposition.** Three or more independent modules may go to subagents; a
+  single file or component stays with one agent to avoid write conflicts.
+  Choose the model per role: implementers, phase planners, plan reviews,
+  scouts and writers on the cheaper tier, command runners on the cheapest
+  tier, spec writing and adversarial diff reviews on the stronger one. These
+  tiers are the defaults; an environment's routing table, where it has one,
+  overrides them, and nothing else does: a stronger model for one agent needs
+  the user's word for that task, recorded in its brief or plan.
+```
+
+New:
+
+```markdown
+- **Decomposition.** Three or more independent modules may go to subagents; a
+  single file or component stays with one agent. Choose the model per role:
+  implementers, phase planners, brief writing, plan, brief and spec reviews,
+  scouts and writers on the cheaper tier, command runners on the cheapest
+  tier, spec writing and adversarial diff reviews on the stronger one. These
+  tiers are the defaults; an environment's routing table overrides them; a
+  stronger model for one agent needs the user's word for that task, recorded
+  where the task is stated.
+```
+
+### G16 `rules/global.md`
+
+Anchor: §2, lifetimes, the sub-bullet "Phase planner:", followed by a new sub-bullet for the brief (finding D; its tier is in the Decomposition bullet). Dropped: "so its plans stay consistent" (rationale, in decisions 2026-10-25 obligations-evidence-and-fewer-phases) and "retired with the phase" (said by "Alive until the phase closes").
+
+Old (at `e777927`):
+
+```markdown
+  - Phase planner: one per phase, cheaper tier, fresh, given the spec, its
+    block for the phase and the deferred list. Alive until the phase closes so
+    its plans stay consistent; retired with the phase.
+```
+
+New:
+
+```markdown
+  - Phase planner: one per phase, cheaper tier, fresh, given the spec, its
+    block for the phase and the deferred list. Alive until the phase closes.
+  - Brief writer: one planner per brief, retired when the brief is approved.
+```
+
+### G17 `rules/global.md`
+
+Anchor: §4, the bullet "**Targeted tests during development; the gate once.**" (finding F).
+
+Old (at `e777927`):
+
+```markdown
+- **Targeted tests during development; the gate once.** Each class names its
+  gate: the project's own checks and the touched packages' unit suites for a
+  small change, the full suites for a brief, run by the implementer after its
+  last edit and after any fix; for a phase, the full check set, the
+  cross-package suites and every suite outside the CI pipeline, run once on
+  the tree the phase review accepted, by the implementer the lead names or
+  else by a runner. A phase task runs, as its last step, its targeted tests
+  and the full unit-test suite of every package it changed; a plan never lists
+  the gate or a suite outside CI as a per-task obligation, and a task does not
+  repeat a probe, pin or search the plan's evidence already records unless its
+  change alters the answer. The gate is one command set in which each suite
+  runs once; a runner is spawned only for what no recorded run on that tree
+  covers. "Done" and "passing" are stated only with the actual command output
+  at hand.
+```
+
+New:
+
+```markdown
+- **Targeted tests during development; the gate once.** Each class names its
+  gate: the project's own checks and the touched packages' unit suites for a
+  small change, the full suites for a brief, run by the implementer after its
+  last edit and after any fix; for a phase, the full check set, the
+  cross-package suites and every suite outside the CI pipeline, run once per
+  tree the phase review accepts, by the implementer the lead names or
+  else by a runner. A phase task runs, as its last step, its targeted tests
+  and the full unit-test suite of every package it changed; a plan never lists
+  the gate or a suite outside CI as a per-task obligation, and a task does not
+  repeat a probe, pin or search the plan's evidence already records unless its
+  change alters the answer. The gate is one command set in which each suite
+  runs once; a runner is spawned only for what no recorded run on that tree
+  covers. "Done" and "passing" are stated only with the actual command output
+  at hand.
+```
+
+### G18 `rules/global.md`
+
+Anchor: §4, the bullet "**Obligations are the proof of a phase.**" (finding H): the re-run rule is stated once, in the reviewer role, with its two exceptions.
+
+Old (at `e777927`):
+
+```markdown
+- **Obligations are the proof of a phase.** A phase plan carries a keyed list of
+  obligations, each a claim about the finished phase with the check that settles
+  it: a command with its expected result, or a file or symbol to read with the
+  property to confirm. Tasks cite the obligations they discharge instead of
+  carrying tests and acceptance criteria of their own. The implementer records
+  each discharged obligation in its task's evidence file, in the directory the
+  plan names: key, the command or the place read, the result and, once it
+  exists, the commit. The reviewer verifies from those files instead of
+  rediscovering the tree: it reads, re-runs a check only when its recorded
+  output does not settle the claim, and judges whether the evidence proves the
+  claim, not whether it is present.
+```
+
+New:
+
+```markdown
+- **Obligations are the proof of a phase.** A phase plan carries a keyed list of
+  obligations, each a claim about the finished phase with the check that settles
+  it: a command with its expected result, or a file or symbol to read with the
+  property to confirm. Tasks cite the obligations they discharge instead of
+  carrying tests and acceptance criteria of their own. The implementer records
+  each discharged obligation in its task's evidence file, in the directory the
+  plan names: key, the command or the place read, the result and, once it
+  exists, the commit. The reviewer verifies from those files instead of
+  rediscovering the tree: it reads, re-runs a recorded check only where the
+  reviewer role says so, and judges whether the evidence proves the
+  claim, not whether it is present.
+```
+
+### G19 `rules/global.md`
+
+Anchor: §2, the bullet "**The lead only stitches.**" (finding L, second half).
+
+Old (at `e777927`):
+
+```markdown
+- **The lead only stitches.** The lead session does no design, planning,
+  implementation or review itself. It spawns agents, hands them file paths,
+  relays the user's decisions, commits the spec, the plans and the reports
+  (implementers commit their own tasks), names who runs the gate and reads
+  the verdict, and writes the report. It reads reports, not code. The
+  topology is flat: the lead spawns every agent and continues it by name;
+  agents do not spawn agents.
+```
+
+New:
+
+```markdown
+- **The lead only stitches.** The lead session does no design, planning,
+  implementation or review itself. It spawns agents, hands them file paths,
+  relays the user's decisions, commits the spec, the plans, the reports and
+  the evidence files (implementers commit their own tasks), names who runs the
+  gate and reads the verdict, and writes the report. It reads reports, not
+  code. The topology is flat: the lead spawns every agent and continues it by
+  name; agents do not spawn agents.
+```
+
+### G20 `rules/global.md`
+
+Anchor: §2, the bullet "**Agents carry names.**", the sub-bullet "Planner" (finding D). Paid for by dropping "and nothing else does" from G15, which "needs the user's word for that task" already states.
+
+Old (at `e777927`):
+
+```markdown
+  - Planner (the spec's author and phase planners share the pool): Hania,
+    Bartek, Ola.
+```
+
+New:
+
+```markdown
+  - Planner (the spec's author, phase planners and brief writers share the
+    pool): Hania, Bartek, Ola.
+```
+
+### P3 `roles/planner.md`
+
+Anchor: the class table, the row "Phase", whole line (finding B).
+
+Old (at `e777927`):
+
+```markdown
+| Phase | The spec and the phase plan as the sections below state. The gate, every suite outside CI and every residue search are phase-level obligations; no task cites them. A probe, pin or search you ran is recorded in the plan's evidence file once and is not an obligation of any task unless the task's change alters its answer. | The keyed obligations, the impact set and the gate run once on the accepted tree. |
+```
+
+New:
+
+```markdown
+| Phase | The spec and the phase plan as the sections below state. The gate, which includes every suite outside CI, and every residue search are phase-level obligations; no task cites them. A probe, pin or search you ran is recorded in the plan's evidence file once and is not an obligation of any task unless the task's change alters its answer. | The keyed obligations, the impact set and the gate run once on the accepted tree. |
+```
+
+### P4 `roles/planner.md`
+
+Anchor: "## Obligations", the lines from "evidenced by the task the plan marks as completing it." to "or else by a runner." (finding B).
+
+Old (at `e777927`):
+
+```markdown
+evidenced by the task the plan marks as completing it. Residue obligations and
+any obligation that only the finished phase can satisfy are phase-level: the
+plan marks them so, no task cites them, and the phase review runs them itself,
+except the gate, which runs once after the review accepts the tree, by the
+implementer the lead names or else by a runner.
+```
+
+New:
+
+```markdown
+evidenced by the task the plan marks as completing it. Residue obligations and
+any obligation that only the finished phase can satisfy are phase-level: the
+plan marks them so, no task cites them, and the phase review runs them itself,
+except the gate, every suite outside CI included, which runs once after the
+review accepts the tree, by the implementer the lead names or else by a runner.
+```
+
+### P5 `roles/planner.md`
+
+Anchor: "The phase plan", the paragraph beginning "Verify the plan's assumptions ..." at its sentence "A question only new code can answer becomes a spike" (finding G).
+
+Old (at `e777927`):
+
+```markdown
+or prototype. A question only new code can answer becomes a spike: ask the lead
+for it, the lead briefs an implementer with it as a task of its own, and its
+recorded answer is a file the plan cites; the plan is written on the spike's
+answer, not ahead of it.
+```
+
+New:
+
+```markdown
+or prototype. A question only new code can answer becomes a spike: ask the lead
+for it, the lead briefs an implementer with it as a task of the phase being planned,
+which gives it its class; it gets no review of its own, and its recorded answer
+is a file the plan cites; the plan is written on the spike's
+answer, not ahead of it.
+```
+
+### P6 `roles/planner.md`
+
+Anchor: the class table, the row "Brief", whole line (the spec invariant "a role that finds the class does not fit stops and says so").
+
+Old (at `e777927`):
+
+```markdown
+| Brief | A brief of a few lines: goal, tests, acceptance criterion, the path of the evidence file, the class and the refactor flag where set. No obligations list and no impact set. | The brief's tests and acceptance criterion; the full suites the implementer runs at the end are the net for a missed dependant. |
+```
+
+New:
+
+```markdown
+| Brief | A brief of a few lines: goal, tests, acceptance criterion, the path of the evidence file, the class and the refactor flag where set. No obligations list and no impact set. A brief that turns out to be design work or a contract change is not written: stop and say so, the task moves to the phase class with the user's approval. | The brief's tests and acceptance criterion; the full suites the implementer runs at the end are the net for a missed dependant. |
+```
+
+### R6 `roles/reviewer.md`
+
+Anchor: the first bullet "Verify claims against the evidence files ..." (finding B).
+
+Old (at `e777927`):
+
+```markdown
+- Verify claims against the evidence files, not against the reports: for every
+  obligation under review, the phase's or, in a single-task review, those the
+  task cites, read the named place or the recorded output and judge whether the
+  evidence proves the claim, not whether an entry exists; re-run a recorded
+  check only as the class table says. A task-level obligation without an
+  entry, or an entry whose result does not settle the claim (missing output,
+  another commit than the one under review, a result the diff contradicts), is
+  a finding; a phase-level obligation other than the gate you run yourself and
+  record in your report, and the gate runs after you accept, by the implementer
+  the lead names or else by a runner. Then read the hand-edit commits in full;
+  the evidence tells you where to look, it does not replace the reading.
+```
+
+New:
+
+```markdown
+- Verify claims against the evidence files, not against the reports: for every
+  obligation under review, the phase's or, in a single-task review, those the
+  task cites, read the named place or the recorded output and judge whether the
+  evidence proves the claim, not whether an entry exists; re-run a recorded
+  check only as the class table says. A task-level obligation without an
+  entry, or an entry whose result does not settle the claim (missing output,
+  another commit than the one under review, a result the diff contradicts), is
+  a finding; a phase-level obligation other than the gate and the suites it
+  names you run yourself and record in your report, and the gate runs after you
+  accept, by the implementer the lead names or else by a runner. Then read the hand-edit commits in full;
+  the evidence tells you where to look, it does not replace the reading.
+```
+
+### R7 `roles/reviewer.md`
+
+Anchor: the class table, the row "Phase diff", whole line (finding B).
+
+Old (at `e777927`):
+
+```markdown
+| Phase diff | The hand-edit commits in full; every task's evidence file; the coverage check against the phase goal. | The phase-level obligations other than the gate (residue searches, the `AGENT-MARK` search) yourself, the gate running after acceptance; a recorded check only when its output does not settle the claim; no mutants, coverage scripts or renders of your own for a claim the evidence settles. | As the brief; at most two rounds. |
+```
+
+New:
+
+```markdown
+| Phase diff | The hand-edit commits in full; every task's evidence file; the coverage check against the phase goal. | The phase-level obligations other than the gate and the suites it names (residue searches, the `AGENT-MARK` search) yourself, the gate running after acceptance; a recorded check only when its output does not settle the claim; no mutants, coverage scripts or renders of your own for a claim the evidence settles. | As the brief; at most two rounds. |
+```
+
+### R8 `roles/reviewer.md`
+
+Anchor: the class table, the row "Plan", whole line (finding H).
+
+Old (at `e777927`):
+
+```markdown
+| Plan | The checklist below. | The recorded impact-set searches against the base of the phase. | A blocking finding gets a delta re-review. |
+```
+
+New:
+
+```markdown
+| Plan | The checklist below. | The recorded impact-set searches against the base of the phase, re-run regardless of their recorded output. | A blocking finding gets a delta re-review. |
+```
+
+### R9 `roles/reviewer.md`
+
+Anchor: the class table, the row "Writer's output", whole line (finding H).
+
+Old (at `e777927`):
+
+```markdown
+| Writer's output | The output against the style block and the glossary. | The check the brief names. | As the class of the text task. |
+```
+
+New:
+
+```markdown
+| Writer's output | The output against the style block and the glossary. | The check the brief names, re-run regardless of the writer's recorded run. | As the class of the text task. |
+```
+
+### R10 `roles/reviewer.md`
+
+Anchor: the paragraph before the class table, one sentence appended (finding H; the rule global.md §4 now defers to).
+
+Old (at `e777927`):
+
+```markdown
+The brief, the plan or the lead's message names the class of what you review;
+the table says what you read, what you run and when a round closes. A round
+with no Critical or Important finding closes the review of the object as
+reviewed; what is added later gets a review of its own delta.
+```
+
+New:
+
+```markdown
+The brief, the plan or the lead's message names the class of what you review;
+the table says what you read, what you run and when a round closes. A round
+with no Critical or Important finding closes the review of the object as
+reviewed; what else is added later gets a review of its own delta.
+A recorded check is re-run only where the table says so; the plan's
+impact-set searches and the writer's check are the two re-run regardless.
+```
+
+### R11 `roles/reviewer.md`
+
+Anchor: the class table, the row "Refactor flag", whole line (finding C: for a phase the gate, which is the pins' result run, follows acceptance).
+
+Old (at `e777927`):
+
+```markdown
+| Refactor flag | As the class, plus the mechanical commit spot-checked against its script, and the pins' recorded base run and result run. | As the class. | As the class. |
+```
+
+New:
+
+```markdown
+| Refactor flag | As the class, plus the mechanical commit spot-checked against its script, and the pins' recorded base run and, where the gate precedes the review, their result run. | As the class. | As the class. |
+```
+
+### I4 `roles/implementer.md`
+
+Anchor: the class table, the row "Refactor flag", whole line (finding C).
+
+Old (at `e777927`):
+
+```markdown
+| Refactor flag | As the class, plus: the pins run once on the base and recorded before the first change; the mechanical change in its own commit with its re-runnable script. | None for the mechanical commit. | One gate per brief or phase. | The mechanical commit is spot-checked, the hand edits are read in full. |
+```
+
+New:
+
+```markdown
+| Refactor flag | As the class, plus: the pins run once on the base and recorded before the first change, and the gate on the result is their result run; the mechanical change in its own commit with its re-runnable script. | None for the mechanical commit. | One gate per brief or phase. | The mechanical commit is spot-checked, the hand edits are read in full. |
+```
+
+### I5 `roles/implementer.md`
+
+Anchor: the bullet "You commit your own task: ..." (finding L, second half).
+
+Old (at `e777927`):
+
+```markdown
+- You commit your own task: one logical change per commit, conventional commit
+  message. The lead commits only the spec, the plans and the reports.
+```
+
+New:
+
+```markdown
+- You commit your own task: one logical change per commit, conventional commit
+  message. The lead commits only the spec, the plans, the reports and the evidence
+  files.
+```
+
+## Appendix B, amendment 2: `decisions.md` entry D12
+
+Prepended under "## Entries", above D11.
+
+```markdown
+- 2026-10-31 task-classes-whole-rule-set-review integrated
+  rules/global.md, roles/planner.md, roles/reviewer.md, roles/implementer.md:
+  a whole-rule-set review on the stronger tier after amendment 1 found two
+  contradictions in the contract text and ten lesser gaps; amendment 2 of the
+  task-classes spec. §5 said lesser findings are fixed without a re-review and
+  that commits added later get a delta review, so a lesser fix was both; it
+  now reads "fixed, or reported to the user, without a re-review; other
+  commits ... get a review of their own delta", restoring the report-to-user
+  path so a nit is not a mandatory fix with a red test. Suites outside CI were
+  inside the gate in §4 but beside it in the planner's Phase row and
+  Obligations and in the reviewer's bullet and Phase-diff row, which sent the
+  reviewer to run e2e before acceptance; they are now named as part of the
+  gate everywhere. Also: the gate on the result is the refactor pins' result
+  run; brief writing and brief and spec reviews are on the cheaper tier, and
+  the brief has a lifetime clause; the stronger-model record is "where the
+  task is stated" (a small change has no brief); the phase gate runs once per
+  accepted tree, so a failed gate runs again after the fix; a spike is a task
+  of the phase being planned, which gives it its class, with no review of its
+  own; the
+  re-run rule is stated once in the reviewer role, whose two exceptions (the
+  plan's impact-set searches, the writer's check) global.md §4 now defers to;
+  the lead commits the evidence files with the reports; the planner stops and
+  says so when a brief turns out to be design work or a contract change. Left
+  for later: roles/README.md "pure prose" until the host's render confirms
+  the tables (O6); duplicated sentences across the roles and pre-existing
+  rationale in global.md (cosmetic); skills/propose-rule/SKILL.md step 3
+  naming three of seven roles (outside the spec, for the integrator).
 ```
