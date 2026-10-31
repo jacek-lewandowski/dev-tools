@@ -5,7 +5,7 @@
 # --conversation resumes an earlier agy conversation, e.g. round 2 of a review.
 # Prints "ai-delegate: conversation_id=<id>" on stderr whenever agy reports one.
 # Exit: 0 answer printed, 1 agy did not succeed, 2 bad usage or missing role,
-# 3 agy not signed in (use the Claude subagent instead).
+# 3 agy not signed in or silent on the preflight (use the Claude subagent instead).
 set -euo pipefail
 
 usage() { echo "usage: ai-delegate <scout|writer|second-reviewer> <task-file> [--model <id>] [--conversation <id>]" >&2; exit 2; }
@@ -33,6 +33,14 @@ fi
 
 if ! models_out=$(agy models 2>&1) || printf '%s' "$models_out" | grep -qi 'not signed in'; then
     echo "agy not signed in; use the Claude subagent" >&2
+    exit 3
+fi
+
+# `agy models` once answered while a run hung, so prove agy can take a turn.
+# The outer timeout guards against agy ignoring its own --print-timeout.
+if ! preflight_out=$(timeout 16s agy -p "Reply with exactly the word OK and nothing else." --model "$model" \
+        --print-timeout 15s --disable-slash-commands 2>&1) || ! printf '%s' "$preflight_out" | grep -qw 'OK'; then
+    echo "agy did not answer the preflight within 15 seconds; use the Claude subagent" >&2
     exit 3
 fi
 

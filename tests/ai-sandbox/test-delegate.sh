@@ -13,12 +13,17 @@ if [ "${1:-}" = "models" ]; then
     [ -n "${STUB_SIGNED_OUT:-}" ] && { echo "Error: not signed in" >&2; exit 1; }
     echo "gemini-3.8-flash-high"; exit 0
 fi
-printf '%s\n' "$@" > "$STUB_DIR/argv"
-prev=""
+prev="" prompt=""
 for a in "$@"; do
-    [ "$prev" = "-p" ] && printf '%s' "$a" > "$STUB_DIR/prompt"
+    [ "$prev" = "-p" ] && prompt="$a"
     prev="$a"
 done
+if [ "$prompt" = "Reply with exactly the word OK and nothing else." ]; then
+    case "${STUB_PREFLIGHT:-}" in hang) sleep 60; exit 0 ;; wrong) echo "Hello"; exit 0 ;; esac
+    echo "OK"; exit 0
+fi
+printf '%s\n' "$@" > "$STUB_DIR/argv"
+printf '%s' "$prompt" > "$STUB_DIR/prompt"
 pwd > "$STUB_DIR/cwd"; printf '%s' "${TMPDIR:-}" > "$STUB_DIR/tmpdir"
 ls -A . | wc -l > "$STUB_DIR/cwd_entries"
 f=$(grep -o "/[^ ]*prompt\.md" "$STUB_DIR/prompt" | head -1)
@@ -86,6 +91,16 @@ assert_eq       "run directory removed after failure" "$(ls -A "$tmp/repo/.ai-de
 STUB_SIGNED_OUT=1 "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
 assert_eq       "not signed in exits 3"   "$rc" '3'
 assert_contains "not signed in message"   "$(cat "$tmp/e")" 'agy not signed in; use the Claude subagent'
+
+preflight_msg='agy did not answer the preflight within 15 seconds; use the Claude subagent'
+t0=$(date +%s)
+STUB_PREFLIGHT=hang "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
+assert_eq       "hung preflight exits 3"  "$rc" '3'
+assert_contains "hung preflight message"  "$(cat "$tmp/e")" "$preflight_msg"
+assert_eq       "hung preflight cut within 20 s" "$(( $(date +%s) - t0 < 20 ))" '1'
+STUB_PREFLIGHT=wrong "$DELEGATE" scout "$tmp/task.md" >"$tmp/o" 2>"$tmp/e"; rc=$?
+assert_eq       "preflight without OK exits 3" "$rc" '3'
+assert_contains "preflight without OK message" "$(cat "$tmp/e")" "$preflight_msg"
 
 "$DELEGATE" writer "$tmp/task.md" >/dev/null 2>"$tmp/e"; rc=$?
 assert_eq       "missing role exits 2"    "$rc" '2'
