@@ -224,35 +224,45 @@ ai_sandbox_container_running() {
     [ "$(docker container inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
 }
 
+# The one rule for every memory size: a whole number of GB, at least 1, no
+# sign, no unit, no leading zero (bash would read 010 as octal). The budget,
+# the remembered SANDBOX_MEMORY_GB and --memory all go through it.
+ai_sandbox_whole_gb() {   # <value>
+    case "$1" in ''|*[!0-9]*|0*) return 1 ;; esac
+}
+
 # The host's memory budget from AI_SANDBOX_CONFIG, last line wins. The file is
 # the user's, so it is read with sed, never sourced. A value that is not a
-# whole number of GB (>= 1) counts as unset and is quoted in the refusal.
+# whole number of GB counts as unset and is quoted in the refusal.
 ai_sandbox_memory_budget_gb() {   # prints the budget; 1 + refusal on stderr when unset/invalid
     local gb=""
     [ -f "$AI_SANDBOX_CONFIG" ] && gb=$(sed -n 's/^AI_SANDBOX_MEMORY_BUDGET_GB=//p' "$AI_SANDBOX_CONFIG" | tail -1)
-    case "$gb" in
-        ''|*[!0-9]*|0*)
-            {
-                if [ -z "$gb" ]; then
-                    echo "No memory budget is configured for this host: AI_SANDBOX_MEMORY_BUDGET_GB is not set in $AI_SANDBOX_CONFIG."
-                else
-                    echo "No memory budget is configured for this host: AI_SANDBOX_MEMORY_BUDGET_GB is '$gb' in $AI_SANDBOX_CONFIG, not a whole number of GB."
-                fi
-                echo "Write the RAM, in GB, that all running sandboxes together may use, for example:"
-                echo "    echo 'AI_SANDBOX_MEMORY_BUDGET_GB=18' >> $AI_SANDBOX_CONFIG"
-            } >&2
-            return 1
-            ;;
-    esac
+    if ! ai_sandbox_whole_gb "$gb"; then
+        {
+            if [ -z "$gb" ]; then
+                echo "No memory budget is configured for this host: AI_SANDBOX_MEMORY_BUDGET_GB is not set in $AI_SANDBOX_CONFIG."
+            else
+                echo "No memory budget is configured for this host: AI_SANDBOX_MEMORY_BUDGET_GB is '$gb' in $AI_SANDBOX_CONFIG, not a whole number of GB."
+            fi
+            echo "Write the RAM, in GB, that all running sandboxes together may use, for example:"
+            echo "    echo 'AI_SANDBOX_MEMORY_BUDGET_GB=18' >> $AI_SANDBOX_CONFIG"
+        } >&2
+        return 1
+    fi
     printf '%s\n' "$gb"
 }
 
 # The memory a sandbox is created with. A sandbox created before the key
 # existed has a compose file saying 'mem_limit: "6g"', so 6 is what Docker
-# applies to it.
+# applies to it. A hand-edited value that is not a whole number of GB is also
+# 6, with one warning naming the file: a start must never do arithmetic on it.
 ai_sandbox_memory_gb() {   # <sandbox dir>: SANDBOX_MEMORY_GB from .env, or 6 when the key is absent
     local gb
     gb=$(ai_sandbox_env_value "$1" SANDBOX_MEMORY_GB)
+    if [ -n "$gb" ] && ! ai_sandbox_whole_gb "$gb"; then
+        echo "SANDBOX_MEMORY_GB is '$gb' in $1/.env, not a whole number of GB; counting 6 GB." >&2
+        gb=""
+    fi
     printf '%s\n' "${gb:-6}"
 }
 

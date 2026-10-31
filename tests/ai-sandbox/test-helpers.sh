@@ -30,6 +30,16 @@ bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" 
 assert_eq "a second create does not duplicate the budget"    "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
 assert_eq "a second create does not duplicate the source dir" "$(config_lines DEV_TOOLS_DIR)" 1
 assert_contains "the budget value survives" "$(cat "$AI_SANDBOX_ROOT/config")" 'AI_SANDBOX_MEMORY_BUDGET_GB=18'
+# A hand-written config may lack its final newline (an editor that strips it,
+# printf, a copied file): the rewrite must still put DEV_TOOLS_DIR on a line of
+# its own, or the budget reads as '18DEV_TOOLS_DIR=...' and every start is refused.
+printf 'AI_SANDBOX_MEMORY_BUDGET_GB=18' > "$AI_SANDBOX_ROOT/config"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out3" 2>&1 \
+    || { echo "script failed:"; cat "$tmp/out3"; }
+assert_eq "a config without a final newline keeps its budget line" "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
+assert_eq "and gets the source dir on a line of its own"           "$(config_lines DEV_TOOLS_DIR)" 1
+assert_eq "the budget still reads as a whole number" \
+    "$(AI_SANDBOX_ROOT="$AI_SANDBOX_ROOT" bash -c '. "$1/bin/ai/ai-sandbox-lib.sh" && ai_sandbox_memory_budget_gb' _ "$REPO_ROOT" 2>&1)" 18
 
 # The bashrc block must be the stable one-liner, not a pile of functions.
 block=$(sed -n '/>>> dev-tools ai-sandbox helpers >>>/,/<<< dev-tools ai-sandbox helpers <<</p' "$HOME/.bashrc")
