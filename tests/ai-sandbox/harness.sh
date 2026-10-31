@@ -71,6 +71,9 @@ fake_home() {
     export PATH="$REPO_ROOT/tests/ai-sandbox/stub:$PATH"
     mkdir -p "$HOME" "$AI_SANDBOX_ROOT"
     : > "$DOCKER_STUB_LOG"
+    # The host's memory budget, which the user writes by hand on a real host;
+    # without it create-ai-sandbox.sh and every start are refused.
+    printf 'AI_SANDBOX_MEMORY_BUDGET_GB=18\n' > "$AI_SANDBOX_ROOT/config"
     FAKE_HOME_DIR="$tmp"
     printf '%s' "$tmp"
 }

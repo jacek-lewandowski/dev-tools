@@ -29,7 +29,8 @@ if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/d
     # would mount the rules read-write, so it is refused only here, where it
     # would come up; a running container is entered whatever its stamp.
     ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
-    ai_sandbox_check_capacity "$AI_SANDBOX_NAME" || exit 1
+    ai_sandbox_memory_budget_gb >/dev/null || exit 1
+    ai_sandbox_check_capacity "$AI_SANDBOX_NAME" "$(ai_sandbox_memory_gb "$AI_SANDBOX_DIR")" || exit 1
     if ai_sandbox_caches_enabled "$AI_SANDBOX_DIR"; then
         # D5/D2: hold the lock from before the check until 'up' has returned --
         # releasing it any earlier would let a concurrent start reset the

@@ -8,10 +8,11 @@
 
 AI_SANDBOX_ROOT="${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}"
 AI_SANDBOX_SCHEMA_VERSION=2
-# How many sandboxes may run at once. Each is capped at 6 GB of RAM with no
-# swap (MEMORY_LIMIT in create-ai-sandbox.sh), so this is what a host carries
-# without its own desktop being squeezed out.
-AI_SANDBOX_MAX_RUNNING=3
+# Host-wide settings, shell-style KEY=VALUE lines. create-ai-sandbox.sh writes
+# DEV_TOOLS_DIR; AI_SANDBOX_MEMORY_BUDGET_GB, the RAM in GB that all running
+# sandboxes together may use, is written by the user by hand (the file's only
+# reader outside this repository is the user) and has no default.
+AI_SANDBOX_CONFIG="$AI_SANDBOX_ROOT/config"     # defined once, in the lib
 
 # The shared knowledge repository (see ai-knowledge). Configured when the config
 # file exists; every knowledge feature is inert otherwise.
@@ -103,7 +104,7 @@ ai_sandbox_require_current() {   # <sandbox dir>
     local state dev_tools="" project
     state=$(ai_sandbox_knowledge_state "$1")
     [ "$state" = current ] && return 0
-    [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
+    [ -f "$AI_SANDBOX_CONFIG" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_CONFIG" | head -1)
     project=$(ai_sandbox_env_value "$1" SANDBOX_PROJECT_DIR)
     if [ -z "$project" ] && [ -f "$1/project-path" ]; then project=$(head -1 "$1/project-path"); fi
     {
@@ -223,24 +224,68 @@ ai_sandbox_container_running() {
     [ "$(docker container inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
 }
 
-# False, with the running sandboxes listed on stderr, when starting NAME would
-# put more than AI_SANDBOX_MAX_RUNNING sandboxes on the host. NAME itself never
-# counts, so a restart can always reclaim its own slot; nor does any container
-# without a sandbox directory under AI_SANDBOX_ROOT, because the cap is about
-# sandboxes, not about Docker at large. Every path that runs 'compose up' must
-# call this first, and a restart must call it before 'compose down'.
-ai_sandbox_check_capacity() {
-    local self=$1 n running=()
+# The host's memory budget from AI_SANDBOX_CONFIG, last line wins. The file is
+# the user's, so it is read with sed, never sourced. A value that is not a
+# whole number of GB (>= 1) counts as unset and is quoted in the refusal.
+ai_sandbox_memory_budget_gb() {   # prints the budget; 1 + refusal on stderr when unset/invalid
+    local gb=""
+    [ -f "$AI_SANDBOX_CONFIG" ] && gb=$(sed -n 's/^AI_SANDBOX_MEMORY_BUDGET_GB=//p' "$AI_SANDBOX_CONFIG" | tail -1)
+    case "$gb" in
+        ''|*[!0-9]*|0*)
+            {
+                if [ -z "$gb" ]; then
+                    echo "No memory budget is configured for this host: AI_SANDBOX_MEMORY_BUDGET_GB is not set in $AI_SANDBOX_CONFIG."
+                else
+                    echo "No memory budget is configured for this host: AI_SANDBOX_MEMORY_BUDGET_GB is '$gb' in $AI_SANDBOX_CONFIG, not a whole number of GB."
+                fi
+                echo "Write the RAM, in GB, that all running sandboxes together may use, for example:"
+                echo "    echo 'AI_SANDBOX_MEMORY_BUDGET_GB=18' >> $AI_SANDBOX_CONFIG"
+            } >&2
+            return 1
+            ;;
+    esac
+    printf '%s\n' "$gb"
+}
+
+# The memory a sandbox is created with. A sandbox created before the key
+# existed has a compose file saying 'mem_limit: "6g"', so 6 is what Docker
+# applies to it.
+ai_sandbox_memory_gb() {   # <sandbox dir>: SANDBOX_MEMORY_GB from .env, or 6 when the key is absent
+    local gb
+    gb=$(ai_sandbox_env_value "$1" SANDBOX_MEMORY_GB)
+    printf '%s\n' "${gb:-6}"
+}
+
+# False, with the refusal on stderr, when starting NAME at GB would put the
+# running sandboxes' memory plus GB over the host's budget. Each running
+# sandbox counts what Docker enforces on it (HostConfig.Memory, bytes rounded
+# up to whole GB; 0, no limit, counts 0 and is listed as such). NAME itself
+# never counts, so a restart can always reclaim its own share; nor does any
+# container without a sandbox directory under AI_SANDBOX_ROOT, because the
+# budget is about sandboxes, not about Docker at large. Every path that runs
+# 'compose up' must call this first, and a restart must call it before
+# 'compose down'.
+ai_sandbox_check_capacity() {   # <name> <gb>: 0, or 1 + the over-budget refusal on stderr
+    local self=$1 gb=$2 budget n bytes ngb used=0 running=() list
+    budget=$(ai_sandbox_memory_budget_gb) || return 1
     command -v docker >/dev/null 2>&1 || return 0
     while IFS= read -r n; do
         [ -n "$n" ] && [ "$n" != "$self" ] && [ -d "$AI_SANDBOX_ROOT/$n" ] || continue
-        running+=("$n")
+        bytes=$(docker container inspect -f '{{.HostConfig.Memory}}' "$n" 2>/dev/null)
+        case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+        if [ "$bytes" -eq 0 ]; then
+            ngb=0; running+=("$n (no limit)")
+        else
+            ngb=$(( (bytes + 1073741823) / 1073741824 )); running+=("$n ($ngb GB)")
+        fi
+        used=$((used + ngb))
     done < <(docker ps --format '{{.Names}}' 2>/dev/null)
-    [ "${#running[@]}" -lt "$AI_SANDBOX_MAX_RUNNING" ] && return 0
+    [ $((used + gb)) -le "$budget" ] && return 0
+    list=$(printf '%s, ' "${running[@]}"); list=${list%, }
     {
-        echo "Cannot start $self: $AI_SANDBOX_MAX_RUNNING sandboxes are already running, which is the limit."
-        echo "Running: ${running[*]}"
-        echo "Stop one first, with 'ai-sandbox-stop' from its project directory."
+        echo "Cannot start $self ($gb GB): $used GB of the $budget GB memory budget is in use."
+        echo "Running: ${list:-none}"
+        echo "Stop one first, with 'ai-sandbox-stop' from its project directory, or raise AI_SANDBOX_MEMORY_BUDGET_GB in $AI_SANDBOX_CONFIG."
     } >&2
     return 1
 }
