@@ -20,6 +20,16 @@ assert_file "installed the library" "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 assert_file "recorded the source dir" "$AI_SANDBOX_ROOT/config"
 assert_contains "config points at the repo" "$(cat "$AI_SANDBOX_ROOT/config")" \
                 "DEV_TOOLS_DIR=$REPO_ROOT"
+# The config is the user's file too (the memory budget is hand-written), so a
+# create rewrites its own line and keeps the rest, once each, run after run.
+config_lines() { grep -c "^$1=" "$AI_SANDBOX_ROOT/config"; }
+assert_eq "config keeps the hand-written budget" "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
+assert_eq "config records the source dir once"   "$(config_lines DEV_TOOLS_DIR)" 1
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out2" 2>&1 \
+    || { echo "script failed:"; cat "$tmp/out2"; }
+assert_eq "a second create does not duplicate the budget"    "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
+assert_eq "a second create does not duplicate the source dir" "$(config_lines DEV_TOOLS_DIR)" 1
+assert_contains "the budget value survives" "$(cat "$AI_SANDBOX_ROOT/config")" 'AI_SANDBOX_MEMORY_BUDGET_GB=18'
 
 # The bashrc block must be the stable one-liner, not a pile of functions.
 block=$(sed -n '/>>> dev-tools ai-sandbox helpers >>>/,/<<< dev-tools ai-sandbox helpers <<</p' "$HOME/.bashrc")

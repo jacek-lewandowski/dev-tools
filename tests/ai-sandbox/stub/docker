@@ -20,6 +20,21 @@ case "$1" in
         # regardless of DOCKER_STUB_RUNNING, until a stubbed 'compose up'/'start'
         # clears it.
         name="$5"
+        # 'docker container inspect -f {{.HostConfig.Memory}} NAME': the memory
+        # limit in bytes. DOCKER_STUB_MEMORY is a newline-separated list of
+        # "<name>=<bytes>" entries; an unlisted name answers 6442450944 (6 GiB,
+        # what a 'mem_limit: "6g"' compose file yields; 0 is "no limit").
+        # Answered first, so it never advances the inspect count below.
+        if [ "${4:-}" = '{{.HostConfig.Memory}}' ]; then
+            bytes=6442450944
+            if [ -n "${DOCKER_STUB_MEMORY:-}" ]; then
+                while IFS= read -r entry; do
+                    [ -n "$entry" ] || continue
+                    case "$entry" in "$name="*) bytes="${entry#*=}"; break ;; esac
+                done < <(printf '%s\n' "$DOCKER_STUB_MEMORY")
+            fi
+            echo "$bytes"; exit 0
+        fi
         # DOCKER_STUB_RUNNING_FROM_CALL=<n>: simulate a container that starts
         # running partway through a script -- answer false to every call to
         # this subcommand until the n-th (across the whole run, counted next

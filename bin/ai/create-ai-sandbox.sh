@@ -345,6 +345,10 @@ DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 # shellcheck source=bin/ai/ai-sandbox-lib.sh
 . "$SCRIPT_DIR/ai-sandbox-lib.sh"
 
+# The host's memory budget gates every run, --no-start included, before
+# anything is written: a host without one learns what to write first.
+ai_sandbox_memory_budget_gb >/dev/null || exit 1
+
 # ---------------------------------------------------------------------------
 # Resolve the project
 # ---------------------------------------------------------------------------
@@ -2614,8 +2618,18 @@ chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 rsync -a --delete "$SCRIPT_DIR/knowledge-seed/" "$AI_SANDBOX_ROOT/bin/knowledge-seed/"
 
 # Recorded so ai-sandbox-migrate can refresh these copies without being told
-# where the repository lives.
-printf 'DEV_TOOLS_DIR=%s\n' "$DEV_TOOLS_DIR" > "$AI_SANDBOX_ROOT/config"
+# where the repository lives. Only this script's own line is replaced: the
+# file also holds the user's hand-written AI_SANDBOX_MEMORY_BUDGET_GB. Written
+# beside the file and moved into place, so a concurrent helper reading or
+# sourcing it never sees it truncated.
+CONFIG_TMP=$(mktemp "$AI_SANDBOX_CONFIG.XXXXXX")
+{
+    [ ! -f "$AI_SANDBOX_CONFIG" ] || sed '/^DEV_TOOLS_DIR=/d' "$AI_SANDBOX_CONFIG"
+    printf 'DEV_TOOLS_DIR=%s\n' "$DEV_TOOLS_DIR"
+} > "$CONFIG_TMP"
+chmod 0644 "$CONFIG_TMP"
+mv "$CONFIG_TMP" "$AI_SANDBOX_CONFIG"
+unset CONFIG_TMP
 log "$AI_SANDBOX_ROOT/bin"
 
 # The block below is deliberately trivial and stable: the helpers are real
@@ -2658,7 +2672,7 @@ if [ "$NO_START" = "yes" ]; then
 fi
 
 # Before the image build: a full host should cost a message, not a build.
-ai_sandbox_check_capacity "$CONTAINER_NAME" || exit 1
+ai_sandbox_check_capacity "$CONTAINER_NAME" "$(mem_limit_gb "$MEMORY_LIMIT")" || exit 1
 
 # The display must exist before the container starts: Docker creates any missing
 # bind-mount source itself, as root, which would then block Xephyr from binding.
