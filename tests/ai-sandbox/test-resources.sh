@@ -98,6 +98,61 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if bash -n "$doctor" 2>"$tmp/doctor.err"; then _pass "doctor is valid bash"
 else _fail "doctor is valid bash" "$(cat "$tmp/doctor.err")"; fi
 
+# --- timezone: the host's zone, by name (TZ) and by file (/etc/localtime) ---
+# Every source is faked: a timedatectl stub on PATH, and HOST_ETC_DIR pointed at
+# a directory standing in for the host's /etc (this test host may have none).
+tzstubs="$tmp/tzstub"; mkdir -p "$tzstubs"
+etc="$tmp/etc"; zi="$tmp/zoneinfo/Europe"; mkdir -p "$etc" "$zi"
+printf 'TZif2 fake\n' > "$zi/Warsaw"
+tz_create() {   # the stub's timedatectl script on stdin
+    cat > "$tzstubs/timedatectl"; chmod +x "$tzstubs/timedatectl"
+    PATH="$tzstubs:$PATH" HOST_ETC_DIR="$etc" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" \
+        --display=none --no-start "$proj" >"$tmp/out.tz" 2>&1 || true
+    compose=$(cat "$dir/docker-compose.yml")
+}
+# 1. timedatectl names the zone; /etc/localtime is a symlink to a zoneinfo file.
+ln -s "$zi/Warsaw" "$etc/localtime"
+tz_create <<'STUB'
+#!/bin/sh
+echo Europe/Warsaw
+STUB
+assert_contains "TZ follows timedatectl"                    "$compose" '- TZ=Europe/Warsaw'
+assert_contains "the host's zoneinfo file is mounted read-only, symlink resolved" \
+    "$compose" "- \"$zi/Warsaw:/etc/localtime:ro\""
+assert_contains "the shared brain states the zone"          "$(cat "$HOME/.gemini/GEMINI.md")" "host's timezone (TZ=Europe/Warsaw)"
+assert_contains "the image installs tzdata"                 "$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")" ' tzdata'
+# The "Ready" summary (zone, and the one-time --rebuild for tzdata) is printed
+# only after a build and start, which --no-start never reaches; the log line of
+# the timezone step is what a --no-start run shows.
+assert_contains "the log names the zone and the file"       "$(cat "$tmp/out.tz")" "Timezone: Europe/Warsaw (TZ), zoneinfo mounted read-only from $zi/Warsaw"
+assert_eq       "the zone is not remembered in .env"        "$(grep -c 'TZ=' "$dir/.env")" '0'
+# 2. timedatectl fails (no systemd): /etc/timezone names the zone.
+printf 'America/Lima\n' > "$etc/timezone"
+tz_create <<'STUB'
+#!/bin/sh
+echo "Failed to connect to bus" >&2; exit 1
+STUB
+assert_contains "TZ falls back to /etc/timezone" "$compose" '- TZ=America/Lima'
+# 3. timedatectl prints nothing and there is no /etc/timezone: the symlink's
+#    target names the zone; a target with no file behind it means no mount.
+rm "$etc/timezone" "$etc/localtime"; ln -s /usr/share/zoneinfo/Asia/Tokyo "$etc/localtime"
+tz_create <<'STUB'
+#!/bin/sh
+echo
+STUB
+assert_contains "TZ falls back to the localtime symlink"   "$compose" '- TZ=Asia/Tokyo'
+assert_eq       "a dangling localtime is not mounted"      "$(grep -c '/etc/localtime:ro' "$dir/docker-compose.yml")" '0'
+assert_contains "and the skipped mount is warned about"    "$(cat "$tmp/out.tz")" '/etc/localtime is not mounted'
+# 4. No source at all: UTC, with a warning, and still no mount.
+rm "$etc/localtime"
+tz_create <<'STUB'
+#!/bin/sh
+exit 1
+STUB
+assert_contains "no source means UTC"                       "$compose" '- TZ=UTC'
+assert_contains "and a warning about the zone"              "$(cat "$tmp/out.tz")" 'Could not determine the host'"'"'s timezone'
+assert_eq       "nothing is mounted at /etc/localtime"      "$(grep -c '/etc/localtime' "$dir/docker-compose.yml")" '0'
+
 # --- xpra: forwarded windows must not be rescaled ---------------------------
 # The real backend is not installed in a test environment; these stubs exist
 # only to get past the require/xauth calls so the launcher is generated.

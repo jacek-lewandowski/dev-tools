@@ -78,6 +78,9 @@ readonly -a CLAUDE_PLUGINS=(
 # skipped entirely when it does not. Override for a different install path:
 #   IDEA_HOST_DIR=/opt/idea-2025.1 create-ai-sandbox.sh
 readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
+# Where the host keeps /etc/timezone and /etc/localtime, read to give the
+# sandbox the host's timezone. Overridable so the tests can stand in a fake.
+readonly HOST_ETC_DIR="${HOST_ETC_DIR:-/etc}"
 
 readonly SHM_SIZE='1gb'
 
@@ -779,6 +782,40 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Timezone
+# ---------------------------------------------------------------------------
+
+# The sandbox keeps the host's clock zone: TZ by name for everything that
+# reads it (tzdata in the image resolves it), and the host's zoneinfo file at
+# /etc/localtime for everything that does not. Never remembered in .env: a
+# host that changes zones is followed on the next create. The name comes from
+# timedatectl, else /etc/timezone, else the /etc/localtime symlink, else UTC.
+HOST_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+if [ -z "$HOST_TZ" ] && [ -f "$HOST_ETC_DIR/timezone" ]; then
+    HOST_TZ=$(sed -n '1{s/[[:space:]]//g;p}' "$HOST_ETC_DIR/timezone")
+fi
+if [ -z "$HOST_TZ" ] && [ -L "$HOST_ETC_DIR/localtime" ]; then
+    tz_target=$(readlink -f "$HOST_ETC_DIR/localtime" 2>/dev/null || readlink "$HOST_ETC_DIR/localtime")
+    case "$tz_target" in /usr/share/zoneinfo/*) HOST_TZ=${tz_target#/usr/share/zoneinfo/} ;; esac
+    unset tz_target
+fi
+if [ -z "$HOST_TZ" ]; then
+    HOST_TZ=UTC
+    warn "Could not determine the host's timezone (timedatectl, $HOST_ETC_DIR/timezone, $HOST_ETC_DIR/localtime); the sandbox uses UTC."
+fi
+readonly HOST_TZ
+add_env "TZ=${HOST_TZ}"
+# Resolved on the host side, so the mount is the zoneinfo file itself and not
+# a symlink whose target the container may not have.
+LOCALTIME_HOST=$(readlink -f "$HOST_ETC_DIR/localtime" 2>/dev/null || true)
+if [ -n "$LOCALTIME_HOST" ] && [ -f "$LOCALTIME_HOST" ]; then
+    add_vol "\"${LOCALTIME_HOST}:/etc/localtime:ro\""
+    log "Timezone: $HOST_TZ (TZ), zoneinfo mounted read-only from $LOCALTIME_HOST"
+else
+    warn "No zoneinfo file behind $HOST_ETC_DIR/localtime: /etc/localtime is not mounted, the sandbox relies on TZ=$HOST_TZ alone."
+fi
+
+# ---------------------------------------------------------------------------
 # Devices
 #
 # The host /dev is deliberately NOT bind-mounted. Doing so would hand the
@@ -1044,6 +1081,7 @@ Environment notes:
   \`nproc\` reports that number and it is the ceiling for build and test
   parallelism: an over-parallel build is OOM-killed, not merely slowed.
   (\`free\` and /proc/cpuinfo describe the host, not this container.)
+- The sandbox uses the host's timezone (TZ=${HOST_TZ}); \`date\` agrees with the host.
 - The project is mounted read-write at its real host path, so edits are real
   edits to the user's working tree. The only other host paths mounted are the
   shared AI rules file, the Antigravity brain and conversations, this project's
@@ -1863,7 +1901,7 @@ DOCKERFILE_HEAD
 cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl wget gnupg ca-certificates \
+        curl wget gnupg ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Third-party repositories.
@@ -2795,6 +2833,8 @@ cat <<SUMMARY
   Rootless Docker:    $WITH_DOCKER
   Memory limit:       $MEMORY_GB GB RAM, no swap (/dev/shm $SHM_SIZE, counted against it; --memory=GB changes it)
   CPU limit:          $CPUSET_WANT core(s) for $MEMORY_GB GB: host cores $CPUSET (nproc inside agrees)
+  Timezone:           $HOST_TZ (the host's, by TZ and /etc/localtime; an image built before
+                      tzdata was added needs one 'create-ai-sandbox.sh --rebuild' to resolve TZ)
 SUMMARY
 
 case "$DISPLAY_MODE" in
