@@ -1863,6 +1863,7 @@ SDK_EOF
 cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
 {
   "permissions": { "allow": ["Bash(agy -p *)", "Bash(agy models)", "Bash(ai-delegate *)"] },
+  "statusLine": { "type": "command", "command": "context-statusline", "refreshInterval": 10 },
   "autoMode": {
     "allow": [
       "$defaults",
@@ -1873,6 +1874,7 @@ cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
 MANAGED_EOF
 
 cp "$SCRIPT_DIR/ai-delegate" "$BUILD_DIR/ai-delegate"
+cp "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
 
 # --- Dockerfile ------------------------------------------------------------
 
@@ -2047,6 +2049,7 @@ COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
 COPY ai-delegate       /usr/local/bin/ai-delegate
+COPY context-statusline /usr/local/bin/context-statusline
 COPY xdg-open         /usr/local/bin/xdg-open
 COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
 # IntelliJ IDEA is not installed in the image: this only launches the host's
@@ -2056,6 +2059,7 @@ RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
                 /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+                /usr/local/bin/context-statusline \
     && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
     && install -d -m 1777 /tmp/.X11-unix \
