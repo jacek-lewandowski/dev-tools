@@ -15,6 +15,7 @@ This document outlines the core structure, CLI scripts, and utility tools contai
 | [bin/ai/ai-sandbox](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/ai-sandbox) | Enter or start the current project's sandbox; runs migration first. `--print-context` reports the resolved sandbox. |
 | [bin/ai/ai-sandbox-account](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/ai-sandbox-account) | `status` / `refresh` / `reset` for the AI credentials a project's sandbox uses, so each project can hold a different Claude, Codex or Gemini account. |
 | [bin/ai/ai-delegate](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/ai-delegate) | Installed in the sandbox image: the lead hands one scout, writer or second-reviewer task file to Gemini through a headless `agy` run in a throwaway directory under `.ai-delegate/` and gets the answer on stdout. Exit 3 means agy is not signed in (fall back to the Claude subagent); `--conversation <id>` resumes the conversation whose id it printed on stderr. |
+| [bin/ai/context-statusline](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/context-statusline) | Installed in the sandbox image and named by its managed settings as the Claude Code `statusLine` command (`refreshInterval` 10 s); on the host, the same settings entry with `bin/ai` on `PATH`. Finds `tools/` as `create-ai-sandbox.sh` does and runs `python3 -m tools.context_statusline`. |
 | [bin/ai/ai-sandbox-migrate](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/ai-sandbox-migrate) | Idempotent migration of `~/.ai-sandbox` to the current layout; runs automatically before every start. Moves directories, never deletes. |
 | [bin/ai/ai-sandbox-gc](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/ai-sandbox-gc) | Reclaims per-sandbox duplicates of shared assets, shared stores no sandbox mounts any more, build-cache trash leftovers a reset could not delete, and images from the old per-project naming scheme, after listing them and confirming. |
 | [bin/ai/ai-sandbox-extensions](file:///home/jlewandowski/dev/public/dev-tools/bin/ai/ai-sandbox-extensions) | Populates the shared IDE extension stores from the host, or from a throwaway container when the host has none. |
@@ -33,4 +34,19 @@ This document outlines the core structure, CLI scripts, and utility tools contai
 | [tools/](file:///home/jlewandowski/dev/public/dev-tools/tools) | Python tools and utilities designed for AI agent execution. |
 | [tools/agent_log_trimmer](file:///home/jlewandowski/dev/public/dev-tools/tools/agent_log_trimmer) | CLI tool to demux, filter noise, extract errors, and save tokens from complex build outputs (Earthly, Maven, Gradle, Bazel, NPM, Pip). |
 | [tools/semantic_docs](file:///home/jlewandowski/dev/public/dev-tools/tools/semantic_docs) | Lightweight local vector search CLI using LanceDB and local embeddings for indexing and searching docs, notes, specifications, and PDFs. |
+| [tools/context_statusline](file:///home/jlewandowski/dev/public/dev-tools/tools/context_statusline) | Stdlib status line for Claude Code: model, the main session's context (percentage, tokens) and one token per live subagent (label, estimated context from its transcript's last reply, `~` when compacted since), sorted by size, cut to `COLUMNS`, coloured green/yellow/red by `PREPARE_TOKENS`/`CEILING_TOKENS` (the knowledge rule's thresholds), plain on `--plain` or `NO_COLOR`. Tests: `python3 -m unittest tools.context_statusline.test_statusline`; formatted with the ruff pinned in `requirements-dev.txt`. |
 | [.agents/AGENTS.md](file:///home/jlewandowski/dev/public/dev-tools/.agents/AGENTS.md) | Workspace-level agent behavioral rules, token optimizations, refactoring standards, and navigation guidelines. |
+
+---
+
+## Coupling register
+
+The coupling register: what the tree cannot derive, the formats and files read outside this repository.
+Each is marked at its definition with the searchable comment prefix
+`# reads-outside:` (`grep -rn 'reads-outside:' --include='*.py' --include='*.sh' .`).
+
+| Read outside the repository | By | Marked in |
+| :--- | :--- | :--- |
+| Claude Code 2.1.312 status line JSON on stdin (`session_id`, `transcript_path`, `model.display_name`, `context_window.{used_percentage, current_usage.{input_tokens, cache_creation_input_tokens, cache_read_input_tokens}}`, code.claude.com/docs/en/statusline.md) | `tools/context_statusline` | `tools/context_statusline/statusline.py`, module docstring |
+| Claude Code 2.1.312 subagent transcripts, `dirname(transcript_path)/<session_id>/subagents/agent-<id>.{meta.json,jsonl}` (`description`, `finished`; `type`, `message.usage`, `subtype: compact_boundary`), undocumented beyond code.claude.com/docs/en/sub-agents.md | `tools/context_statusline` | same |
+| The knowledge rule's context thresholds (`rules/global.md`, context lifecycle bullet: 250k prepare, 350k ceiling) | `tools/context_statusline` (`PREPARE_TOKENS`, `CEILING_TOKENS`) | `tools/context_statusline/statusline.py`, consumer comment above the constants |
