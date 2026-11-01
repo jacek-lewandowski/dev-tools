@@ -14,7 +14,9 @@ still prints the main part. Stdlib only.
 # reads-outside: Claude Code 2.1.312 subagent transcripts under
 #   dirname(transcript_path)/<session_id>/subagents/: agent-<id>.meta.json
 #   {description, finished} and agent-<id>.jsonl lines {type, message.usage.
-#   {input_tokens, cache_creation_input_tokens, cache_read_input_tokens}}
+#   {input_tokens, cache_creation_input_tokens, cache_read_input_tokens}},
+#   an API error or interruption as {type: "assistant", isApiErrorMessage:
+#   true, message.model: "<synthetic>"} with all-zero usage,
 #   and {type: "system", subtype: "compact_boundary"}.
 """
 
@@ -45,6 +47,7 @@ YELLOW = "\x1b[33m"
 RED = "\x1b[31m"
 RESET = "\x1b[0m"
 
+SYNTHETIC_MODEL = "<synthetic>"
 USAGE_FIELDS = (
     "input_tokens",
     "cache_creation_input_tokens",
@@ -102,7 +105,15 @@ def last_reply(path):
             ):
                 compacted = True
             elif entry.get("type") == "assistant":
-                tokens = usage_tokens((entry.get("message") or {}).get("usage"))
+                message = entry.get("message") or {}
+                # An API error or an interruption is written as an assistant
+                # entry with all-zero usage; the real context is the reply before.
+                if (
+                    entry.get("isApiErrorMessage")
+                    or message.get("model") == SYNTHETIC_MODEL
+                ):
+                    continue
+                tokens = usage_tokens(message.get("usage"))
                 if tokens is not None:
                     return tokens, compacted
         if size >= total:
