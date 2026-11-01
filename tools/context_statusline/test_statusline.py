@@ -20,6 +20,7 @@ from tools.context_statusline.statusline import (
     RED,
     RESET,
     STALE_AFTER_S,
+    TAIL_BYTES,
     YELLOW,
     main,
     render,
@@ -119,6 +120,76 @@ class StatuslineTest(unittest.TestCase):
             f.write('{"description": "No transcript yet"}')
         line = render(data, columns=200, colour=False, now=self.now)
         self.assertEqual(line, MAIN_PART)
+
+    def write_agent(self, data, stem, lines):
+        dest = os.path.join(self.tmp, data["session_id"], "subagents")
+        os.makedirs(dest, exist_ok=True)
+        with open(os.path.join(dest, stem + ".meta.json"), "w", encoding="utf-8") as f:
+            f.write('{"description": "Single agent"}')
+        with open(os.path.join(dest, stem + ".jsonl"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+    def test_synthetic_last_entry_keeps_the_real_estimate(self):
+        data = self.stdin()
+        reply = {
+            "type": "assistant",
+            "message": {
+                "model": "claude-fable-5-1",
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_creation_input_tokens": 200,
+                    "cache_read_input_tokens": 300000,
+                    "output_tokens": 5,
+                },
+            },
+        }
+        synthetic = {
+            "type": "assistant",
+            "isApiErrorMessage": True,
+            "message": {
+                "model": "<synthetic>",
+                "usage": {
+                    "input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 0,
+                },
+            },
+        }
+        self.write_agent(
+            data, "agent-synthetic", [json.dumps(reply), json.dumps(synthetic)]
+        )
+        line = render(data, columns=200, colour=False, now=self.now)
+        self.assertEqual(line, MAIN_PART + " | Single agent:300k")
+
+    def test_reply_beyond_the_tail_and_a_torn_last_line(self):
+        data = self.stdin()
+        reply = {
+            "type": "assistant",
+            "message": {
+                "model": "claude-fable-5-1",
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 260000,
+                    "output_tokens": 5,
+                },
+            },
+        }
+        result = {"type": "user", "message": {"role": "user", "content": "x" * 1000}}
+        lines = [json.dumps(reply)] + [json.dumps(result)] * (2 * TAIL_BYTES // 1000)
+        lines.append('{"type":"user","message":{"role":"user","con')
+        self.write_agent(data, "agent-long", lines)
+        self.assertGreater(
+            os.path.getsize(
+                os.path.join(
+                    self.tmp, data["session_id"], "subagents", "agent-long.jsonl"
+                )
+            ),
+            TAIL_BYTES,
+        )
+        line = render(data, columns=200, colour=False, now=self.now)
+        self.assertEqual(line, MAIN_PART + " | Single agent:260k")
 
     # --- colours ---------------------------------------------------------
 
