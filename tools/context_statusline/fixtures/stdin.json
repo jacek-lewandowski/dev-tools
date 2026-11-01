@@ -1,0 +1,20 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": "/replaced/by/the/test/fixture-session.jsonl",
+  "cwd": "/home/user/project",
+  "model": {"id": "claude-fable-5-1", "display_name": "Fable 5.1"},
+  "workspace": {"current_dir": "/home/user/project", "project_dir": "/home/user/project"},
+  "version": "2.1.312",
+  "cost": {"total_cost_usd": 1.23, "total_duration_ms": 45000, "total_api_duration_ms": 2300, "total_lines_added": 156, "total_lines_removed": 23},
+  "context_window": {
+    "context_window_size": 200000,
+    "used_percentage": 42.1,
+    "remaining_percentage": 57.9,
+    "current_usage": {
+      "input_tokens": 32,
+      "output_tokens": 456,
+      "cache_creation_input_tokens": 925,
+      "cache_read_input_tokens": 83243
+    }
+  }
+}

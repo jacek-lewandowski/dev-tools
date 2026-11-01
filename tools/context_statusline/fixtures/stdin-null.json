@@ -1,0 +1,12 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": "/replaced/by/the/test/fixture-session.jsonl",
+  "model": {"id": "claude-fable-5-1", "display_name": "Fable 5.1"},
+  "version": "2.1.312",
+  "context_window": {
+    "context_window_size": 200000,
+    "used_percentage": null,
+    "remaining_percentage": null,
+    "current_usage": null
+  }
+}
