@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Claude Code status line: model, main context, live subagents, coloured by the
+# context thresholds (tools/context_statusline). Reads the status line JSON on
+# stdin; "--plain" or NO_COLOR drops the colours.
+# Finds tools/ as create-ai-sandbox.sh does: this checkout, ~/dev/public/dev-tools,
+# then the sandbox's read-only mount ~/tools.
+# Exit: 0 line printed, 2 no tools directory found.
+set -euo pipefail
+
+self=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+if   [ -d "$self/../../tools/context_statusline" ];            then tools="$self/../../tools"
+elif [ -d "$HOME/dev/public/dev-tools/tools/context_statusline" ]; then tools="$HOME/dev/public/dev-tools/tools"
+elif [ -d "$HOME/tools/context_statusline" ];                  then tools="$HOME/tools"
+else echo "context-statusline: no dev-tools 'tools' directory (looked beside this script, in ~/dev/public/dev-tools, and in ~/tools)" >&2; exit 2
+fi
+cd "$(dirname "$tools")"
+exec python3 -m tools.context_statusline "$@"
