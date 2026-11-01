@@ -48,6 +48,12 @@ assert_contains "autoMode authorises agy"               "$ms" 'agy (Antigravity 
 assert_contains "ai-delegate is allowed by permission rule" "$ms" '"Bash(ai-delegate *)"'
 assert_contains "autoMode authorises ai-delegate"        "$ms" '`agy -p` or `ai-delegate` is authorized'
 assert_eq "managed settings JSON parses" "$(python3 -m json.tool "$build/claude-managed-settings.json" >/dev/null 2>&1; echo $?)" '0'
+# The status line: one command for every sandbox, installed beside ai-delegate.
+assert_eq "managed settings run context-statusline as the status line" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$build/claude-managed-settings.json" 2>&1)" \
+    'context-statusline'
+assert_contains "context-statusline is installed in the image" "$df" 'COPY context-statusline /usr/local/bin/context-statusline'
+assert_file     "context-statusline is in the build context"   "$build/context-statusline"
 assert_contains "corepack shims are enabled"             "$df" 'corepack enable'
 assert_contains "pnpm and yarn are pre-warmed"           "$df" 'corepack prepare pnpm@latest yarn@stable --activate'
 assert_contains "corepack cache is shared, not root's"   "$df" 'COREPACK_HOME=/usr/local/share/corepack'
