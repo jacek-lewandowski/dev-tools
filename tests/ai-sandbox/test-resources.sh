@@ -98,7 +98,7 @@ TESTS_RUN=$((TESTS_RUN + 1))
 if bash -n "$doctor" 2>"$tmp/doctor.err"; then _pass "doctor is valid bash"
 else _fail "doctor is valid bash" "$(cat "$tmp/doctor.err")"; fi
 
-# --- timezone: the host's zone, by name (TZ) and by file (/etc/localtime) ---
+# --- timezone: the host's zone, by name (TZ); the entrypoint links /etc/localtime ---
 # Every source is faked: a timedatectl stub on PATH, and HOST_ETC_DIR pointed at
 # a directory standing in for the host's /etc (this test host may have none).
 tzstubs="$tmp/tzstub"; mkdir -p "$tzstubs"
@@ -117,14 +117,15 @@ tz_create <<'STUB'
 echo Europe/Warsaw
 STUB
 assert_contains "TZ follows timedatectl"                    "$compose" '- TZ=Europe/Warsaw'
-assert_contains "the host's zoneinfo file is mounted read-only, symlink resolved" \
-    "$compose" "- \"$zi/Warsaw:/etc/localtime:ro\""
+# A bind mount at /etc/localtime follows the image's symlink and lands on
+# /usr/share/zoneinfo/Etc/UTC, so UTC by name shows the host's zone: no mount.
+assert_eq       "no volume targets /etc/localtime or zoneinfo" "$(grep -cE '/etc/localtime|/usr/share/zoneinfo' "$dir/docker-compose.yml")" '0'
 assert_contains "the shared brain states the zone"          "$(cat "$HOME/.gemini/GEMINI.md")" "host's timezone (TZ=Europe/Warsaw)"
 assert_contains "the image installs tzdata"                 "$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")" ' tzdata'
 # The "Ready" summary (with its Timezone line) is printed only after a build
 # and start, which --no-start never reaches; the log line of the timezone step
 # is what a --no-start run shows.
-assert_contains "the log names the zone and the file"       "$(cat "$tmp/out.tz")" "Timezone: Europe/Warsaw (TZ), zoneinfo mounted read-only from $zi/Warsaw"
+assert_contains "the log names the zone and the file"       "$(cat "$tmp/out.tz")" "Timezone: Europe/Warsaw (TZ), /etc/localtime and /etc/timezone set by the entrypoint"
 assert_eq       "the zone is not remembered in .env"        "$(grep -c 'TZ=' "$dir/.env")" '0'
 # 2. timedatectl fails (no systemd): /etc/timezone names the zone.
 printf 'America/Lima\n' > "$etc/timezone"
@@ -141,8 +142,6 @@ tz_create <<'STUB'
 echo
 STUB
 assert_contains "TZ falls back to the localtime symlink"   "$compose" '- TZ=Asia/Tokyo'
-assert_eq       "a dangling localtime is not mounted"      "$(grep -c '/etc/localtime:ro' "$dir/docker-compose.yml")" '0'
-assert_contains "and the skipped mount is warned about"    "$(cat "$tmp/out.tz")" '/etc/localtime is not mounted'
 # 4. No source at all: UTC, with a warning, and still no mount.
 rm "$etc/localtime"
 tz_create <<'STUB'
@@ -152,6 +151,27 @@ STUB
 assert_contains "no source means UTC"                       "$compose" '- TZ=UTC'
 assert_contains "and a warning about the zone"              "$(cat "$tmp/out.tz")" 'Could not determine the host'"'"'s timezone'
 assert_eq       "nothing is mounted at /etc/localtime"      "$(grep -c '/etc/localtime' "$dir/docker-compose.yml")" '0'
+
+# 5. The entrypoint makes /etc/localtime and /etc/timezone follow TZ, against a
+#    fake /etc and zoneinfo tree (it must never touch the real ones here).
+ep="$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
+fz="$tmp/fake-zi"; fe="$tmp/fake-etc"; mkdir -p "$fz/Europe" "$fz/Etc" "$fe" "$tmp/epstub"
+# Stub dbus-launch, and no plugin list: the other sections stay inert.
+printf '#!/bin/sh\n' > "$tmp/epstub/dbus-launch"; chmod +x "$tmp/epstub/dbus-launch"
+printf 'warsaw\n' > "$fz/Europe/Warsaw"; printf 'utc\n' > "$fz/Etc/UTC"
+ln -s "$fz/Etc/UTC" "$fe/localtime"; echo Etc/UTC > "$fe/timezone"
+run_ep() {   # TZ value
+    TZ="$1" SANDBOX_ETC_DIR="$fe" SANDBOX_ZONEINFO_DIR="$fz" SANDBOX_RUNTIME_DIR="$tmp/ep-run" \
+        CLAUDE_PLUGINS_LIST=/nonexistent CLAUDE_PLUGINS_LOG="$tmp/ep-plugins.log" \
+        PATH="$tmp/epstub:$PATH" bash "$ep" true >"$tmp/ep.out" 2>&1
+}
+run_ep Europe/Warsaw
+assert_eq       "entrypoint links /etc/localtime to the zone"  "$(readlink "$fe/localtime")" "$fz/Europe/Warsaw"
+assert_eq       "entrypoint writes the zone to /etc/timezone"  "$(cat "$fe/timezone")" 'Europe/Warsaw'
+assert_eq       "the zoneinfo files are left untouched"        "$(cat "$fz/Etc/UTC")" 'utc'
+run_ep Nowhere/Land
+assert_eq       "an unknown zone keeps the previous link"      "$(readlink "$fe/localtime")" "$fz/Europe/Warsaw"
+assert_contains "and the entrypoint warns about it"            "$(cat "$tmp/ep.out")" 'Nowhere/Land'
 
 # --- xpra: forwarded windows must not be rescaled ---------------------------
 # The real backend is not installed in a test environment; these stubs exist
