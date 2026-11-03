@@ -56,3 +56,20 @@ md5sum /usr/share/zoneinfo/Etc/UTC /usr/share/zoneinfo/Europe/Warsaw   # differe
   - `sudo -n tee` replaced by `cat >/dev/null`: `not ok 49`, `65 run, 1 failed`.
   - Both restored.
 - Final, after the last edit: `test-resources.sh` `65 run, 0 failed`; `test-plugins.sh` `33 run, 0 failed`.
+
+## Host verification result (2026-11-03, sandbox rebuilt by the user at be70fa4)
+Run inside the rebuilt dev-tools sandbox by the lead:
+```
+$ echo $TZ                      -> Europe/Warsaw
+$ TZ=UTC date                   -> Tue Nov  3 21:12:35 UTC 2026
+$ TZ=Etc/UTC date               -> Tue Nov  3 21:12:35 UTC 2026
+$ date                          -> Tue Nov  3 22:12:35 CET 2026
+$ date -u                       -> Tue Nov  3 21:12:35 UTC 2026
+$ readlink /etc/localtime       -> /usr/share/zoneinfo/Europe/Warsaw
+$ cat /etc/timezone             -> Europe/Warsaw
+$ grep -E "zoneinfo|localtime" /proc/self/mountinfo   -> (no output)
+$ md5sum /usr/share/zoneinfo/Etc/UTC /usr/share/zoneinfo/Europe/Warsaw
+38bb24ba4d742dd6f50c1cba29cd966a  /usr/share/zoneinfo/Etc/UTC
+499916a22979b1cffade2ca408c318c7  /usr/share/zoneinfo/Europe/Warsaw
+```
+Before the fix the same sandbox showed Etc/UTC == Europe/Warsaw (499916a2...) and `TZ=UTC date` printing CET. All six expected results hold; the sudo fallback ran in a real container.
