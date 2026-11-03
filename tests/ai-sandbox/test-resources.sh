@@ -172,6 +172,22 @@ assert_eq       "the zoneinfo files are left untouched"        "$(cat "$fz/Etc/U
 run_ep Nowhere/Land
 assert_eq       "an unknown zone keeps the previous link"      "$(readlink "$fe/localtime")" "$fz/Europe/Warsaw"
 assert_contains "and the entrypoint warns about it"            "$(cat "$tmp/ep.out")" 'Nowhere/Land'
+# 6. A read-only /etc, as in a container where the user is not root: the plain
+#    write fails and the sudo -n fallback does the work. The stub sudo drops -n
+#    and opens the fake dir for the command it runs.
+ro="$tmp/ro-etc"; mkdir -p "$ro"; ln -s "$fz/Etc/UTC" "$ro/localtime"; echo Etc/UTC > "$ro/timezone"; chmod a-w "$ro"
+cat > "$tmp/epstub/sudo" <<'STUB'
+#!/bin/sh
+[ "$1" = "-n" ] || { echo "sudo called without -n" >&2; exit 1; }
+shift; chmod u+w "$RO_ETC"; "$@"; rc=$?; chmod a-w "$RO_ETC"; exit $rc
+STUB
+chmod +x "$tmp/epstub/sudo"
+RO_ETC="$ro" TZ=Europe/Warsaw SANDBOX_ETC_DIR="$ro" SANDBOX_ZONEINFO_DIR="$fz" SANDBOX_RUNTIME_DIR="$tmp/ep-run" \
+    CLAUDE_PLUGINS_LIST=/nonexistent CLAUDE_PLUGINS_LOG="$tmp/ep-plugins.log" \
+    PATH="$tmp/epstub:$PATH" bash "$ep" true >"$tmp/ep.out" 2>&1
+assert_eq       "sudo fallback links /etc/localtime in a read-only /etc" "$(readlink "$ro/localtime")" "$fz/Europe/Warsaw"
+assert_eq       "and writes /etc/timezone through sudo tee"             "$(cat "$ro/timezone")" 'Europe/Warsaw'
+chmod u+w "$ro"
 
 # --- xpra: forwarded windows must not be rescaled ---------------------------
 # The real backend is not installed in a test environment; these stubs exist
