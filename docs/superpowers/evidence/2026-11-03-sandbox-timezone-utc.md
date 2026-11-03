@@ -47,3 +47,12 @@ cat /etc/timezone          # <host zone>
 grep zoneinfo /proc/self/mountinfo   # no output
 md5sum /usr/share/zoneinfo/Etc/UTC /usr/share/zoneinfo/Europe/Warsaw   # different hashes
 ```
+
+## Follow-up (review minors)
+- TZ_SUMMARY reworded to what is requested: the entrypoint links /etc/localtime and writes /etc/timezone at start, warning in docker logs if it cannot.
+- New case 6 in `tests/ai-sandbox/test-resources.sh`: read-only fake /etc plus a stub `sudo` (requires `-n`, opens the dir for the command it runs); asserts the symlink target and /etc/timezone content.
+- Mutation checks, `bash tests/ai-sandbox/test-resources.sh`:
+  - `sudo -n ln` changed to `sudo ln`: `not ok 48`, `not ok 49`, `65 run, 2 failed`.
+  - `sudo -n tee` replaced by `cat >/dev/null`: `not ok 49`, `65 run, 1 failed`.
+  - Both restored.
+- Final, after the last edit: `test-resources.sh` `65 run, 0 failed`; `test-plugins.sh` `33 run, 0 failed`.

@@ -809,7 +809,7 @@ fi
 readonly HOST_TZ
 add_env "TZ=${HOST_TZ}"
 log "Timezone: $HOST_TZ (TZ), /etc/localtime and /etc/timezone set by the entrypoint"
-TZ_SUMMARY="$HOST_TZ (the host's, by TZ, /etc/localtime and /etc/timezone)"
+TZ_SUMMARY="$HOST_TZ (the host's, by TZ; the entrypoint links /etc/localtime and writes /etc/timezone at start, warning in docker logs if it cannot)"
 
 # ---------------------------------------------------------------------------
 # Devices
