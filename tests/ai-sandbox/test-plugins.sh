@@ -40,6 +40,7 @@ echo "DBUS_SESSION_BUS_ADDRESS='unix:path=/nonexistent';"
 STUB
 chmod +x "$stub/dbus-launch"
 export STUB_DBUS_LOG="$tmp/dbus.log" SANDBOX_RUNTIME_DIR="$tmp/run"
+export SANDBOX_ETC_DIR="$tmp/ep-etc" SANDBOX_ZONEINFO_DIR="$tmp/ep-zi"
 unset SANDBOX_START_XWAYLAND SANDBOX_START_WM SANDBOX_WITH_DOCKER
 real_env="/run/user/$(id -u)/sandbox-env.sh"
 real_before=$(stat -c '%y %s' "$real_env" 2>&1)

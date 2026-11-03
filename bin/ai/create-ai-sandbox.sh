@@ -786,8 +786,11 @@ fi
 # ---------------------------------------------------------------------------
 
 # The sandbox keeps the host's clock zone: TZ by name for everything that
-# reads it (tzdata in the image resolves it), and the host's zoneinfo file at
-# /etc/localtime for everything that does not. Never remembered in .env: a
+# reads it (tzdata in the image resolves it), and the entrypoint points
+# /etc/localtime and /etc/timezone at the same zone for everything that does
+# not. Nothing is bind-mounted over a zoneinfo path: Docker follows the image's
+# /etc/localtime symlink and would overwrite /usr/share/zoneinfo/Etc/UTC with
+# the host's file, so UTC by name would show the host's zone. Never remembered in .env: a
 # host that changes zones is followed on the next create. The name comes from
 # timedatectl, else /etc/timezone, else the /etc/localtime symlink, else UTC.
 HOST_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || true)
@@ -805,17 +808,8 @@ if [ -z "$HOST_TZ" ]; then
 fi
 readonly HOST_TZ
 add_env "TZ=${HOST_TZ}"
-# Resolved on the host side, so the mount is the zoneinfo file itself and not
-# a symlink whose target the container may not have.
-LOCALTIME_HOST=$(readlink -f "$HOST_ETC_DIR/localtime" 2>/dev/null || true)
-if [ -n "$LOCALTIME_HOST" ] && [ -f "$LOCALTIME_HOST" ]; then
-    add_vol "\"${LOCALTIME_HOST}:/etc/localtime:ro\""
-    log "Timezone: $HOST_TZ (TZ), zoneinfo mounted read-only from $LOCALTIME_HOST"
-    TZ_SUMMARY="$HOST_TZ (the host's, by TZ and /etc/localtime)"
-else
-    warn "No zoneinfo file behind $HOST_ETC_DIR/localtime: /etc/localtime is not mounted, the sandbox relies on TZ=$HOST_TZ alone."
-    TZ_SUMMARY="$HOST_TZ (the host's, by TZ)"
-fi
+log "Timezone: $HOST_TZ (TZ), /etc/localtime and /etc/timezone set by the entrypoint"
+TZ_SUMMARY="$HOST_TZ (the host's, by TZ, /etc/localtime and /etc/timezone)"
 
 # ---------------------------------------------------------------------------
 # Devices
@@ -1470,6 +1464,23 @@ if [ "${SANDBOX_WITH_DOCKER:-0}" = "1" ]; then
     else
         # Never advertise a DOCKER_HOST that cannot exist.
         echo "sandbox: --with-docker was requested but dockerd-rootless.sh is missing" >&2
+    fi
+fi
+
+# --- Timezone ----------------------------------------------------------------
+# The image's /etc/localtime is a symlink to Etc/UTC; follow TZ (the host's zone,
+# set by the compose file) so tools that ignore TZ agree. Needs root: sudo is
+# passwordless in the image. Edited here, not baked, so a zone that changes
+# between creates needs no image rebuild. SANDBOX_ETC_DIR/SANDBOX_ZONEINFO_DIR: tests only.
+tz_etc="${SANDBOX_ETC_DIR:-/etc}"; tz_zi="${SANDBOX_ZONEINFO_DIR:-/usr/share/zoneinfo}"
+if [ -n "${TZ:-}" ]; then
+    if [ -f "$tz_zi/$TZ" ]; then
+        { ln -sfn "$tz_zi/$TZ" "$tz_etc/localtime" && printf '%s\n' "$TZ" > "$tz_etc/timezone"; } 2>/dev/null \
+            || { sudo -n ln -sfn "$tz_zi/$TZ" "$tz_etc/localtime" \
+                 && printf '%s\n' "$TZ" | sudo -n tee "$tz_etc/timezone" >/dev/null; } 2>/dev/null \
+            || echo "sandbox: could not set /etc/localtime and /etc/timezone for TZ=$TZ" >&2
+    else
+        echo "sandbox: no $tz_zi/$TZ in the image; /etc/localtime keeps its default (TZ=$TZ still applies)" >&2
     fi
 fi
 
