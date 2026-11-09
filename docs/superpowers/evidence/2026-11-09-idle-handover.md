@@ -198,3 +198,83 @@ Findings: I1, I2, M5, M6/M7 of `2026-11-09-idle-handover-review.md`. Commit: the
 - Red (tests first): `Ran 27 tests ... FAILED (failures=6, errors=1)`.
 - Green: `Ran 27 tests in 0.028s / OK`. ruff 0.17.3: `All checks passed!`, `5 files already formatted`.
 - Real run from `tools/` (a subdirectory): `../bin/ai/handover-ready /x.md` -> marked under the session's real directory; status line `Sonnet 5.5 -- | Statusline h:84k | handover ready`; `--clear` removed it. Unset var -> `CLAUDE_CODE_SESSION_ID is not set`, rc=2; `CLAUDE_CODE_SESSION_ID=nope` -> `no transcript for session nope`, rc=2; no new directory in `~/.claude/projects`. No marker left.
+
+## Change A fix round 2
+
+R2-I2: lint clause reworded to the reviewer's text; decisions.md entry quotes the user. R2-M2: blank lines between the 2026-11-09 entries.
+
+```diff
+commit 9a274ef4033eb73bd456a5c20ce2d0681861ae57
+Author: jacek-lewandowski <lewandowski.jacek@gmail.com>
+Date:   Mon Nov 9 10:40:49 2026 +0100
+
+    fix(rules): lint clause names the linter and every error; blank lines between decisions entries
+    
+    Co-Authored-By: Zuzia (Claude Sonnet 5.5) <noreply@anthropic.com>
+
+diff --git a/decisions.md b/decisions.md
+index 3bdd647..9e5ab4b 100644
+--- a/decisions.md
++++ b/decisions.md
+@@ -20,22 +20,28 @@ Format:
+   carries no sandbox section, and the generic remainder (an environment fault is
+   reported, not worked around in the test) is already in "Regression test first"
+   and "When the environment cannot run it".
++
+ - 2026-11-09 2026-11-04-full-lint-set-after-every-fix rejected
+   none: every linter after every fix commit is the per-step cost the task-classes
+   decision removed; the implementer already re-runs every reported check after
+   its last edit and the gate runs the full set once. Intermediate red commits of
+   a green final tree cost nothing the gate does not catch.
++
+ - 2026-11-09 2026-11-04-clean-build-after-source-rewrite integrated
+   rules/global.md: a static-analysis patch run compiled the module before
+   writing the patched sources, so the incremental build treated the old classes
+   as current and the tests passed on code no longer in the tree. One sentence in
+   "Build outputs are a snapshot", which already covers stale build output.
++
+ - 2026-11-09 2026-11-04-task-ends-with-full-lint-and-tree-wide-tests rejected
+   rules/global.md (one clause kept): per-task full lint and repository-wide suites
+   contradict the task-classes decision (targeted tests during development, the
+   gate once per class, no suite outside CI as a per-task obligation). The valid
+   part, a lint runner that stops at the first failing task hiding the others and
+-  costing extra gate runs, is a clause in the gate sentence.
++  costing extra gate runs, is a clause in the gate sentence. The user approved
++  it: "the linter must not stop at the first error, it must produce a full
++  report".
++
+ - 2026-11-09 idle-handover-timer integrated
+   rules/global.md: replaces the end-of-block closed question ("a break of more
+   than an hour?") of the same day. The user said (translated): "better not to
+diff --git a/rules/global.md b/rules/global.md
+index 4bf0632..803959a 100644
+--- a/rules/global.md
++++ b/rules/global.md
+@@ -450,8 +450,8 @@ Host rules apply everywhere, including inside an ai-sandbox container
+   the gate or a suite outside CI as a per-task obligation, and a task does not
+   repeat a probe, pin or search the plan's evidence already records unless its
+   change alters the answer. The gate is one command set in which each suite
+-  runs once, and a lint runner that stops at its first failure is run past it,
+-  so that every task reports; a runner is spawned only for what no recorded
++  runs once, and a linter or lint runner that stops at its first error is run
++  so that it reports every error; a runner is spawned only for what no recorded
+   run on that tree covers. "Done" and "passing" are stated only with the
+   actual command output at hand.
+ - **One tree per agent that runs anything.** Two agents never share one working
+```
+
+## Change B fix round 2 (Wojtek)
+
+R2-I1: `_is_user_message` counts an entry only when `origin.kind == "human"`;
+with no `origin` object, when the text is non-empty and does not start with a
+`NOT_A_ROUND` prefix (list copied from `~/knowledge` `transcript_stats.py`, noted
+in a comment); tool results, `isMeta`, `isSidechain` still excluded. `origin.kind`
+added to the reads-outside comment. Test fixture: a real task-notification entry
+of this project's transcripts (2026-10-28, `origin.kind` `task-notification`),
+trimmed to type, isSidechain, timestamp, origin, message.content; tested with and
+without `origin`, plus command/system-reminder prefixes and a human-origin case.
+R2-M1: `_text_of`/`_is_user_message` tolerate a non-dict `message`, non-dict
+content blocks and missing fields; the catch in `last_user_time` also covers
+TypeError/AttributeError; test with six malformed user lines.
+- Red: `Ran 30 tests ... FAILED (failures=3)` (task-notification, prefixes, malformed; the malformed case crashed on `message: "a string"` in the old code).
+- Green: `Ran 30 tests in 0.032s / OK`. ruff 0.17.3: `All checks passed!`, `5 files already formatted`.
