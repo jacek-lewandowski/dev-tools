@@ -362,8 +362,12 @@ Closing a report is deletion. After the user has seen it, the integrator runs
 `git -C ~/knowledge update-ref refs/reports-closed/<name> refs/reports/<name>`
 (never under `refs/reports/`). The next sync pushes
 `--force-with-lease=refs/reports/<name>:<tip>` with an empty source, then deletes
-the local ref and the tombstone; a moved remote ref (stale lease) keeps everything
-and is reported, offline keeps everything for the next sync. There is no
+the local ref and the tombstone. git answers a leased delete of a ref the remote
+no longer has with "stale info" too, so the host then asks `ls-remote`: a ref that
+is gone counts as closed, one still there under another tip (a moved remote ref)
+keeps everything and is reported; offline keeps everything for the next sync. The
+integrator pushes a fetched report ref only when the remote lacks it or holds
+another tip, so a sync with nothing new reports no `reports pushed`. There is no
 `decisions.md` entry, a closed report is not recoverable from git and, unlike a
 proposal, is not re-opened; a rule it suggests follows the proposal flow.
 

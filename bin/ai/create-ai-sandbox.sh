@@ -1608,8 +1608,10 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                    fi
                done
                # A report ref is dropped here once the host has pushed it, so any left is pending.
+               _role=$(cut -d' ' -f1 "$HOME/knowledge/.git/ai-knowledge-role" 2>/dev/null)
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname)' 'refs/reports/*' 2>/dev/null); do
-                   status "  $_b" "pending: reaches the remote on the next host sync"
+                   if [ "$_role" = integrator ]; then status "  $_b" "open: close it with a refs/reports-closed tombstone"
+                   else status "  $_b" "pending: reaches the remote on the next host sync"; fi
                done
            else
                status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
