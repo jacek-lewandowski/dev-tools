@@ -23,7 +23,8 @@ still prints the main part. Stdlib only.
 #   handover-ready, written by bin/ai/handover-ready (tools/context_statusline/
 #   mark.py) for the lead's session; its presence adds the "handover ready"
 #   segment. Session-scoped: /clear starts another session id, so the mark
-#   stops showing by itself.
+#   stops showing by itself; a user message after the mark (transcript entries
+#   {type: "user", timestamp, message.content, isMeta, isSidechain}) withdraws it.
 """
 
 import argparse
@@ -31,6 +32,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 
 # Consumer comment: these two equal the knowledge rule's thresholds
 # (~/knowledge rules/global.md, context lifecycle bullet, approved 2026-11-01):
@@ -170,15 +172,54 @@ def subagents_dir(data):
     return os.path.join(os.path.dirname(transcript), session, "subagents")
 
 
+def _is_user_message(entry):
+    """A message the user typed: not a tool result, an agent message or a subagent's."""
+    if entry.get("type") != "user":
+        return False
+    if entry.get("isMeta") or entry.get("isSidechain"):
+        return False
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") != "tool_result" for b in content
+        )
+    return isinstance(content, str)
+
+
+def last_user_time(path):
+    """Epoch seconds of the transcript's last user message, or None."""
+    size = TAIL_BYTES
+    while True:
+        lines, total = _tail_lines(path, size)
+        for raw in reversed(lines):
+            try:
+                entry = json.loads(raw)
+                if isinstance(entry, dict) and _is_user_message(entry):
+                    stamp = str(entry["timestamp"]).replace("Z", "+00:00")
+                    return datetime.fromisoformat(stamp).timestamp()
+            except (ValueError, KeyError):
+                continue
+        if size >= total:
+            return None
+        size *= 16
+
+
 def handover_ready(data):
-    """True when this session's handover-ready mark file exists."""
+    """True when the session's mark exists and no user message came after it."""
     transcript = data.get("transcript_path")
     session = data.get("session_id")
     if not isinstance(transcript, str) or not isinstance(session, str):
         return False
-    return os.path.isfile(
-        os.path.join(os.path.dirname(transcript), session, HANDOVER_MARKER)
-    )
+    marker = os.path.join(os.path.dirname(transcript), session, HANDOVER_MARKER)
+    try:
+        if not os.path.isfile(marker):
+            return False
+        marked = os.stat(marker).st_mtime
+        last_user = last_user_time(transcript)
+    except OSError:
+        # No readable transcript: nothing says the user came back.
+        return os.path.isfile(marker)
+    return last_user is None or last_user <= marked
 
 
 def _paint(text, tokens, colour):
