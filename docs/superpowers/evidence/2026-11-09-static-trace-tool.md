@@ -20,3 +20,23 @@ Rule text (rules/global.md section 4, after the known-case bullet):
   path, as under the known-case rule. The answer cites the tool's paths as
   `file:line` and adds only what the tool cannot judge: false positives, and
   sanitisers or framework behaviour it does not model.
+
+## Fix round: commit 4dd9ad0
+
+- **A code-tracing task runs a static tool for the stack.** A task that asks
+  how data or control flows (where a value goes, whether it is escaped or
+  sanitised before output, who calls what, which paths reach a sink) is not
+  answered by reading file after file. The agent picks the tool by the stack: a
+  taint or dataflow analyser that reports source-to-sink paths for security
+  traces (Joern, Semgrep taint mode), the language server's call hierarchy and
+  references for call questions, `sg` for shapes. It picks only a tool whose
+  licence allows use on this codebase, and asks before installing when the
+  licence is unclear for it. Where the project has none, the agent
+  installs it, pinned and checked against the registry as under Dependency
+  hygiene: in the sandbox that is 🟢+; on the host it is a new external
+  dependency, 🟡, declared in the plan. A tool installed only to run the
+  analysis is not a project dependency and stays out of the build and the
+  lockfiles unless the task adds it there. The tool is first run on one known
+  path, as under the known-case rule. The answer cites the tool's paths as
+  `file:line` and adds only what the tool cannot judge: false positives, and
+  sanitisers or framework behaviour it does not model.
