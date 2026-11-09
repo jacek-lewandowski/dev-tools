@@ -187,6 +187,7 @@ in their next session. Nothing requires a proposal for the owner's own changes.
 | `ai-knowledge status` | Config, `main` revision, then every sandbox with its knowledge state and last sync |
 | `ai-knowledge status PROJECT_DIR` | The same header, then that project's clone and last sync |
 | `ai-knowledge proposals [--repo DIR]` | List open proposal files across `proposal/*` branches |
+| `ai-knowledge reports [--repo DIR]` | List open report files across `refs/reports/*` (tombstoned ones hidden) |
 | `ai-knowledge propose FILE [--slug S] [--project-id ID] [--machine M] [--push]` | File a document as a `proposal/*` branch from `origin/main` |
 
 ## How it works
@@ -207,6 +208,19 @@ entry), with one exception: the single commit `init --integrator` makes from the
 host to record the integrator in `README.md`, which that flag is the approval for. Branch `proposal/<YYYY-MM-DD>-<slug>-<hex>` holds one proposal, created
 from `main`, and may differ from `main` only under `proposals/`. The host refuses
 to push a proposal branch whose name does not follow that pattern.
+
+A process report is not a branch: it is the ref `refs/reports/<YYYY-MM-DD>-<project>-<hex>`
+(`<project>` the slugged project directory, `<hex>` four characters of the commit),
+one commit from `main` that adds only `reports/<project>/process-report-<P>-<F>_<T>.md`.
+Deliberate exception to "nothing project-specific belongs here", accepted by the
+user: reports live on the private remote outside `main` and outside `refs/heads/`.
+Invariant: a report object is never reachable from `main` and never lands in a
+clone other than the one that wrote it and the integrator's. Default `git clone`
+and `fetch --prune origin` take only `refs/heads/*`, so no clone needs a change;
+only the integrator's sync fetches `refs/reports/*:refs/reports/*`. The host
+refuses to push a ref whose name is off the pattern, that changes any path outside
+`reports/`, or that has no common history with `origin/main`. `main` never carries
+`reports/`.
 
 ### 2. Host-side layout
 
@@ -296,8 +310,9 @@ the transport for the rules now.
 The clone is created from the remote on first use with `main` checked out. The
 host writes `.git/ai-knowledge-role` (`proposals <project-id>`) and a pre-commit
 hook into it on every sync. The hook refuses a commit on `main` and any staged
-path outside `proposals/` on a `proposal/*` branch, so a mistake fails inside the
-sandbox at commit time; the host's scope check below remains the enforcement.
+path outside `proposals/` on a `proposal/*` branch (or outside `reports/` on a
+`report/*` branch, the temporary branch the `process-report` skill builds a report
+on), so a mistake fails inside the sandbox at commit time; the host's scope check below remains the enforcement.
 Every sync:
 
 1. Stops with `skipped` if the working tree has uncommitted changes, or if the
@@ -313,8 +328,13 @@ Every sync:
    of `origin/main` is closed and the local branch deleted (checking out `main`
    first if the clone sat on it); the rest are open and pushed fast-forward only,
    a remote with commits the branch lacks being a `conflict`.
-5. Writes `ok: main current; pushed N; closed M`, or the first problem found, or
-   `offline` with the per-branch push commands to run by hand.
+5. For each local `refs/reports/*` ref, checks name and scope as in step 4 (the
+   same `refused` status, the same `offline` pending count), pushes
+   `<ref>:<ref>`, and on success deletes the ref in a writer clone (a ref whose
+   push succeeded is on the remote; one still local is pending).
+6. Writes `ok: main current; pushed N; closed M` (plus `; reports pushed N` when a
+   report went), or the first problem found, or `offline` with the per-branch push
+   commands to run by hand.
 
 ### 6. Integrator clone
 
@@ -328,12 +348,24 @@ then deletes closed branches locally and on the remote. Remote deletion happens
 only after `main` is on the remote, only for a tip that is an ancestor of
 `origin/main`, and only under a lease on the fetched tip: an amendment the
 proposer pushed meanwhile rejects the lease, and the proposal is simply open
-again. If `main` advanced, the host re-renders at once.
+again. If `main` advanced, the host re-renders at once. After the proposals it acts on
+report tombstones, then fetches `refs/reports/*:refs/reports/*` (non-forced); it
+keeps its own report refs until they are closed. A tombstone counts only here and
+only for a name matching the report pattern.
 
 Closing a proposal is `git merge -s ours --no-ff` of its branch into `main`:
 `main`'s tree is unchanged, the branch tip becomes an ancestor of `main`, and no
 checkout or file removal is needed. The proposal text stays reachable with
 `git log --full-history -- proposals/` or `git show <merge>^2:proposals/<file>`.
+
+Closing a report is deletion. After the user has seen it, the integrator runs
+`git -C ~/knowledge update-ref refs/reports-closed/<name> refs/reports/<name>`
+(never under `refs/reports/`). The next sync pushes
+`--force-with-lease=refs/reports/<name>:<tip>` with an empty source, then deletes
+the local ref and the tombstone; a moved remote ref (stale lease) keeps everything
+and is reported, offline keeps everything for the next sync. There is no
+`decisions.md` entry, a closed report is not recoverable from git and, unlike a
+proposal, is not re-opened; a rule it suggests follows the proposal flow.
 
 ### Re-opening a closed proposal
 
@@ -423,6 +455,11 @@ linked from `.claude/skills/`. It:
 5. Closes each handled proposal with `git merge -s ours --no-ff -m "proposal:
    <slug> integrated|rejected" <branch>`.
 
+Reports are listed with `bin/ai/ai-knowledge reports --repo ~/knowledge` and read
+with `git show refs/reports/<name>:<path>`; they are shown to the user and closed
+with the tombstone command above, never merged into `main`. Their figures are not
+re-checkable (the stats JSON is not shipped).
+
 The host pushes `main` and deletes the closed branches on the next sync. Every
 other sandbox receives the new rules on its next sync and drops its own copies of
 the closed branches; agents read the new rules in their next session.
@@ -435,9 +472,9 @@ prints.
 
 | Party | Effective rules | Clone | Network git |
 |---|---|---|---|
-| Project sandbox | read-only | commit on `proposal/*` branches it creates | none |
-| Integrator sandbox | read-only | commit on `main`; close proposals with an ours-merge | none |
-| Host | writes the render | fetch, fast-forward, scope check, push, leased deletion of closed branches | all |
+| Project sandbox | read-only | commit on `proposal/*` branches and `refs/reports/*` refs it creates | none |
+| Integrator sandbox | read-only | commit on `main`; close proposals with an ours-merge, reports with a tombstone | none |
+| Host | writes the render | fetch, fast-forward, scope check, push, leased deletion of closed branches and reports | all |
 
 ## Known limits
 
