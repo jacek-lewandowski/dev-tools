@@ -25,3 +25,35 @@ Suite re-run once: `cd ~/knowledge/skills/process-report/scripts && python3 -B -
 - Split format against real data: across all 107 local subagent transcripts (`~/.claude/projects/*/*/subagents/agent-*.jsonl`), every later prompt is a `type: user`, `isMeta: true`, `origin: {"kind": "coordinator"}` entry (133 such entries, no other `origin` form); no transcript has a second non-meta, non-tool_result user entry, so `continues` misses no prompt in the current format.
 - Single-prompt agents: ids keep no suffix and meta is untouched (ada8ebf926c84d606, aea5d12fb7de0c454 in v2); the golden skeleton is unchanged by 75a7a95 and passes. Main sessions never split (`not main`). Repeated-command agents use the base id.
 - Wall-clock: no-process-narration falls from 3h18m to 3m38s; per-role wall now sums segments.
+
+## Round 2
+
+Delta: ~/knowledge 46b4585 and fe3c971, the "Fix round" section of the evidence file, the regenerated v2 skeleton and JSON.
+
+Verdict: accepted. No Critical or Important finding; the review is closed.
+
+Suite re-run once: `python3 -B -m unittest test_transcript_stats` gave `Ran 47 tests ... OK`. ~/knowledge tree clean; `git ls-files | grep -c pycache` = 0.
+
+Round 1 findings:
+- I1 closed. `agents_read`, the task `agents`/`reviewer_spawns`, the lead row and the cost-role column count distinct base ids. v2: "15 agent transcripts" (15 files, this round's reviewer included), lead row `implementer:4,planner:3,reviewer:8`, cost-role 4/3/8, process-report-skill `implementer:1,planner:1,reviewer:2`. The continued-agent test now asserts agents_read and per-task agents; a continued reviewer has its own test.
+- I2 closed. The over-half label also covers commits. The method line gives unassigned commits per repository. Commits that name no task are assigned by Co-Authored-By name plus segment window, marked `by-time`; zero or several matches stay unassigned (tested).
+- I3 closed. 46b4585 removes both .pyc files and adds `skills/process-report/.gitignore` (`__pycache__/`). The evidence records `git show --stat` of all four commits.
+
+By-time spot-check. I re-ran `collect` and `assign_commits` in-process on dev-tools + ~/knowledge, 2026-11-09, and compared each commit's time and trailer with the segment windows and prompts:
+- 2026-11-09-process-report-skill holds 11 commits:
+  - 7 keyed by path: 85b9c88, 33fe93d, 19b88ab, 4d5b1c2, 9a2f800, 2de8dd7, 8fb06ba.
+  - 4 by-time: ce6e89c (in Zuzia ae493ea605f787e30), f4740ec (in .3), a99164c and 0f62a65 (both in .4).
+  - Each of these is a process-report skill commit made inside that implementer's segment for that task. None is wrong.
+- Other tasks:
+  - no-process-narration: 8713b48 and 6538cce, from aef295321c6258e3c segments 1 and 2.
+  - report-sync: Zuzia's dev-tools and knowledge commits from abe69abf419228cf2 and .2.
+  - proposals-triage: d22aa1f, 52aa7a6 and a6568d1, from aef29.4.
+  - idle-handover: e65f1c2, e76335c and 9a274ef from aef29.3, .5 and .6; Wojtek's 9b92435, 28f417a, 72681ef and a66f3b0 from a5266a07c9886b72d. These run in parallel with Zuzia's and are told apart by the trailer.
+  - process-report-gaps: dffc87c, 75a7a95, 46b4585 and fe3c971.
+  - All match the prompts. One borderline case: 9a274ef rewords the lint clause that d22aa1f (proposals-triage) introduced, but its prompt is R2-I2 of the idle-handover review, so it is correct by the stated rule.
+- 9f7c263 stays unassigned. It falls inside ae493ea605f787e30.2, a segment keyed unassigned, so this is a conservative miss, not a wrong attribution.
+- v2 shows knowledge 2 of 18 unassigned, while my run shows 1. v2 was generated while aef29.8 was still running, before its last line passed fe3c971's time.
+
+Minor (not blocking):
+- Method line, `build_blocks` and `unassigned_by_repo`: a repository given with `--git` that has no commits in the period is not named. With `--git . --git ~/knowledge` and no knowledge commits, the line reads as if only dev-tools was read. Building `by_repo` from `git_repos` would name it with `0 of 0`.
+- SKILL.md step 4 lost "(cheaper tier)" in fe3c971's word trim. That changes which model the report review runs on, which is outside the findings. Restore it and cut words elsewhere.
