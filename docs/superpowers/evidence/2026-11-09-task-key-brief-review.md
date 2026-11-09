@@ -19,3 +19,10 @@ Verdict: one Important finding (blocking), lesser findings applied or listed.
 - Transcript claims: Agent `tool_use`, `input.prompt` beginning "You are Fiona, reviewer 1." found in 4256d730-...jsonl. Script claims (`PATH_KEY`, `ISSUE`, `known_issues` gating, `class_index_of` brief/plan rule, trailer format string, `strip_suffix`) match `transcript_stats.py`. Not checked: the `isMeta` later-prompt shape in the subagent file.
 - Tests T1-T7 and O2-O7 prove the behaviour including the fallback; size fits a brief.
 - SKILL.md body is 497 words, as stated.
+
+# Round 2 (delta af4fd49)
+
+Verdict: closed, no Critical or Important finding.
+- Phase key: the rule block now gives a phase one key (plan stem or tracker id) carried by its tasks, spawns and gate commit; T5 uses a stem key, with a reviewer spawn, a gate commit and a `-plan` collapse. Resolves the Important finding.
+- T2b (commit precedence), uniform `strip_suffix` on every explicit key and the class-index key, and the `class_index(repos, commits)` signature change are all stated. Lesser findings resolved.
+- Nothing broken: the name line stays first, the `p1-T5` history case is kept as accepted input. Lesser note only: T2b is listed before T2 (order is cosmetic).
