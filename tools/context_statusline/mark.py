@@ -2,17 +2,21 @@
 
 The mark is dirname(transcript)/<session_id>/handover-ready holding the
 handover's path, so it is session-scoped and outside the project tree. The
-session is CLAUDE_CODE_SESSION_ID when set, else the newest transcript in the
-project's Claude directory (CLAUDE_CONFIG_DIR or ~/.claude, projects/<cwd with
-every non-alphanumeric character as "-">). Exit: 0 done, 2 no session found.
+session is CLAUDE_CODE_SESSION_ID (required); its project directory is found as
+<projects>/*/<session_id>.jsonl, where projects is CLAUDE_CONFIG_DIR or
+~/.claude plus /projects, never from the caller's directory. A warning goes to
+stderr when a newer transcript sits beside it (the variable may be stale after
+/clear). Exit: 0 done, 2 no session id or transcript found.
 """
 
 import argparse
+import glob
 import os
-import re
 import sys
 
 from .statusline import HANDOVER_MARKER
+
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 
 
 def default_projects():
@@ -20,25 +24,24 @@ def default_projects():
     return os.path.join(base, "projects")
 
 
-def find_session(projects, cwd):
-    """(transcript directory, session id) or None."""
-    directory = os.path.join(projects, re.sub(r"[^A-Za-z0-9]", "-", cwd))
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if session:
-        return directory, session
-    try:
-        transcripts = [
-            os.path.join(directory, n)
-            for n in os.listdir(directory)
-            if n.endswith(".jsonl")
-        ]
-        newest = max(transcripts, key=os.path.getmtime)
-    except (OSError, ValueError):
-        return None
-    return directory, os.path.basename(newest)[: -len(".jsonl")]
+def find_transcript(projects, session):
+    """Path of the session's transcript, or None."""
+    pattern = os.path.join(glob.escape(projects), "*", glob.escape(session) + ".jsonl")
+    found = glob.glob(pattern)
+    return found[0] if found else None
 
 
-def main(argv=None, projects=None, cwd=None, stdout=None):
+def newer_transcripts(transcript):
+    directory = os.path.dirname(transcript)
+    mine = os.path.getmtime(transcript)
+    return [
+        n
+        for n in os.listdir(directory)
+        if n.endswith(".jsonl") and os.path.getmtime(os.path.join(directory, n)) > mine
+    ]
+
+
+def main(argv=None, projects=None, stdout=None):
     parser = argparse.ArgumentParser(
         prog="handover-ready",
         description="Mark this session's handover ready for the status line.",
@@ -49,12 +52,24 @@ def main(argv=None, projects=None, cwd=None, stdout=None):
     if not args.clear and not args.handover:
         parser.error("a handover path or --clear is required")
     stdout = stdout or sys.stdout
-    found = find_session(projects or default_projects(), cwd or os.getcwd())
-    if found is None:
-        print("handover-ready: no session found", file=sys.stderr)
+    session = os.environ.get(SESSION_ENV)
+    if not session:
+        print(f"handover-ready: {SESSION_ENV} is not set", file=sys.stderr)
         return 2
-    directory, session = found
-    marker = os.path.join(directory, session, HANDOVER_MARKER)
+    transcript = find_transcript(projects or default_projects(), session)
+    if transcript is None:
+        print(f"handover-ready: no transcript for session {session}", file=sys.stderr)
+        return 2
+    try:
+        if newer_transcripts(transcript):
+            print(
+                f"handover-ready: warning: a newer transcript exists beside "
+                f"{session}; {SESSION_ENV} may be stale after /clear",
+                file=sys.stderr,
+            )
+    except OSError:
+        pass
+    marker = os.path.join(os.path.dirname(transcript), session, HANDOVER_MARKER)
     if args.clear:
         try:
             os.remove(marker)

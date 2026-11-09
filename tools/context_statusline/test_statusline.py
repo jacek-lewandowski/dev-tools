@@ -290,6 +290,78 @@ class StatuslineTest(unittest.TestCase):
             render(data, columns=200, colour=False, now=self.now), MAIN_PART
         )
 
+    def user_entry(self, when, **extra):
+        entry = {
+            "type": "user",
+            "timestamp": when,
+            "message": {"role": "user", "content": "go on"},
+        }
+        entry.update(extra)
+        return json.dumps(entry) + "\n"
+
+    def write_transcript(self, data, lines, marker_age=0):
+        """Transcript with the given lines and a mark made marker_age s ago."""
+        with open(data["transcript_path"], "w") as f:
+            f.writelines(lines)
+        self.write_marker(data)
+        marker = os.path.join(self.tmp, data["session_id"], HANDOVER_MARKER)
+        t = self.now - marker_age
+        os.utime(marker, (t, t))
+
+    @staticmethod
+    def iso(t):
+        return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+
+    def test_mark_older_than_the_last_user_message_is_ignored(self):
+        data = self.stdin()
+        self.write_transcript(
+            data, [self.user_entry(self.iso(self.now - 5))], marker_age=60
+        )
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+
+    def test_mark_newer_than_the_last_user_message_is_shown(self):
+        data = self.stdin()
+        self.write_transcript(
+            data, [self.user_entry(self.iso(self.now - 60))], marker_age=5
+        )
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now),
+            MAIN_PART + SEGMENT_TAIL,
+        )
+
+    def test_tool_results_and_agent_messages_are_not_user_messages(self):
+        data = self.stdin()
+        later = self.iso(self.now - 5)
+        lines = [
+            self.user_entry(self.iso(self.now - 60)),
+            self.user_entry(
+                later,
+                message={
+                    "role": "user",
+                    "content": [{"type": "tool_result", "content": "x"}],
+                },
+            ),
+            self.user_entry(later, isMeta=True),
+            self.user_entry(later, isSidechain=True),
+            "torn line",
+        ]
+        self.write_transcript(data, lines, marker_age=30)
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now),
+            MAIN_PART + SEGMENT_TAIL,
+        )
+
+    def test_user_message_beyond_the_tail_is_found(self):
+        data = self.stdin()
+        filler = ["x" * 1000 + "\n"] * (TAIL_BYTES // 1000 + 20)
+        lines = [self.user_entry(self.iso(self.now - 5))] + filler
+        self.write_transcript(data, lines, marker_age=60)
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+
 
 class MarkTest(unittest.TestCase):
     """The helper writes the mark the status line reads, for the right session."""
@@ -298,7 +370,6 @@ class MarkTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
         self.projects = os.path.join(self.tmp, "projects")
-        self.cwd = "/work/my.project"
         self.slug = os.path.join(self.projects, "-work-my-project")
         os.makedirs(self.slug)
 
@@ -309,50 +380,72 @@ class MarkTest(unittest.TestCase):
         os.utime(path, (t, t))
         return path
 
-    def run_mark(self, argv=(), env=None):
-        out = io.StringIO()
-        with mock.patch.dict(os.environ, env or {}, clear=False):
-            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
-            os.environ.update(env or {})
-            rc = mark.main(list(argv), projects=self.projects, cwd=self.cwd, stdout=out)
-        return rc, out.getvalue()
+    def run_mark(self, argv=(), session=None):
+        out, err = io.StringIO(), io.StringIO()
+        env = {"CLAUDE_CODE_SESSION_ID": session} if session else {}
+        with mock.patch.dict(os.environ, env, clear=False):
+            if not session:
+                os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            with mock.patch("sys.stderr", err):
+                rc = mark.main(list(argv), projects=self.projects, stdout=out)
+        return rc, err.getvalue()
 
     def marker(self, session):
         return os.path.join(self.slug, session, HANDOVER_MARKER)
 
-    def test_session_from_environment_wins(self):
-        self.transcript("older", 100)
-        self.transcript("newer", 1)
-        rc, _ = self.run_mark(["/h.md"], env={"CLAUDE_CODE_SESSION_ID": "older"})
+    def test_directory_comes_from_the_transcript_not_the_cwd(self):
+        self.transcript("s1", 1)
+        before = set(os.listdir(self.projects))
+        sub = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(sub)
+        with mock.patch("os.getcwd", return_value=sub):
+            rc, _ = self.run_mark(["/h.md"], session="s1")
         self.assertEqual(rc, 0)
-        with open(self.marker("older")) as f:
+        with open(self.marker("s1")) as f:
             self.assertEqual(f.read(), "/h.md\n")
-        self.assertFalse(os.path.exists(self.marker("newer")))
+        self.assertEqual(set(os.listdir(self.projects)), before)
 
-    def test_without_environment_the_newest_transcript_is_used(self):
-        self.transcript("older", 100)
-        self.transcript("newer", 1)
-        rc, _ = self.run_mark(["/h.md"])
+    def test_unknown_session_exits_2_and_creates_nothing(self):
+        self.transcript("s1", 1)
+        before = sorted(os.listdir(self.projects))
+        rc, err = self.run_mark(["/h.md"], session="nope")
+        self.assertEqual(rc, 2)
+        self.assertIn("nope", err)
+        self.assertEqual(sorted(os.listdir(self.projects)), before)
+        self.assertEqual(os.listdir(self.slug), ["s1.jsonl"])
+
+    def test_unset_environment_exits_2_and_creates_nothing(self):
+        self.transcript("s1", 1)
+        rc, err = self.run_mark(["/h.md"])
+        self.assertEqual(rc, 2)
+        self.assertIn("CLAUDE_CODE_SESSION_ID", err)
+        self.assertEqual(os.listdir(self.slug), ["s1.jsonl"])
+
+    def test_newer_transcript_in_the_project_warns_but_marks(self):
+        self.transcript("old", 100)
+        self.transcript("new", 1)
+        rc, err = self.run_mark(["/h.md"], session="old")
         self.assertEqual(rc, 0)
-        self.assertTrue(os.path.isfile(self.marker("newer")))
-        self.assertFalse(os.path.exists(self.marker("older")))
+        self.assertIn("newer", err)
+        self.assertTrue(os.path.isfile(self.marker("old")))
+
+    def test_newest_transcript_does_not_warn(self):
+        self.transcript("old", 100)
+        self.transcript("new", 1)
+        rc, err = self.run_mark(["/h.md"], session="new")
+        self.assertEqual((rc, err), (0, ""))
 
     def test_clear_removes_the_mark_and_tolerates_none(self):
         self.transcript("s1", 1)
-        self.run_mark(["/h.md"])
-        rc, _ = self.run_mark(["--clear"])
+        self.run_mark(["/h.md"], session="s1")
+        rc, _ = self.run_mark(["--clear"], session="s1")
         self.assertEqual(rc, 0)
         self.assertFalse(os.path.exists(self.marker("s1")))
-        self.assertEqual(self.run_mark(["--clear"])[0], 0)
-
-    def test_no_session_found_exits_nonzero(self):
-        shutil.rmtree(self.slug)
-        rc, _ = self.run_mark(["/h.md"])
-        self.assertEqual(rc, 2)
+        self.assertEqual(self.run_mark(["--clear"], session="s1")[0], 0)
 
     def test_written_mark_is_what_the_status_line_reads(self):
         path = self.transcript("s1", 1)
-        self.run_mark(["/h.md"])
+        self.run_mark(["/h.md"], session="s1")
         data = {"session_id": "s1", "transcript_path": path}
         line = render(data, columns=200, colour=False, now=time.time())
         self.assertTrue(line.endswith(SEGMENT_TAIL), line)
