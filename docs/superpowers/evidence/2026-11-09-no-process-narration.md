@@ -67,3 +67,9 @@ index 4ed5e87..13ef6e0 100644
      lead asks each live implementer with an open task for its note and lists
      the live agents, their open units and their note paths in the handover.
 ```
+
+## Fix round (review 2026-11-09-no-process-narration-review.md)
+
+User's notification request (user, 2026-11-09, translated): "a phone notification, a closed question that the lead has finished and whether preparing a handover would be advisable".
+
+Changes: the notification sub-bullet now states the precedence itself (past the prepare threshold: unchanged, handover first, notification says it is ready; below it: the question "a break of more than an hour?", not a long wait, yes writes the handover and retires subagents, no keeps them); exception for questions and confirmations routed to the user; unfixed findings go under "what the user should check or watch"; one final-report list including verified / not verified, the persona bullet now points to it; "The lead cannot know" removed.
