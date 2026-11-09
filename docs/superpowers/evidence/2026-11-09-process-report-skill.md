@@ -133,3 +133,34 @@ of its own (lead's decision). Step 4 needs a spawned reviewer: not run.
    `Ran 33 tests in 0.825s / OK`. The SKILL.md note about `-request` keys was removed. Commit
    `9f7c263`. The O10 dry-run report was produced before the fix and is untouched.
 2. Size cap: see O6.
+
+## Fix round 2 (review of 2026-11-09, `...-process-report-skill-review.md`)
+
+Commit `f4740ec` in `~/knowledge` (fix(skills)); register row updated in the dev-tools commit
+that carries this section. Regression tests written first: 7 failed on the old code
+(`Ran 40 tests ... FAILED (failures=7)`), then `Ran 40 tests in 1.028s / OK`; ruff check
+`All checks passed!`, ruff format `4 files already formatted`.
+
+- I1: one id set (line uuids, message ids, tool_use ids) across all transcripts of a run.
+  Tests `test_resumed_session_counts_shared_history_once` (two session files sharing uuids,
+  message ids, a round and a Bash tool use: 107 tokens, 1 round, wall 1 s, 2 messages) and
+  `test_resumed_message_ids_without_uuid_counted_once`. The reviewer's reproducer
+  (`--since 2026-10-28 --until 2026-10-31`): `lead.output_tokens` 515560 -> 317281 (-198279,
+  exactly the copied history), `lead.user_rounds` 47 -> 32 (-15), `lead.wall_s` 549749 -> 283139.
+  SKILL.md Known gaps and the register row name the search.
+- I2: `cost_label` `session_process_total`, both captions, the JSON `labels.cost_state`, the
+  docstring and the register row relabelled; `test_cost_caption_names_what_cost_state_covers`
+  asserts the caption and that "subagents excluded" is gone. The lower-bound sentence is
+  replaced by the review's spread (0.48 to 6.57 of the main transcript, 0.15 to 3.98 of main
+  plus subagents, 16 sessions; 32% above in 4256d730, unexplained). The spread figures are
+  copied from the review, not re-measured by me.
+- Minor: `spans N days` on the lead row and per-session notes (`test_spans_marker_on_lead_row_and_sessions`);
+  agent name needs a capitalised word (`test_agent_name_needs_a_capitalised_word`); `--check`
+  requires the eye block unless the eye section has a `none` line, and rejects `none` beside the
+  block (`test_eye_block_missing_without_none_fails`, `test_eye_none_replaces_block_but_not_beside_it`);
+  `finished` dropped from docstring and register row (the script never read it).
+- O10 re-run on the fixed tree: report regenerated, eye block replaced by `none`, `--check`
+  -> `report check passed`, rc 0, 457 words (untracked, `.tmp/`).
+- Size: SKILL.md body 498 words. **`du -sk --apparent-size` is now 103 (disk usage 120)**: the
+  fixes added about 5 KB (tests, code, SKILL.md gaps); over the accepted cap of 100. Not
+  trimmed further; the lead decides.
