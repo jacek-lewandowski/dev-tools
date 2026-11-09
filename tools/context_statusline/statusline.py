@@ -2,7 +2,8 @@
 
 Prints one line: model, main context as percentage and tokens, then one token
 per live subagent (label, estimated context, "~" when compacted since its last
-reply), sorted by size, cut to COLUMNS, each coloured by the thresholds below.
+reply), sorted by size, then "handover ready" when the session's mark exists,
+cut to COLUMNS, each coloured by the thresholds below.
 Never fails the line: a missing directory, a malformed file or unparsable stdin
 still prints the main part. Stdlib only.
 
@@ -18,6 +19,11 @@ still prints the main part. Stdlib only.
 #   an API error or interruption as {type: "assistant", isApiErrorMessage:
 #   true, message.model: "<synthetic>"} with all-zero usage,
 #   and {type: "system", subtype: "compact_boundary"}.
+# reads-outside: the handover mark, dirname(transcript_path)/<session_id>/
+#   handover-ready, written by bin/ai/handover-ready (tools/context_statusline/
+#   mark.py) for the lead's session; its presence adds the "handover ready"
+#   segment. Session-scoped: /clear starts another session id, so the mark
+#   stops showing by itself.
 """
 
 import argparse
@@ -45,7 +51,12 @@ TAIL_BYTES = 64 * 1024
 GREEN = "\x1b[32m"
 YELLOW = "\x1b[33m"
 RED = "\x1b[31m"
+CYAN = "\x1b[36m"
 RESET = "\x1b[0m"
+
+# The mark's file name (also written by mark.py) and the segment it shows.
+HANDOVER_MARKER = "handover-ready"
+HANDOVER_SEGMENT = "handover ready"
 
 SYNTHETIC_MODEL = "<synthetic>"
 USAGE_FIELDS = (
@@ -159,6 +170,17 @@ def subagents_dir(data):
     return os.path.join(os.path.dirname(transcript), session, "subagents")
 
 
+def handover_ready(data):
+    """True when this session's handover-ready mark file exists."""
+    transcript = data.get("transcript_path")
+    session = data.get("session_id")
+    if not isinstance(transcript, str) or not isinstance(session, str):
+        return False
+    return os.path.isfile(
+        os.path.join(os.path.dirname(transcript), session, HANDOVER_MARKER)
+    )
+
+
 def _paint(text, tokens, colour):
     return f"{colour_of(tokens)}{text}{RESET}" if colour else text
 
@@ -203,6 +225,10 @@ def render(data, *, columns, colour, now):
         pieces.append((SEPARATOR, SEPARATOR) if i == 0 else (" ", " "))
         text = f"{label}:{'~' if compacted else ''}{fmt_tokens(agent_tokens)}"
         pieces.append((text, _paint(text, agent_tokens, colour)))
+    if handover_ready(data):
+        painted = f"{CYAN}{HANDOVER_SEGMENT}{RESET}" if colour else HANDOVER_SEGMENT
+        pieces.append((SEPARATOR, SEPARATOR))
+        pieces.append((HANDOVER_SEGMENT, painted))
     return _cut(pieces, columns)
 
 

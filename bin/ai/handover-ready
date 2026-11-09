@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Marks this Claude Code session's handover ready so the status line shows it
+# (tools/context_statusline/mark.py). Usage: handover-ready <handover-path> | --clear
+# Finds tools/ as context-statusline does.
+# Exit: 0 done, 2 no tools directory or no session found.
+set -euo pipefail
+
+self=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+if   [ -d "$self/../../tools/context_statusline" ];            then tools="$self/../../tools"
+elif [ -d "$HOME/dev/public/dev-tools/tools/context_statusline" ]; then tools="$HOME/dev/public/dev-tools/tools"
+elif [ -d "$HOME/tools/context_statusline" ];                  then tools="$HOME/tools"
+else echo "handover-ready: no dev-tools 'tools' directory (looked beside this script, in ~/dev/public/dev-tools, and in ~/tools)" >&2; exit 2
+fi
+# The helper marks the session of the caller's directory.
+caller=$PWD
+cd "$(dirname "$tools")"
+PYTHONPATH=$PWD exec python3 -c 'import os,sys; os.chdir(sys.argv[1]); from tools.context_statusline.mark import main; sys.exit(main(sys.argv[2:]))' "$caller" "$@"
