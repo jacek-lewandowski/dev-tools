@@ -48,7 +48,8 @@ phases, and judged by the user's eye only at the end:
   defect (Tailwind preflight turned the progress bar plain green) that the O2
   assertion missed.
 - ANA "Work judged by eye": the owner's reference image became spec delta
-  D9/D10, reviewed in two rounds (`aded3a6`), to restyle a mockup.
+  D9/D10, reviewed in two rounds (`aded3a6`); the mockup was restyled to the
+  image separately, by implementer Zuzia.
 
 Nobody owns throw-away visual work: UKF's four mockups were made by general
 agents under implementer names (UKF "Fit", second bullet); ANA's mockup and
@@ -140,11 +141,16 @@ spec's author, prototypers, implementers and reviewers carry the flow:
 
 ## Fate of every input
 
+Inputs that are not about visual work (UKF S6 and S7, ANA S1 and S3 to S6, NOD
+S1 to S5 and S7, OME S1, S2 and S4) are outside this spec and not listed; UKF S6 was already taken by
+`role-model-pins`.
+
 | Input | Fate | Lands in | Reason |
 |---|---|---|---|
 | UKF S1 clickable mockup before the first phase, approval recorded | Taken | G1 | UKF "Work judged by eye", facts 1–3 |
 | UKF S2 spec names a visual approval artifact as precondition | Taken | G1, P1 | as S1; the spec rewrite a9b3cf1 |
 | UKF S3 mockup maker, cheaper tier, one per variant, retired after the choice | Taken as `prototyper` | G2, G4, G5, G6, X1 | UKF "Fit" bullet 2; ANA "Fit" |
+| UKF S4 performance budget on the user's hardware | Non-goal | none | Non-goals; not visual work |
 | UKF S5 memory headroom for per-worktree installs | Visual part taken, rest non-goal | X1 (self-contained) | `npm ci` OOM-killed five times (UKF Waste bullet 4), four times in ANA (Waste, "Sandbox memory") |
 | ANA S2 one batch of owner questions | Visual part merged, rest non-goal | G1 ("states in words only what a picture cannot show") | D9/D10 delta, two review rounds |
 | ANA S7 prototyper for mockups and probes | Mockups taken, probes non-goal | X1 | probes are implementer spikes already |
@@ -204,8 +210,12 @@ spec's author, prototypers, implementers and reviewers carry the flow:
   row occurs once.
 - Verified: Tosia, Franek and Julka occur in no role, in `global.md` and in
   none of the four reports (`grep -l -i`, no match).
-- Verified: the integrator clone is this sandbox's (`ai-knowledge-role`), and
-  `~/knowledge` main is clean at `5e48a74`, 14 commits ahead of `origin/main`.
+- Verified: the integrator clone is this sandbox's (`ai-knowledge-role`).
+  `~/knowledge` main has moved since `5e48a74` (294c0d0 role-model-pins,
+  116227e review-round-limit) and carries uncommitted integrator edits to
+  `global.md`, `reviewer.md` and `decisions.md`; the Old blocks of Appendix A
+  still occur verbatim in that tree (reviewer round 1, substring check). The
+  planner re-checks them at landing.
 - Inferred: agents can capture screenshots in the sandbox (UKF 135 and ANA 43
   screenshots in the period; `/usr/bin/google-chrome` present here).
 - Inferred: three prototypers in parallel fit the 2 GB sandbox when each
@@ -438,7 +448,7 @@ approves it; the approved variant becomes the visual contract the spec cites.
   project's build or install its dependencies, and never commit.
 - The variant is one self-contained page, its styles and scripts inline and
   its assets beside it, or a set of pictures: something the user opens without
-  running the project. Show it at every width the brief names; for a native
+  running the project. Publish it as a page where the environment can. Show it at every width the brief names; for a native
   target, at the device's width.
 - Take text and figures from the source the brief names. Where it has none,
   use placeholders marked as such. A prototype fixes the look and the flow,
