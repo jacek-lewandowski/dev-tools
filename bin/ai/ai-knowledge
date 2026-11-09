@@ -7,6 +7,8 @@
 # changes through its own clone: main checked out, one local branch
 # proposal/<date>-<slug>-<hex> per proposal. The integrator sandbox's clone
 # carries every open proposal branch and closes them with an ours-merge.
+# A process report is a ref in refs/reports/<name>, outside main and refs/heads:
+# every clone pushes its own, only the integrator fetches and closes them.
 #
 # No sandbox has git credentials, so every fetch, merge and push happens here,
 # before a sandbox starts. A sync never fails a start: whatever goes wrong is
@@ -19,6 +21,7 @@
 #   ai-knowledge render                                 render main into the shared store
 #   ai-knowledge status [PROJECT_DIR]                   config and the last sync status
 #   ai-knowledge proposals [--repo DIR]                 list open proposal files across proposal/* branches
+#   ai-knowledge reports [--repo DIR]                   list open report files across refs/reports/* (not branches; never in main)
 #   ai-knowledge propose FILE [--repo DIR] [--slug S] [--project-id ID] [--machine M] [--project P] [--push]
 #                                                       file FILE as a proposal/* branch from origin/main
 set -Eeuo pipefail
@@ -628,6 +631,10 @@ tip_state() {   # <tip>
 }
 
 PROPOSAL_RE='^proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
+# reads-outside: refs/reports/<name> and refs/reports-closed/<name> of the private
+# remote, read by the process-report skill and the integrator's knowledge-integrate
+# skill. A name is matched after the refs/reports/ prefix.
+REPORT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
 
 # The hook is advisory (an agent can bypass it); the host's scope check below
 # is the enforcement. It fails at commit time, inside the sandbox, where the
@@ -652,6 +659,12 @@ case "$branch" in
         bad=$(git diff --cached --name-only | grep -v '^proposals/' || true)
         if [ -n "$bad" ]; then
             echo "ai-knowledge: a proposal branch may change only proposals/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+            exit 1
+        fi ;;
+    report/*)
+        bad=$(git diff --cached --name-only | grep -v '^reports/' || true)
+        if [ -n "$bad" ]; then
+            echo "ai-knowledge: a report branch may change only reports/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
             exit 1
         fi ;;
 esac
@@ -690,6 +703,7 @@ ff_main() {   # <clone> <current branch> <role>
 sync_clone() {
     local sb=$1 id=$2 role=$3 out rc net=yes current b tip remote_tip aside st
     local pushed=0 closed=0 empty=0 pending=0 main_state=current refused="" conflicts="" pushfail=""
+    local rpushed=0 rname rref rtip
     CLONE="$sb/knowledge"; STATUS_NOTE=""
 
     if [ ! -d "$CLONE/.git" ]; then
@@ -834,6 +848,64 @@ sync_clone() {
         done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/remotes/origin/proposal/*')
     fi
 
+    # Reports live in refs/reports/<name>, not in refs/heads, so nothing above
+    # touches them. Every clone pushes its own; only the integrator fetches them
+    # and acts on tombstones (refs/reports-closed/<name>, made by the integrator).
+    # A writer clone drops a ref once its push succeeded; the integrator keeps it
+    # until it is closed.
+    while IFS= read -r rref; do
+        [ -n "$rref" ] || continue
+        rname=${rref#refs/reports/}
+        if [ "$role" = integrator ] && git -C "$CLONE" show-ref -q --verify "refs/reports-closed/$rname"; then continue; fi
+        if ! [[ $rname =~ $REPORT_RE ]]; then
+            refused="$refused $rref (name must be refs/reports/<date>-<project>-<4 hex>)"; continue
+        fi
+        rtip=$(git -C "$CLONE" rev-parse -q --verify "$rref^{commit}" 2>/dev/null || true)
+        if [ -z "$rtip" ]; then refused="$refused $rname (not a commit)"; continue; fi
+        rc=0; out=$(git -C "$CLONE" diff --name-only --no-renames "origin/main...$rtip" 2>/dev/null) || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            refused="$refused $rname (no common history with main)"; continue
+        fi
+        out=$(printf '%s\n' "$out" | grep -v -e '^reports/' -e '^$' || true)
+        if [ -n "$out" ]; then
+            refused="$refused $rname changes $(printf '%s' "$out" | tr '\n' ' ')"; continue
+        fi
+        if [ "$net" = no ]; then
+            HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")"); pending=$((pending + 1)); continue
+        fi
+        rc=0; out=$(git_net -C "$CLONE" push -q origin "$rref:$rref" 2>&1) || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")")
+            pushfail="$pushfail $rname"; continue
+        fi
+        rpushed=$((rpushed + 1))
+        [ "$role" = integrator ] || git -C "$CLONE" update-ref -d "$rref"
+    done < <(git -C "$CLONE" for-each-ref --format='%(refname)' 'refs/reports/*')
+
+    if [ "$role" = integrator ] && [ "$net" = yes ]; then
+        # The lease is the tombstone's own value, the tip the integrator saw: a
+        # remote ref that moved since is kept, locally and remotely, and reported.
+        while IFS= read -r rref; do
+            [ -n "$rref" ] || continue
+            rname=${rref#refs/reports-closed/}
+            [[ $rname =~ $REPORT_RE ]] || continue
+            rtip=$(git -C "$CLONE" rev-parse "$rref")
+            rc=0; out=$(git_net -C "$CLONE" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
+            if [ "$rc" -ne 0 ]; then
+                case $out in
+                    *"remote ref does not exist"*) ;;
+                    *"stale info"*) STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched"; continue ;;
+                    *) net_failed "$rc" "$out"; warn "cannot delete report $rname on the remote: $out"; continue ;;
+                esac
+            fi
+            git -C "$CLONE" update-ref -d "refs/reports/$rname"
+            git -C "$CLONE" update-ref -d "$rref"
+        done < <(git -C "$CLONE" for-each-ref --format='%(refname)' 'refs/reports-closed/*')
+        git_net -C "$CLONE" fetch -q origin 'refs/reports/*:refs/reports/*' >/dev/null 2>&1 || true
+    elif [ "$role" = integrator ]; then
+        HINT_FETCH+=("$(hint git -C "$CLONE" fetch origin 'refs/reports/*:refs/reports/*')")
+    fi
+
     if [ -n "$refused" ]; then
         set_status "refused: not pushed:$refused; fix or delete those branches"
     elif [ -n "$conflicts" ]; then
@@ -851,7 +923,7 @@ sync_clone() {
     elif [ -n "$pushfail" ] || [ "$main_note" = "main push failed" ]; then
         set_status "push failed: $NET_REASON (${main_note:+$main_note}${pushfail:+; branches:$pushfail})"
     else
-        set_status "ok: main current${main_note:+, $main_note}; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")"
+        set_status "ok: main current${main_note:+, $main_note}; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")$([ "$rpushed" -eq 0 ] || printf '; reports pushed %d' "$rpushed")"
     fi
 }
 
@@ -1039,6 +1111,29 @@ cmd_proposals() {
     done < <(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
 }
 
+# '<name> <path>' per open report file in refs/reports/*; a name with a
+# tombstone (refs/reports-closed/<name>) is closed and hidden.
+cmd_reports() {
+    local repo="" r name
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo)   [ $# -ge 2 ] || die "--repo needs a directory"; repo=$2; shift 2 ;;
+            --repo=*) repo=${1#*=}; shift ;;
+            *)        die "unknown argument: $1" ;;
+        esac
+    done
+    if [ -z "$repo" ]; then
+        if [ -d "$HOME/knowledge/.git" ]; then repo="$HOME/knowledge"; else repo="$KNOWLEDGE_MAIN"; fi
+    fi
+    [ -d "$repo/.git" ] || die "no git repository at $repo"
+    while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        name=${r#refs/reports/}
+        git -C "$repo" show-ref -q --verify "refs/reports-closed/$name" && continue
+        git -C "$repo" ls-tree -r --name-only "$r" -- reports/ | { grep '\.md$' || true; } | sed "s|^|$name |"
+    done < <(git -C "$repo" for-each-ref --format='%(refname)' 'refs/reports/*')
+}
+
 # One commit on top of BASE that adds or replaces PATH with the content of
 # FILE, built with plumbing so no working tree or index is touched. Prints the
 # commit id. Used for proposal branches and for the integrator record on main.
@@ -1127,6 +1222,7 @@ case "${1:-}" in
                cmd_render || exit 1 ;;
     status)    shift; cmd_status "$@" ;;
     proposals) shift; cmd_proposals "$@" ;;
+    reports)   shift; cmd_reports "$@" ;;
     propose)   shift; load_config
                # Only a push touches the network; a local branch needs no key.
                case " $* " in *" --push "*) ensure_ssh_access "$REMOTE" ;; esac

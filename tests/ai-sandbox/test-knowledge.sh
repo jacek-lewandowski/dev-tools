@@ -934,6 +934,182 @@ git -C "$clone" branch -q -D "$b_prune"
 knowledge sync "$proj" >/dev/null 2>&1
 assert_eq "host checkout drops the tracking ref of a deleted proposal" "$(has_ref_plain "$AI_KNOWLEDGE_ROOT/main" "refs/remotes/origin/$b_prune")" no
 
+# --- reports: refs/reports/<name>, outside main and refs/heads; every clone pushes, the integrator reads and closes
+# What the process-report skill does: a temporary branch from main, one file, a ref in refs/reports/.
+# Extra arguments go to git commit (the tests that must get past the hook pass --no-verify).
+report_in() {   # <clone> <project> <F_T> <path or ""> [commit args]; prints the ref name
+    local c=$1 pr=$2 ft=$3 path=$4 hex; shift 4
+    path=${path:-reports/$pr/process-report-test-$ft.md}
+    git -C "$c" checkout -q -b "report/tmp-$pr" main
+    mkdir -p "$c/$(dirname "$path")"; printf '# report %s\n' "$ft" > "$c/$path"
+    git -C "$c" add -f "$path"; git -C "$c" commit -qm "report: $pr $ft" "$@" >/dev/null 2>&1
+    hex=$(git -C "$c" rev-parse HEAD | cut -c1-4)
+    git -C "$c" update-ref "refs/reports/$today-$pr-$hex" HEAD
+    git -C "$c" checkout -q main; git -C "$c" branch -q -D "report/tmp-$pr"
+    printf 'refs/reports/%s-%s-%s' "$today" "$pr" "$hex"
+}
+has_ref() {   # <repo> <ref>
+    git -C "$1" show-ref -q --verify "$2" && echo yes || echo no
+}
+rproj="$tmp/work/r"; mkdir -p "$rproj"; git -C "$rproj" init -q
+rdir=$(ai_sandbox_dir_for "$rproj"); mkdir -p "$rdir"
+knowledge sync "$rproj" >/dev/null 2>&1
+rclone="$rdir/knowledge"
+knowledge sync "$integ" >/dev/null 2>&1
+assert_status "reports: integrator clone ok before the first report" "$iclone" "ok:"
+knowledge proposals --repo "$iclone" > "$tmp/proposals-before-reports.out" 2>&1
+
+# R3: the hook guards report/* and proposal/* against each other
+git -C "$clone" checkout -q -b "report/tmp-hook" main
+mkdir -p "$clone/roles"; echo x > "$clone/roles/x.md"; git -C "$clone" add roles/x.md
+git -C "$clone" commit -qm "bad" >/dev/null 2>&1 && r=0 || r=$?
+assert_eq "hook refuses a path outside reports/ on a report branch" "$r" 1
+git -C "$clone" reset -q roles/x.md; rm "$clone/roles/x.md"
+mkdir -p "$clone/reports/p"; echo ok > "$clone/reports/p/process-report-hook.md"; git -C "$clone" add -f reports/p/process-report-hook.md
+git -C "$clone" commit -qm "good" >/dev/null 2>&1 && r=0 || r=$?
+assert_eq "hook accepts a reports/ path on a report branch" "$r" 0
+git -C "$clone" checkout -q main; git -C "$clone" branch -q -D "report/tmp-hook"
+git -C "$clone" checkout -q -b "proposal/$today-hookr-0000" main
+mkdir -p "$clone/reports/p"; echo x > "$clone/reports/p/x.md"; git -C "$clone" add -f reports/p/x.md
+out=$(git -C "$clone" commit -qm "reports on a proposal branch" 2>&1) && r=0 || r=$?
+assert_eq "hook refuses reports/ on a proposal branch" "$r" 1
+assert_contains "the proposal arm keeps its text" "$out" "a proposal branch may change only proposals/"
+git -C "$clone" reset -q reports/p/x.md; rm -r "$clone/reports"
+git -C "$clone" checkout -q main; git -C "$clone" branch -q -D "proposal/$today-hookr-0000"
+echo hacked >> "$clone/rules/global.md"
+out=$(git -C "$clone" commit -qam "on main" 2>&1) && r=0 || r=$?
+assert_eq "hook still refuses main" "$r" 1
+assert_contains "main refusal still names the skill" "$out" "propose-rule"
+git -C "$clone" checkout -q rules/global.md
+
+# R2/R4: an in-scope report is pushed to refs/reports/<name>, then dropped from the writer clone
+rr1=$(report_in "$clone" p 2026-11-01_2026-11-02 "")
+rr1_tip=$(git -C "$clone" rev-parse "$rr1")
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "report pushed to refs/reports" "$(git -C "$remote" rev-parse "$rr1")" "$rr1_tip"
+assert_eq "report ref gone from the writer clone after the push" "$(has_ref "$clone" "$rr1")" no
+assert_eq "report file is the only change" "$(git -C "$remote" diff --name-only main "$rr1")" "reports/p/process-report-test-2026-11-01_2026-11-02.md"
+assert_contains "status counts the pushed report" "$(status_of "$clone")" "reports pushed 1"
+assert_status "status ok after a report" "$clone" "ok:"
+git -C "$remote" for-each-ref --format='%(refname)' 'refs/heads/*' | grep -q report && r=yes || r=no
+assert_eq "no branch carries the report" "$r" no
+
+# the integrator receives it and lists it; a proposals-only run reads as before
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "integrator holds the report ref" "$(git -C "$iclone" rev-parse "$rr1")" "$rr1_tip"
+assert_eq "reports listing" "$(knowledge reports --repo "$iclone")" "${rr1#refs/reports/} reports/p/process-report-test-2026-11-01_2026-11-02.md"
+assert_eq "proposals listing unchanged by reports" "$(knowledge proposals --repo "$iclone")" "$(cat "$tmp/proposals-before-reports.out")"
+assert_eq "integrator status carries no report text for a no-op" "$(status_of "$iclone" | grep -c 'reports pushed')" 0
+assert_contains "the report is readable from the ref" "$(git -C "$iclone" show "$rr1:reports/p/process-report-test-2026-11-01_2026-11-02.md")" "# report"
+
+# R5: no other clone ever receives it
+knowledge sync "$rproj" >/dev/null 2>&1
+assert_eq "existing second clone: no report ref" "$(git -C "$rclone" for-each-ref refs/reports | wc -l | tr -d ' ')" 0
+git -C "$rclone" cat-file -e "$rr1_tip" 2>/dev/null && r=yes || r=no
+assert_eq "existing second clone: no report commit" "$r" no
+fresh="$tmp/fresh-clone"; git clone -q "file://$remote" "$fresh"
+assert_eq "fresh clone: no report ref" "$(git -C "$fresh" for-each-ref refs/reports | wc -l | tr -d ' ')" 0
+git -C "$fresh" cat-file -e "$rr1_tip" 2>/dev/null && r=yes || r=no
+assert_eq "fresh clone: no report commit" "$r" no
+assert_eq "host main checkout holds no report ref" "$(git -C "$AI_KNOWLEDGE_ROOT/main" for-each-ref refs/reports | wc -l | tr -d ' ')" 0
+assert_eq "remote main has no reports/ history" "$(git -C "$remote" log --full-history --oneline main -- reports/ | wc -l | tr -d ' ')" 0
+
+# R2: refused reports are not pushed
+rr_bad_path=$(report_in "$clone" p 2026-11-03_2026-11-04 roles/escape.md --no-verify)
+rr_prop_path=$(report_in "$clone" p 2026-11-05_2026-11-06 proposals/sneaky.md --no-verify)
+git -C "$clone" update-ref "refs/reports/Bad_Name" "$rr_bad_path"
+blob=$(echo x | git -C "$clone" hash-object -w --stdin)
+t1=$(printf '100644 blob %s\tf.md\n' "$blob" | git -C "$clone" mktree)
+t2=$(printf '040000 tree %s\tp\n' "$t1" | git -C "$clone" mktree)
+t3=$(printf '040000 tree %s\treports\n' "$t2" | git -C "$clone" mktree)
+orphan=$(git -C "$clone" -c user.name=t -c user.email=t@e commit-tree "$t3" -m orphan)
+git -C "$clone" update-ref "refs/reports/$today-p-0f0f" "$orphan"
+git -C "$clone" checkout -q -b "proposal/$today-rsneak-abcd" main
+mkdir -p "$clone/reports/p"; echo x > "$clone/reports/p/x.md"; git -C "$clone" add -f reports/p/x.md
+git -C "$clone" commit -q --no-verify -m "proposal touching reports/"; git -C "$clone" checkout -q main
+knowledge sync "$proj" >/dev/null 2>&1
+assert_status "refused report takes the refused status" "$clone" "refused:"
+assert_contains "refusal names the report outside reports/" "$(status_of "$clone")" "${rr_bad_path#refs/reports/} changes roles/escape.md"
+assert_contains "refusal names the report touching proposals/" "$(status_of "$clone")" "${rr_prop_path#refs/reports/} changes proposals/sneaky.md"
+assert_contains "refusal names the off-pattern name" "$(status_of "$clone")" "Bad_Name"
+assert_contains "refusal names the orphan" "$(status_of "$clone")" "$today-p-0f0f (no common history with main)"
+assert_contains "a proposal branch touching reports/ is refused" "$(status_of "$clone")" "proposal/$today-rsneak-abcd changes reports/p/x.md"
+for rf in "$rr_bad_path" "$rr_prop_path" refs/reports/Bad_Name "refs/reports/$today-p-0f0f" "refs/heads/proposal/$today-rsneak-abcd"; do
+    assert_eq "refused ref not on the remote: $rf" "$(has_ref "$remote" "$rf")" no
+    git -C "$clone" update-ref -d "$rf"
+done
+
+# R2: a mixed run pushes both kinds
+rr2=$(report_in "$clone" p 2026-11-07_2026-11-08 "")
+b_mix=$(propose_in "$clone" mixed)
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "mixed run: report pushed" "$(has_ref "$remote" "$rr2")" yes
+assert_eq "mixed run: proposal pushed" "$(has_ref "$remote" "refs/heads/$b_mix")" yes
+assert_status "mixed run: ok" "$clone" "ok:"
+assert_contains "mixed run: both counted" "$(status_of "$clone")" "pushed 1; closed 0; reports pushed 1"
+
+# R2/R4: offline keeps the ref and counts it pending; the next online sync pushes and drops it
+mv "$remote" "$remote.away"
+rr3=$(report_in "$clone" p 2026-11-09_2026-11-10 "")
+knowledge sync "$proj" >"$tmp/roffline.out" 2>&1
+assert_status "offline status with a pending report" "$clone" "offline:"
+assert_contains "offline counts the pending report" "$(status_of "$clone")" "pending push: 1 branch(es)"
+assert_contains "pending report push printed" "$(cat "$tmp/roffline.out")" "git -C $clone push origin $rr3:$rr3"
+assert_eq "report still local while offline" "$(has_ref "$clone" "$rr3")" yes
+mv "$remote.away" "$remote"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "pending report pushed once online" "$(has_ref "$remote" "$rr3")" yes
+assert_eq "pending report dropped once pushed" "$(has_ref "$clone" "$rr3")" no
+
+# R4: a tombstone made in a non-integrator clone is ignored
+rr4=$(report_in "$clone" p 2026-11-11_2026-11-12 "")
+git -C "$clone" update-ref "refs/reports-closed/${rr4#refs/reports/}" "$rr4"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "a writer-clone tombstone does not delete the remote report" "$(has_ref "$remote" "$rr4")" yes
+git -C "$clone" update-ref -d "refs/reports-closed/${rr4#refs/reports/}"
+
+# R4: close = tombstone; offline keeps everything, the next sync completes it
+knowledge sync "$integ" >/dev/null 2>&1
+rn1=${rr1#refs/reports/}
+git -C "$iclone" update-ref "refs/reports-closed/$rn1" "$rr1"
+assert_eq "a tombstoned report is hidden from the listing" "$(knowledge reports --repo "$iclone" | grep -c "^$rn1 ")" 0
+assert_contains "other reports stay listed" "$(knowledge reports --repo "$iclone")" "${rr2#refs/reports/} "
+mv "$remote" "$remote.away"
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "offline close: local ref kept" "$(has_ref "$iclone" "$rr1")" yes
+assert_eq "offline close: tombstone kept" "$(has_ref "$iclone" "refs/reports-closed/$rn1")" yes
+mv "$remote.away" "$remote"
+assert_eq "offline close: remote ref kept" "$(has_ref "$remote" "$rr1")" yes
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "close: remote ref deleted by the leased push" "$(has_ref "$remote" "$rr1")" no
+assert_eq "close: integrator ref deleted" "$(has_ref "$iclone" "$rr1")" no
+assert_eq "close: tombstone deleted" "$(has_ref "$iclone" "refs/reports-closed/$rn1")" no
+assert_eq "close: other reports untouched" "$(has_ref "$remote" "$rr2")" yes
+
+# R4: a stale lease deletes nothing and says so
+rn2=${rr2#refs/reports/}
+git -C "$iclone" update-ref "refs/reports-closed/$rn2" "$rr2"
+git -C "$remote" update-ref "$rr2" "$(git -C "$remote" rev-parse main)"
+knowledge sync "$integ" >"$tmp/rstale.out" 2>&1
+assert_eq "stale lease: remote ref kept" "$(has_ref "$remote" "$rr2")" yes
+assert_eq "stale lease: local ref kept" "$(has_ref "$iclone" "$rr2")" yes
+assert_eq "stale lease: tombstone kept" "$(has_ref "$iclone" "refs/reports-closed/$rn2")" yes
+assert_contains "stale lease reported" "$(cat "$iclone/.sync-status")" "$rn2"
+git -C "$iclone" update-ref -d "refs/reports-closed/$rn2"
+
+# R4: a tombstone whose name is off the pattern is ignored, even in the integrator clone
+git -C "$remote" update-ref refs/reports/Odd_Name "$(git -C "$remote" rev-parse main)"
+knowledge sync "$integ" >/dev/null 2>&1
+git -C "$iclone" update-ref refs/reports-closed/Odd_Name "$(git -C "$iclone" rev-parse main)"
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "off-pattern tombstone: remote ref kept" "$(has_ref "$remote" refs/reports/Odd_Name)" yes
+git -C "$iclone" update-ref -d refs/reports-closed/Odd_Name
+
+# R5 again after a file, sync, close, sync cycle
+assert_eq "cycle: remote main has no reports/ history" "$(git -C "$remote" log --full-history --oneline main -- reports/ | wc -l | tr -d ' ')" 0
+assert_eq "cycle: integrator main has no reports/ history" "$(git -C "$iclone" log --full-history --oneline main -- reports/ | wc -l | tr -d ' ')" 0
+assert_eq "cycle: host main checkout holds no report ref" "$(git -C "$AI_KNOWLEDGE_ROOT/main" for-each-ref refs/reports | wc -l | tr -d ' ')" 0
+
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"
