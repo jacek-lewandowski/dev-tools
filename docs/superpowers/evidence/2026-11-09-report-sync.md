@@ -87,3 +87,25 @@ proposal steps (Reports section added); PROJECT_MAP rows (reports added); tests/
 `69 run, 2 failed` (not ok 54 "writer prompt has no-tools line", 59 "second-reviewer prompt has no-commands
 line"). Not touched by this change (ai-delegate prompts); memory notes record test-delegate as
 pre-existing failing. test-knowledge `454 run, 0 failed`. Not fixed.
+
+## Fix round (review 2026-11-09-report-sync-review.md)
+
+Commit: see `git log` subject "fix: close a report whose remote ref is gone, stop re-pushing fetched reports".
+- I1: tests first (red: 7 failed of 467 before the code change): own report closed before any push,
+  remote ref deleted but local cleanup missed, moved remote ref still kept and reported. Fix: on
+  "stale info" the host runs `ls-remote origin refs/reports/<name>`; empty counts as closed. docs/shared-knowledge.md
+  close paragraph aligned. Green.
+- M1: the integrator reads one `ls-remote origin 'refs/reports/*'` and skips refs whose tip matches; tests:
+  second no-op sync has no `reports pushed`; an integrator-written report the remote lacks is pushed,
+  counted and kept. (One red line, 459, came from my own leftover `Odd_Name` remote ref from an earlier
+  test; that test now removes it.)
+- M2: doctor reads `.git/ai-knowledge-role`; integrator reports are labelled "open: close it with a
+  refs/reports-closed tombstone". Asserted only that the doctor script reads the role file.
+- M3: left as is.
+Suite after the last edit: `bash tests/ai-sandbox/test-knowledge.sh` -> `467 run, 0 failed`.
+
+Gate re-run on c60c3c0: `bash tests/ai-sandbox/run-tests.sh` (exit 1). Per-suite lines in order:
+32, 151, 56, 13 run 0 failed; test-delegate `69 run, 2 failed` (not ok 54 writer prompt has no-tools line,
+not ok 59 second-reviewer prompt has no-commands line; pre-existing, same as the first gate); then
+17, 5, 23, 20, 19, 17, 14 run 0 failed; test-knowledge `467 run, 0 failed`; then 32, 30, 33, 65, 27, 39, 79 run
+0 failed; final line `SOME SUITES FAILED` (only the two test-delegate cases).
