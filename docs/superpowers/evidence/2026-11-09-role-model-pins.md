@@ -57,3 +57,17 @@ rules/global.md section 5:
 roles/reviewer.md, Brief diff row: "A blocking finding gets a delta re-review, which is the second and last round; lesser findings close the round." (implementer.md counts no rounds differently; no edit.)
 
 rules/global.md, spec's author: "When no live agent holds the slot (retired, or lost at the lead's `/clear`), a fresh agent in that slot answers from the spec and the files; the lead never settles a spec gap itself." Line 283 and roles/planner.md line 9 do not contradict; unchanged.
+
+- 6fe5c0f fix(rules): handover and process-report reviews keep their own end (review-round-limit); also adds to skills/process-report/SKILL.md step 5: a finding still blocking after round two goes to the gaps. Final section 5 bullet:
+
+    - Maximum 2 review→fix rounds. Every review of the same object is a round, a
+      delta re-review included, whatever its findings. A third finding with the
+      same root cause means redesign, not another hotfix. When a finding still
+      blocks after the second round, the lead brings it to the user with three
+      choices: accept it as known, redesign, or allow one more round; a handover
+      review ends as the context lifecycle states, and a process-report review as
+      its skill states, because no user decides there. What a review report
+      contains and when it blocks is defined in the reviewer role. A second
+      reviewer's findings belong to the same round as the reviewer's, so the limit
+      is counted once.
+    
