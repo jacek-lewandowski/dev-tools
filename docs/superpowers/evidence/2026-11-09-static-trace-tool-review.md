@@ -52,3 +52,23 @@ files" was not in the report, and the figures come from its "Waste" section, not
 - Decision entry format matches the file's header and the ui-prototype-track
   entry (same "no proposal file" form); it is consistent with that entry's
   "Left out: a read-only repository scout".
+
+## Round 2 (delta 4dd9ad0)
+
+Verdict: **accepted**. No Critical or Important finding.
+
+- I1 resolved: CodeQL is no longer named. The rule now says the agent picks only
+  a tool whose licence allows use on this codebase and asks before installing
+  when that licence is unclear, as the user decided. This is consistent with §2
+  "Ask vs. assume" and §1. The decisions entry cites the CodeQL licence with its
+  fetch date.
+- M1 resolved: FindSecBugs is no longer named, and the taint analyser must
+  report source-to-sink paths.
+- Minor, **applied** as abbc2b9 (`fix(rules)`, unpushed): the free Semgrep
+  engine's taint mode is intraprocedural. The docs say "Interprocedural taint
+  analysis is a Semgrep Pro feature" and "Taint findings are accompanied by a
+  taint trace" (https://docs.semgrep.dev/writing-rules/data-flow/taint-mode/overview,
+  fetched 2026-11-09). Without the paid engine, a trace across layers gets no
+  cross-function path. The example now reads "Semgrep taint mode within one
+  function".
+- M2 stays as decided.
