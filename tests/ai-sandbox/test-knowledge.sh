@@ -314,6 +314,8 @@ assert_eq "sandbox block not written into the repository file" \
 assert_eq "host GEMINI.md still the render symlink after create" "$(readlink "$HOME/.gemini/GEMINI.md")" "$AI_KNOWLEDGE_RENDER/GLOBAL.md"
 assert_contains "doctor reports knowledge" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'status "knowledge"'
 assert_contains "doctor lists proposal branches" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'proposal/'
+assert_contains "doctor lists pending reports" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'refs/reports/'
+assert_contains "sandbox block names the report ref and its invariant" "$(tr '\n' ' ' < "$AI_KNOWLEDGE_RENDER/GLOBAL.md" | tr -s ' ')" "refs/reports/<date>-<project>-<hex>, outside main and every branch"
 assert_eq "sandbox block no longer names a per-sandbox branch" "$(grep -c 'proposals/<project-id>' "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" 0
 assert_contains "sandbox block names the proposal branch pattern" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "proposal/<date>-<slug>-<hex>"
 assert_file "seed installed beside the helper" "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"

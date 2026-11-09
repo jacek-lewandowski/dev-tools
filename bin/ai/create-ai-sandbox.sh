@@ -208,7 +208,8 @@ repository instead, rendered read-only into every sandbox as GEMINI.md,
 CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
 gets its own clone at ~/knowledge with main checked out; the 'propose-rule'
 skill commits one file on a proposal/<date>-<slug>-<hex> branch, and the host
-pushes it on the next sandbox start or 'ai-knowledge sync --all'.
+pushes it on the next sandbox start or 'ai-knowledge sync --all'. A
+'process-report' report travels the same way as a ref refs/reports/<name>.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
@@ -1053,7 +1054,9 @@ file on a branch proposal/<date>-<slug>-<hex>, never a commit on main (a hook
 refuses it), never a push; the host pushes on the next sync (a sandbox start or
 \`ai-knowledge sync --all\`) and the integrator sandbox, which commits on main,
 decides with the \`knowledge-integrate\` skill. \`sandbox-doctor\` shows what is
-pushed and pending.
+pushed and pending. A \`process-report\` report is filed the same way, as a ref
+refs/reports/<date>-<project>-<hex>, outside main and every branch; only the
+integrator sandbox receives it.
 "
 fi
 
@@ -1603,6 +1606,10 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                    else
                        status "  $_b" "pending: reaches the remote on the next host sync"
                    fi
+               done
+               # A report ref is dropped here once the host has pushed it, so any left is pending.
+               for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname)' 'refs/reports/*' 2>/dev/null); do
+                   status "  $_b" "pending: reaches the remote on the next host sync"
                done
            else
                status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"

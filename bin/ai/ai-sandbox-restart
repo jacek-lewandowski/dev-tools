@@ -3,7 +3,7 @@ set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
 ai_sandbox_require_ctx || exit 1
 # Knowledge sync before the container comes up, so the rules it reads are the
-# current main and its proposals reach the remote. Never blocks the start.
+# current main and its proposals and reports reach the remote. Never blocks the start.
 # Before the build-caches lock, like 'ai-sandbox': start-display.sh can launch
 # long-lived background processes (Xephyr, Xvfb, the xpra viewer) that would
 # otherwise inherit CACHES_LOCK_FD and keep the flock held long after this
