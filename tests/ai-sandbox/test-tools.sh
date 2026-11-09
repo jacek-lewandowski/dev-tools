@@ -162,8 +162,9 @@ assert_eq "no write grant" "$(grep -c 'write_file' "$sf")" '0'
 assert_contains "ls is granted" "$(cat "$sf")" 'command(ls)'
 assert_eq "no write-capable tool is granted" "$(grep -c -E 'command\\((sed|awk|tee|xargs|git|rm|mv|cp|bash|sh|python3?)\\)' "$sf")" '0'
 assert_eq "mode kept" "$(stat -c %a "$sf")" '640'
-python3 "$merge" "$sf"
+HOME="$mh" python3 "$merge" "$sf"
 assert_eq "merge is idempotent" "$(grep -c 'read_url' "$sf")" '1'
+assert_eq "knowledge grant is idempotent" "$(grep -c 'read_file' "$sf")" '1'
 printf '{"colorScheme":"x"}' > "$sf"; python3 "$merge" "$sf"
 assert_contains "allow list created when absent" "$(cat "$sf")" 'read_url(*)'
 printf 'not json' > "$sf"; python3 "$merge" "$sf" 2>/dev/null
