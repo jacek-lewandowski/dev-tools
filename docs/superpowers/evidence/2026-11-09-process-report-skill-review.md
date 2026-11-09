@@ -65,3 +65,35 @@ the unexplained `4256d730` gap; a fixture asserting the caption text.
   non-ui rows kept beside `none` pass; the dry-run report does both, against SKILL.md step 2.
 - Register row and docstring list meta `finished`, which the script never reads.
 - The dry-run files predate 9f7c263 (stated in the evidence).
+
+## Round 2 (delta: `~/knowledge` f4740ec; dev-tools 4d5b1c2, 9a2f800)
+
+**Verdict: accepted. I1 and I2 are fixed; nothing new blocks.**
+
+Run by the reviewer: suite from `/tmp`, `Ran 40 tests in 0.910s / OK`. Reproducer
+`--since 2026-10-28 --until 2026-10-31` on the real project dir: `lead.output_tokens` 317281
+(515560 - 198279, the copied history exactly), `user_rounds` 32 (47 - 15), `wall_s` 283139,
+as the evidence records. The new tests would have caught both findings:
+`test_resumed_session_counts_shared_history_once` asserts 107, not the old 207;
+`test_cost_caption_names_what_cost_state_covers` asserts the new caption and the absence of
+"subagents excluded". The four minors are fixed with a test each, `finished` excepted
+(text only).
+
+Minor (not blocking):
+
+- `collect` reads sessions in file-name order, so the dedup credits the shared history to
+  whichever file sorts first; session ids are random, so about half of resumes go the other
+  way. With copies of the two real files renamed so that the resumed one sorts first, totals
+  for tokens and rounds stay right (218348, 17 either way) but `lead.wall_s` is 543149
+  against 276543: the original keeps lines that carry no shared uuid (its first line has the
+  resumed file's timestamp) and adds its full span again. The per-session rows also flip (the
+  original shows 3 output tokens over 74 h). The `spans N days` marker flags this case; a
+  short resume would not trip it. Resolves: read the session files in order of their first
+  timestamp, plus a fixture with the resumed file named first.
+- SKILL.md step 2 lost "Read the files the JSON points to", which the brief's step 2 asks
+  for (judging kind and outcome needs the content); `--until` lost "default today"; "so for
+  work outside Claude Code" does not read; a double space before "Kinds".
+- O6 size cap: the brief the user approved says `du -sk` under 100. The lead changed the
+  measure to `--apparent-size` and then accepted 103. That is a change to an approved
+  obligation, so it goes to the user at merge rather than being decided by the lead alone.
+  I make no finding against the code.
