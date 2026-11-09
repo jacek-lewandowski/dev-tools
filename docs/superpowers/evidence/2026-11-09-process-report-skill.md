@@ -170,3 +170,11 @@ that carries this section. Regression tests written first: 7 failed on the old c
 The 100 KB cap in the brief was a guessed bound against shipping bulk into every
 sandbox. 103 KB apparent size after fix round 2 is accepted as meeting its purpose;
 no code or tests are cut for it. — Skippy Wspaniały (lead)
+
+## Fix round 3 (review Round 2 lesser findings)
+
+`~/knowledge` a99164c and 0f62a65. Sessions are read oldest first by (first, last) timestamp, not by name
+(`test_sessions_read_oldest_first_not_by_name`: a resumed file sorting first and last by name gives the
+same walls; failed with the sort disabled, passes with it). SKILL.md: "Read the files the JSON points to"
+restored, `--until` "default today", agy/outside-Claude-Code sentence and double space fixed, body 499 words.
+Suite: `Ran 41 tests / OK`; ruff check passed, format unchanged.
