@@ -853,6 +853,12 @@ sync_clone() {
     # and acts on tombstones (refs/reports-closed/<name>, made by the integrator).
     # A writer clone drops a ref once its push succeeded; the integrator keeps it
     # until it is closed.
+    # The integrator holds refs it fetched: one ls-remote tells which already
+    # match the remote, so a sync with nothing new pushes and counts nothing.
+    local rremote=""
+    if [ "$role" = integrator ] && [ "$net" = yes ]; then
+        rremote=$(git_net -C "$CLONE" ls-remote origin 'refs/reports/*' 2>/dev/null) || rremote=""
+    fi
     while IFS= read -r rref; do
         [ -n "$rref" ] || continue
         rname=${rref#refs/reports/}
@@ -870,6 +876,7 @@ sync_clone() {
         if [ -n "$out" ]; then
             refused="$refused $rname changes $(printf '%s' "$out" | tr '\n' ' ')"; continue
         fi
+        if [ "$role" = integrator ] && grep -qxF "$rtip	$rref" <<<"$rremote"; then continue; fi
         if [ "$net" = no ]; then
             HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")"); pending=$((pending + 1)); continue
         fi
@@ -894,7 +901,12 @@ sync_clone() {
             if [ "$rc" -ne 0 ]; then
                 case $out in
                     *"remote ref does not exist"*) ;;
-                    *"stale info"*) STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched"; continue ;;
+                    *"stale info"*)
+                        # git answers "stale info" for a ref the remote no longer has
+                        # too; only a ref still there under another tip has moved.
+                        if git_net -C "$CLONE" ls-remote origin "refs/reports/$rname" 2>/dev/null | grep -q .; then
+                            STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched"; continue
+                        fi ;;
                     *) net_failed "$rc" "$out"; warn "cannot delete report $rname on the remote: $out"; continue ;;
                 esac
             fi

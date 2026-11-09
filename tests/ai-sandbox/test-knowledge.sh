@@ -1106,6 +1106,46 @@ git -C "$iclone" update-ref refs/reports-closed/Odd_Name "$(git -C "$iclone" rev
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "off-pattern tombstone: remote ref kept" "$(has_ref "$remote" refs/reports/Odd_Name)" yes
 git -C "$iclone" update-ref -d refs/reports-closed/Odd_Name
+git -C "$remote" update-ref -d refs/reports/Odd_Name; git -C "$iclone" update-ref -d refs/reports/Odd_Name
+
+# I1: a close whose remote ref is already gone is done, not "moved"
+# (a) the integrator's own report, closed before any push reached the remote
+rr_own=$(report_in "$iclone" dev-tools 2026-11-13_2026-11-14 "")
+rn_own=${rr_own#refs/reports/}
+git -C "$iclone" update-ref "refs/reports-closed/$rn_own" "$rr_own"
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "own report closed before a push: local ref gone" "$(has_ref "$iclone" "$rr_own")" no
+assert_eq "own report closed before a push: tombstone gone" "$(has_ref "$iclone" "refs/reports-closed/$rn_own")" no
+assert_eq "own report closed before a push: never on the remote" "$(has_ref "$remote" "$rr_own")" no
+assert_eq "own report closed: no false moved note" "$(grep -c 'not closed' "$iclone/.sync-status")" 0
+# (b) the remote ref was deleted but the local cleanup did not follow
+rr5=$(report_in "$clone" p 2026-11-15_2026-11-16 "")
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+git -C "$remote" update-ref -d "$rr5"
+git -C "$iclone" update-ref "refs/reports-closed/${rr5#refs/reports/}" "$rr5"
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "remote already deleted: local ref gone" "$(has_ref "$iclone" "$rr5")" no
+assert_eq "remote already deleted: tombstone gone" "$(has_ref "$iclone" "refs/reports-closed/${rr5#refs/reports/}")" no
+# (c) a moved remote ref is still kept (stale lease case above), and M1: a no-op integrator sync pushes nothing
+rr6=$(report_in "$clone" p 2026-11-17_2026-11-18 "")
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "no-op integrator sync does not count fetched reports as pushed" "$(grep -c 'reports pushed' "$iclone/.sync-status")" 0
+git -C "$iclone" update-ref "refs/reports-closed/${rr6#refs/reports/}" "$rr6"
+git -C "$remote" update-ref "$rr6" "$(git -C "$remote" rev-parse main)"
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "moved remote ref: local ref kept" "$(has_ref "$iclone" "$rr6")" yes
+assert_contains "moved remote ref: reported" "$(cat "$iclone/.sync-status")" "${rr6#refs/reports/}"
+git -C "$iclone" update-ref -d "refs/reports-closed/${rr6#refs/reports/}"; git -C "$iclone" update-ref -d "$rr6"
+git -C "$remote" update-ref -d "$rr6"
+# an integrator-written report that the remote lacks is pushed and kept until closed
+rr7=$(report_in "$iclone" dev-tools 2026-11-19_2026-11-20 "")
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "integrator's own open report pushed" "$(has_ref "$remote" "$rr7")" yes
+assert_eq "integrator's own open report kept" "$(has_ref "$iclone" "$rr7")" yes
+assert_contains "integrator push of its own report counted" "$(status_of "$iclone")" "reports pushed"
+git -C "$iclone" update-ref -d "$rr7"; git -C "$remote" update-ref -d "$rr7"
+assert_contains "doctor labels reports by role" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'ai-knowledge-role'
 
 # R5 again after a file, sync, close, sync cycle
 assert_eq "cycle: remote main has no reports/ history" "$(git -C "$remote" log --full-history --oneline main -- reports/ | wc -l | tr -d ' ')" 0
