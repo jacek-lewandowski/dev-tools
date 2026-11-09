@@ -66,3 +66,27 @@ B0, R1-R6, R8 as recorded are settled by the evidence and the re-run; R6 checked
 smoke) settles the GitHub assumption. The invariant holds on every path read: no fetch outside the
 integrator takes `refs/reports/*`, the writer drops a ref only after its push exits 0, and remote
 deletion is limited to the integrator clone and `REPORT_RE` names.
+
+## Round 2 (delta: c60c3c0 and the evidence "Fix round")
+
+Verdict: **accepted**. Nothing blocks; the review of this object is closed.
+
+- I1 fixed. My two reproducers, re-run on c60c3c0 in a scratch copy of the current suite (prefix
+  run `0 not ok`): the integrator's own report closed before any push -> local ref and tombstone
+  gone after one sync, never on the remote, status `ok:` with no "not closed" note; remote ref
+  already deleted -> local ref and tombstone gone, status `ok:`. The moved-ref case is still kept
+  and reported (suite test). Docs close paragraph matches the code.
+- M1 skip cannot drop a report: it applies only in the integrator role, which never deletes a ref
+  after a push; it skips only on an exact `<tip><TAB><ref>` line from `ls-remote` (literal tab
+  checked with `cat -A`); a failed `ls-remote` leaves `rremote` empty, so everything is pushed as
+  before. Reproducer A: a no-op integrator sync with 3 open reports now reads
+  `ok: main current; pushed 0; closed 0`. Suite covers an integrator-written report the remote
+  lacks: pushed, counted, kept.
+- M2 fixed: integrator reports labelled open by role.
+- Minor, not blocking: in the stale arm a failed `ls-remote` (network, or SIGPIPE under
+  `pipefail`) reads as "gone", so the local ref and tombstone are dropped while a moved remote ref
+  stays; the next fetch brings it back, so nothing is lost and the report reappears in the listing.
+- Gate: test-delegate failures are pre-existing. `bash tests/ai-sandbox/test-delegate.sh` on 8bcbfdc
+  in a scratch `git worktree` outside the repository (REPO_ROOT derives from the worktree; worktree
+  removed after): `69 run, 2 failed`, `not ok 54 - writer prompt has no-tools line`,
+  `not ok 59 - second-reviewer prompt has no-commands line`, the same two as on c60c3c0.
