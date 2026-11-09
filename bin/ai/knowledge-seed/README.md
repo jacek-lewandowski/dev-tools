@@ -14,6 +14,7 @@ edit this repository.
 | `skills/<name>/SKILL.md` | Skills authored here. Copied into `~/.agents/skills` and linked from every tool's skills directory. |
 | `decisions.md` | Why each rule exists, and which proposals were integrated or rejected. |
 | `proposals/` | Only this README on `main`. A proposal branch adds one `proposals/<date>-<slug>.md`. See `proposals/README.md`. |
+| `reports/` | Never on `main`. A report ref holds one `reports/<project>/process-report-<P>-<F>_<T>.md`. |
 
 ## Branches
 
@@ -25,6 +26,16 @@ edit this repository.
   `propose-rule` skill in any sandbox. It may differ from `main` only under
   `proposals/`; the host refuses to push anything else, and refuses a branch whose
   name does not follow that pattern.
+- `refs/reports/<date>-<project>-<hex>` is a ref, not a branch: one process report,
+  one commit from `main` that adds only `reports/<project>/process-report-<P>-<F>_<T>.md`.
+  The `process-report` skill files it in any sandbox; the host pushes it from every
+  clone (refusing a bad name, a path outside `reports/` or an unrelated history) and
+  the writer's clone drops it. Invariant: a report is never reachable from `main`
+  and never lands in a clone other than the writer's and the integrator's, because
+  clones fetch only `refs/heads/*`. The integrator lists it with
+  `ai-knowledge reports`, shows it to the user and closes it with
+  `git update-ref refs/reports-closed/<name> refs/reports/<name>`; the host then
+  deletes it everywhere. A closed report cannot be recovered from git.
 
 ## Flow
 
@@ -35,8 +46,13 @@ edit this repository.
 3. In the integrator sandbox the `knowledge-integrate` skill triages every open
    proposal, the user approves, the agent commits to `main` and closes each
    proposal with `git merge -s ours --no-ff` of its branch.
-4. The host pushes `main`, deletes the closed branches on the remote and in every
+4. A process report follows the same sync as a ref, is read by the integrator only
+   and closed after the user has seen it; a rule it suggests goes through the
+   proposal flow above.
+5. The host pushes `main`, deletes the closed branches on the remote and in every
    clone at their next sync; agents read the new `main` in their next session.
 
-Nothing project-specific belongs here. Project rules live in the project tree;
+Nothing project-specific belongs here, with one deliberate exception the user
+accepted: process reports live on this private remote, outside `main` and outside
+`refs/heads/`. Project rules live in the project tree;
 project memory travels with `ai-sync`.
