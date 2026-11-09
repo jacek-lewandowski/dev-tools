@@ -90,3 +90,19 @@ clause +18 net). Without the gate clause: +28. Measured on a copy in the scratch
 One commit for the merged group (items 2 and 4: `feat(rules)` plus decisions entries), one
 `docs(decisions): reject <slug>` each for items 1 and 3; each branch then closed with
 `merge -s ours --no-ff`, message `integrated` or `rejected`.
+
+## Integration
+
+Applied by Zuzia on main after e65f1c2 (global.md had changed since the draft; both drafted sentences applied to the current text with their wording unchanged).
+
+Commits in ~/knowledge:
+- d22aa1f feat(rules): clean-build sentence in "Build outputs are a snapshot", lint-runner clause in the gate sentence, plus the two decisions.md entries (integrated, rejected-with-clause).
+- a6568d1 docs(decisions): reject 2026-11-04-full-lint-set-after-every-fix
+- 52aa7a6 docs(decisions): reject 2026-11-03-sandbox-utc-zone-not-overmounted
+- Merges (`merge -s ours --no-ff`): 9877d07 clean-build-after-source-rewrite integrated; 5d38f5b task-ends-with-full-lint-and-tree-wide-tests integrated; 37c1b55 full-lint-set-after-every-fix rejected; 3ef55e4 sandbox-utc-zone-not-overmounted rejected.
+
+Final sentences in global.md:
+- "A tool that rewrites sources in place (an auto-fix run, a codemod) may have compiled the old ones first, so build from clean before testing its result."
+- "The gate is one command set in which each suite runs once, and a lint runner that stops at its first failure is run past it, so that every task reports; a runner is spawned only for what no recorded run on that tree covers."
+
+global.md word count: 5823 before, 5869 after (+46). main's proposals/ holds only README.md; no proposal branch was checked out.
