@@ -164,3 +164,9 @@ that carries this section. Regression tests written first: 7 failed on the old c
 - Size: SKILL.md body 498 words. **`du -sk --apparent-size` is now 103 (disk usage 120)**: the
   fixes added about 5 KB (tests, code, SKILL.md gaps); over the accepted cap of 100. Not
   trimmed further; the lead decides.
+
+## Lead decision on the O6 size cap (2026-11-09)
+
+The 100 KB cap in the brief was a guessed bound against shipping bulk into every
+sandbox. 103 KB apparent size after fix round 2 is accepted as meeting its purpose;
+no code or tests are cut for it. — Skippy Wspaniały (lead)
