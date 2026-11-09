@@ -28,7 +28,10 @@ Append to the "Every task has a class" bullet:
 
 > Every task has one key, set when its class is: the tracker id where a
 > tracker holds the task, otherwise the `YYYY-MM-DD-slug` stem of its brief,
-> plan or evidence file. That file starts with a `Task: <key>` line and a
+> plan or evidence file. A phase has one key, its plan's stem or its tracker
+> id; every task of the phase, every agent spawned for it (planner,
+> implementer, reviewer, runner) and the gate commit carry that same key. The
+> file that states the task starts with a `Task: <key>` line and a
 > `Class: small|brief|phase` line; a task that lives only in a tracker carries
 > the `Class:` line as a trailer of its first commit. Every commit of the task
 > has a `Task: <key>` trailer, and every message that spawns or continues an
@@ -44,24 +47,26 @@ How the lines are read (verified on real files):
   Read rule: the first line of the prompt text matching `^Task:[ \t]*(\S+)[ \t]*$` (multiline, whole prompt, so it survives the name line, a blank line and the coordinator preamble). That is the key.
 - Commit: git trailer `Task`, read in `git_commits_of` with one more `%(trailers:key=Task,valueonly,separator=%x1e)` field next to the existing Co-Authored-By one (git's own parser, so only a real trailer block counts); same for `Class` (stored as `c["class"]`). Several distinct `Task` trailers: lexically first key and `ambiguous`, as today.
 - Class: a file ending `.md`, outside `SKIP_DIRS`, whose first 200000 bytes hold a line `^Task:[ \t]*(\S+)` and a `CLASS_RE` match gives `idx[key]`; the old `*-brief`/`*-plan` path rule stays as the fallback (`setdefault`, explicit wins). For a key with no file, the `Class` trailer of the earliest commit with that key. Otherwise `unknown`, as today.
-- Key shape: any non-space token, taken verbatim (`OMDEV-5600`, `#12`, `p1-T5`, `2026-11-09-task-key`); no normalisation except that a slug passes through `strip_suffix` like heuristic keys, so a brief and its evidence collapse.
+- Key shape: the rule names two shapes, a tracker id (`OMDEV-5600`, `#12`) or a `YYYY-MM-DD-slug` stem; a phase has one key and per-task cost inside a phase is out of scope. The script accepts any non-space token for history (`p1-T5` in analogiesio stays one row). Every explicit key, from a spawn line, a commit trailer or a file's `Task:` line, goes through `strip_suffix` (a no-op for ids), and the class index stores the same stripped key, so a brief, a plan and their evidence collapse to one row and one class lookup.
+- Signature change: `class_index(repos)` has no commits; it becomes `class_index(repos, commits)` (called in `collect` after `git_commits`), reading the `Class` trailer of the earliest commit per key from `commits`; `class_index_of(repo)` is unchanged apart from the explicit-`Task:` file rule.
 - Order: explicit key first; if absent, today's path/issue heuristics unchanged; then today's by-time trailer match unchanged. `known_issues` gating applies only to the heuristic.
 
 Tests (write first, red on base, then green; follow the `Proj`, `commit`, `git` helpers in the test file):
 - T1 spawn with `Task: OMDEV-1` as line 3 after name line keys that spawn and its agent, with no matching commit subject.
+- T2b commit with a `Task: X` trailer and a differing path key (touches `plans/2026-11-02-y-plan.md`) or `#5` subject: key is `X`, not ambiguous.
 - T2 spawn prompt with both `Task: X` and a `plans/2026-11-02-y` path: explicit wins.
 - T3 commit with `Task:` trailer and no path/subject hint is keyed; commit with two different `Task` trailers is `ambiguous`.
 - T4 a `Task:` text in the commit body that is not in the trailer block is ignored.
-- T5 file `evidence/phase-1/notes.md` with `Task: p1-T5` and `Class: phase` gives class `phase` on row `p1-T5`; a tracker-only key gets its class from the `Class` trailer of its first commit.
+- T5 file `evidence/phase-1/notes.md` with `Task: 2026-11-09-phase-one` and `Class: phase`, plus a spawn (reviewer) and a gate commit carrying that same key, give one row `2026-11-09-phase-one` with class `phase`, both counted; a file stem `2026-11-09-phase-one-plan` as `Task:` value collapses to the same row; a tracker-only key gets its class from the `Class` trailer of its first commit.
 - T6 old shapes still key as before (existing tests stay green unchanged, plus one explicit fallback case: no `Task:` anywhere, path key and `#n` key as today).
 - T7 continued-agent later prompt carrying its own `Task:` line is keyed by it.
 
 ## Obligations
 
 - O1 Rule text: `grep -n "Task: <key>" ~/knowledge/rules/global.md` shows the bullet; read lines 35-60 to confirm the text equals the block above and that no other clause changed (`git -C ~/knowledge diff --stat rules/` shows only `rules/global.md`).
-- O2 Red then green: the new tests fail on the base (`python3 -m unittest test_transcript_stats` in `skills/process-report/scripts`, failures named) and the whole module passes after (existing 47 tests plus new; expected `OK`).
+- O2 Red then green: the new tests fail on the base (`python3 -m unittest test_transcript_stats` in `skills/process-report/scripts`, failures named) and the whole module passes after (existing 48 tests plus new; expected `OK`).
 - O3 Lint: pinned ruff 0.17.3 (venv in the scratchpad as in the 2026-11-09 evidence): `ruff check --no-cache .` and `ruff format --no-cache --check .` clean.
-- O4 Fallback unchanged: run the script on the same window before and after on this repository (`--git dev-tools --git ~/knowledge --since 2026-11-09 --until 2026-11-09`); the JSON work table is identical (diff empty), since no commit there carries `Task:` yet.
+- O4 Fallback unchanged: run the script on the same window before and after on this repository (`--git dev-tools --git ~/knowledge --since 2026-11-09 --until 2026-11-09`), before commit (1) lands (the two commits carry `Task:` trailers and fall in the window, so a later run differs by exactly their row); the JSON work table is identical (diff empty), since no earlier commit carries `Task:`.
 - O5 Real data: on a temp git repo with three commits (two `Task: A`, one none) and a synthetic transcript spawn with `Task: A`, the row `A` shows 2 commits and the spawn; unassigned shows 1. Record the command and rows.
 - O6 SKILL.md body under 500 words (`awk` count excluding front matter, as in the 2026-11-09 evidence) and `golden-skeleton.md`/`good-report.md` fixtures still pass `check_report` (covered by O2).
 - O7 `decisions.md` has the entry in file format, in the same commit as the rule (`git -C ~/knowledge show --stat <commit>` lists both).
