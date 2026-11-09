@@ -665,8 +665,9 @@ New:
 ```markdown
 Where the goal is visible, the obligations, or for a brief its acceptance
 criterion, name the screens, states, widths and platforms whose pictures the
-work delivers and what each is compared with: the approved prototype, or
-pictures of the base tree.
+work delivers, the narrowest supported width always among the widths, and
+what each is compared with: the approved prototype, or pictures of the base
+tree.
 ```
 
 ### R1 `roles/reviewer.md`, the visible-change bullet
@@ -692,12 +693,12 @@ New:
   state, width or platform the brief or the phase's obligations name without
   a picture, a picture from another platform offered as the target's, or a
   difference from the approved prototype other than in live data or the
-  placeholders it marks is a finding. A platform the evidence records, with
-  the reason, as reachable by no agent is the user's batched check, not a
-  finding. In a spec of design work with a visual goal, a missing citation of
-  an approved prototype with its approval record is a finding. You judge
-  conformance to approved pictures, never the look itself; the look is the
-  user's to judge.
+  placeholders it marks is a finding. The pictures of a platform the evidence
+  records as reachable by no agent, with a reason you accept, join the user's
+  batched check and are not a finding. In a spec review of design work with a
+  visual goal, a missing citation of an approved prototype with its approval
+  record is a finding. You judge conformance to approved pictures, never the
+  look itself; the look is the user's to judge.
 ```
 
 ### `decisions.md` entry
