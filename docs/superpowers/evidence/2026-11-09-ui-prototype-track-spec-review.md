@@ -30,3 +30,15 @@ Verdict: blocking, 4 Important findings; no Critical.
 - Fate table: every taken input maps to a block (G1, G7, G8, P1, P2, R1, X1); PP5 and PP3 and PP6 lint are stated as not taken; the decisions entries match the table.
 - Render enumerates roles/ (ai-knowledge:493); ai-delegate accepts only scout, writer, second-reviewer; the process-report skill has the kinds cited; no name collisions for Tosia, Franek, Julka; process-report skill and knowledge-integrate step 6 (merge -s ours) exist as cited.
 - Blocks do not duplicate or contradict any existing clause apart from findings 1 to 3. "Without an agent review" in G1 is explicit against the rule that the user sees reviewed versions.
+
+# Round 2 (delta a2eec43..9dbfaec, Arek)
+
+Verdict: ACCEPTED. No Critical or Important finding remains.
+
+- Finding 1 (pin): resolved. X1 has `model: sonnet`, the false invariant is removed, RM1 adds prototyper to the README list; its Old block occurs verbatim in the current `roles/README.md`.
+- Finding 2 (G8 vs small class): resolved. G8, G-c, the empty state and the invariant now bind the brief and phase classes only and a small change keeps its one look; the PP5 row is adjusted to match.
+- Finding 3 (trigger): resolved. "a new screen the approved direction does not cover", plus a flow line for the in-direction case (Q2 stays open and consistent).
+- Finding 4 (home of the prototype): resolved. The lead copies the approved variant beside the spec, the spec cites that path (G1, P1, flow, role output, decisions entry).
+- Lesser: Q5 dropped and the names are a recorded assumption; shadows added to G7; "prototype brief" renamed "prototype sheet" with the not-a-brief-class sentence, consistently across G1, G4, P1, X1 and the role contract. No stray "prototype brief" remains.
+- Old blocks G1, G2, G3, G6, G7 and RM1 re-checked as substrings of `~/knowledge` at 8a9b911 (clean tree): all present. Word ledger recomputed from the blocks: G1 +118, G2 +1, G3 +3, G4 +32, G5 +5, G6 +1, G7 +13, G8 +219 = +392; `wc -w` of global.md is now 6158 (the spec said 6163 at c1b8b86), so I updated the baseline and the "main clean at" stamp to 8a9b911 in the spec.
+- Nothing else broken by the delta; open decisions Q1 to Q4 unchanged and correctly stated.

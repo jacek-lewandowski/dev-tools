@@ -230,7 +230,7 @@ S1 to S5 and S7, OME S1, S2 and S4) are outside this spec and not listed; UKF S6
 - Verified at `c1b8b86`: every Old block of Appendix A (G1, G2, G3, G6, G7,
   RM1) occurs verbatim in its file (a substring check per block).
 - Verified: the integrator clone is this sandbox's (`ai-knowledge-role`).
-  `~/knowledge` main is clean at `c1b8b86` (fix round 1); the phase planner
+  `~/knowledge` main is clean at `8a9b911` (reviewer round 2 re-checked every Old block there); the phase planner
   re-checks the Old blocks against main at landing.
 - Inferred: agents can capture screenshots in the sandbox (UKF 135 and ANA 43
   screenshots in the period; `/usr/bin/google-chrome` present here).
@@ -259,7 +259,7 @@ replaced in Appendix A returns 0.
 
 Word ledger for `rules/global.md` (words of new minus old block, split on
 whitespace; recomputed in fix round 1): G1 +118, G2 +1, G3 +3, G4 +32, G5 +5,
-G6 +1, G7 +13, G8 +219; +392 on 6163 (`wc -w` at `c1b8b86`), about 6555
+G6 +1, G7 +13, G8 +219; +392 on 6158 (`wc -w` at `8a9b911`), about 6550
 after.
 
 ## Open decisions for the user
