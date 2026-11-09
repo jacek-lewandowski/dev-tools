@@ -24,7 +24,8 @@ still prints the main part. Stdlib only.
 #   mark.py) for the lead's session; its presence adds the "handover ready"
 #   segment. Session-scoped: /clear starts another session id, so the mark
 #   stops showing by itself; a user message after the mark (transcript entries
-#   {type: "user", timestamp, message.content, isMeta, isSidechain}) withdraws it.
+#   {type: "user", timestamp, message.content, origin.kind, isMeta,
+#   isSidechain}) withdraws it.
 """
 
 import argparse
@@ -172,18 +173,47 @@ def subagents_dir(data):
     return os.path.join(os.path.dirname(transcript), session, "subagents")
 
 
+# Copied from ~/knowledge skills/process-report/scripts/transcript_stats.py
+# NOT_A_ROUND (another repository): content prefixes of entries the harness
+# writes as "user" that the user did not type.
+NOT_A_ROUND = (
+    "<task-notification",
+    "<agent-message",
+    "<command-",
+    "<local-command-",
+    "<system-reminder",
+)
+
+
+def _text_of(content):
+    """The text of a user entry's content, or None when it holds a tool result."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    parts = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") == "tool_result":
+            return None
+        parts.append(str(block.get("text") or ""))
+    return "".join(parts)
+
+
 def _is_user_message(entry):
-    """A message the user typed: not a tool result, an agent message or a subagent's."""
+    """A message the user typed: origin.kind "human", or, with no origin, text
+    that is not a harness notice; never a tool result or a subagent's entry."""
     if entry.get("type") != "user":
         return False
     if entry.get("isMeta") or entry.get("isSidechain"):
         return False
-    content = (entry.get("message") or {}).get("content")
-    if isinstance(content, list):
-        return any(
-            isinstance(b, dict) and b.get("type") != "tool_result" for b in content
-        )
-    return isinstance(content, str)
+    message = entry.get("message")
+    text = _text_of(message.get("content")) if isinstance(message, dict) else None
+    if text is None:
+        return False
+    origin = entry.get("origin")
+    if isinstance(origin, dict):
+        return origin.get("kind") == "human"
+    return bool(text.strip()) and not text.lstrip().startswith(NOT_A_ROUND)
 
 
 def last_user_time(path):
@@ -197,7 +227,7 @@ def last_user_time(path):
                 if isinstance(entry, dict) and _is_user_message(entry):
                     stamp = str(entry["timestamp"]).replace("Z", "+00:00")
                     return datetime.fromisoformat(stamp).timestamp()
-            except (ValueError, KeyError):
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
         if size >= total:
             return None
