@@ -13,9 +13,12 @@ import time
 import unittest
 from unittest import mock
 
+from tools.context_statusline import mark
 from tools.context_statusline.statusline import (
     CEILING_TOKENS,
     GREEN,
+    HANDOVER_MARKER,
+    HANDOVER_SEGMENT,
     PREPARE_TOKENS,
     RED,
     RESET,
@@ -31,6 +34,7 @@ STALE_AGENT = "agent-d4stale000000000"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 MAIN_PART = "Fable 5.1 42% 84k"
 FULL_LINE = MAIN_PART + " | Write superv:~375k Land the con:138k"
+SEGMENT_TAIL = " | handover ready"
 
 
 def visible(line):
@@ -237,6 +241,121 @@ class StatuslineTest(unittest.TestCase):
         rc = main(["--plain"], stdin=io.StringIO("not json"), stdout=out)
         self.assertEqual(rc, 0)
         self.assertEqual(out.getvalue(), "? --\n")
+
+    # --- handover-ready mark ---------------------------------------------
+
+    def write_marker(self, data, text="/tmp/handover.md"):
+        directory = os.path.join(self.tmp, data["session_id"])
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, HANDOVER_MARKER), "w") as f:
+            f.write(text)
+
+    def test_marker_adds_a_distinct_segment_last(self):
+        data = self.stdin()
+        self.session_dir(data)
+        self.write_marker(data)
+        line = render(data, columns=200, colour=True, now=self.now)
+        self.assertEqual(visible(line), FULL_LINE + SEGMENT_TAIL)
+        self.assertIn(HANDOVER_SEGMENT, line)
+        self.assertNotIn(f"{GREEN}{HANDOVER_SEGMENT}", line)
+
+    def test_marker_without_agents_and_without_marker(self):
+        data = self.stdin()
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+        self.write_marker(data)
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now),
+            MAIN_PART + SEGMENT_TAIL,
+        )
+
+    def test_marker_of_another_session_is_not_shown(self):
+        data = self.stdin()
+        self.write_marker({"session_id": "other-session"})
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+
+    def test_marker_never_fails_the_line(self):
+        data = self.stdin()
+        data["transcript_path"] = None
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+        data = self.stdin()
+        # a directory in place of the file is not a mark
+        os.makedirs(os.path.join(self.tmp, data["session_id"], HANDOVER_MARKER))
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+
+
+class MarkTest(unittest.TestCase):
+    """The helper writes the mark the status line reads, for the right session."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.projects = os.path.join(self.tmp, "projects")
+        self.cwd = "/work/my.project"
+        self.slug = os.path.join(self.projects, "-work-my-project")
+        os.makedirs(self.slug)
+
+    def transcript(self, session, age):
+        path = os.path.join(self.slug, session + ".jsonl")
+        open(path, "w").close()
+        t = time.time() - age
+        os.utime(path, (t, t))
+        return path
+
+    def run_mark(self, argv=(), env=None):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env or {}, clear=False):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            os.environ.update(env or {})
+            rc = mark.main(list(argv), projects=self.projects, cwd=self.cwd, stdout=out)
+        return rc, out.getvalue()
+
+    def marker(self, session):
+        return os.path.join(self.slug, session, HANDOVER_MARKER)
+
+    def test_session_from_environment_wins(self):
+        self.transcript("older", 100)
+        self.transcript("newer", 1)
+        rc, _ = self.run_mark(["/h.md"], env={"CLAUDE_CODE_SESSION_ID": "older"})
+        self.assertEqual(rc, 0)
+        with open(self.marker("older")) as f:
+            self.assertEqual(f.read(), "/h.md\n")
+        self.assertFalse(os.path.exists(self.marker("newer")))
+
+    def test_without_environment_the_newest_transcript_is_used(self):
+        self.transcript("older", 100)
+        self.transcript("newer", 1)
+        rc, _ = self.run_mark(["/h.md"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isfile(self.marker("newer")))
+        self.assertFalse(os.path.exists(self.marker("older")))
+
+    def test_clear_removes_the_mark_and_tolerates_none(self):
+        self.transcript("s1", 1)
+        self.run_mark(["/h.md"])
+        rc, _ = self.run_mark(["--clear"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(self.marker("s1")))
+        self.assertEqual(self.run_mark(["--clear"])[0], 0)
+
+    def test_no_session_found_exits_nonzero(self):
+        shutil.rmtree(self.slug)
+        rc, _ = self.run_mark(["/h.md"])
+        self.assertEqual(rc, 2)
+
+    def test_written_mark_is_what_the_status_line_reads(self):
+        path = self.transcript("s1", 1)
+        self.run_mark(["/h.md"])
+        data = {"session_id": "s1", "transcript_path": path}
+        line = render(data, columns=200, colour=False, now=time.time())
+        self.assertTrue(line.endswith(SEGMENT_TAIL), line)
 
 
 if __name__ == "__main__":
