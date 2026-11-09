@@ -571,15 +571,16 @@ integrator commits them.
 
 ## Amendment A1 (2026-11-09)
 
-Status: draft for the user's approval (task 2026-11-09-ui-track-fixes, class
-brief, spec by Hania). It changes the text of G8, P1, P2 and R1 as landed; no
+Status: approved by the user on 2026-11-09, with R1 narrowed to differences
+the user would see as a different design (task 2026-11-09-ui-track-fixes,
+class brief, spec by Hania). It changes the text of G8, P1, P2 and R1 as landed; no
 goal, invariant or user decision (Q1–Q4) changes. Where this amendment and
 Appendix A differ, this amendment holds.
 
 Goal: on `~/knowledge` main, the landed blocks no longer contradict each other
 or the spec's flow: R1 binds the classes G8 binds, lets an unreachable platform
-go to the user's batched check, and treats every unrecorded or recorded
-departure from the approved prototype as a finding, as the flow line "The
+go to the user's batched check, and treats a departure from the approved
+prototype's design, recorded or not, as a finding, as the flow line "The
 delivered pictures differ from the prototype: a review finding" states; G8, P2
 and R1 name the brief or the phase's obligations, not a task, as what names
 the widths; the prototype sheet always carries the narrowest supported width
@@ -692,13 +693,16 @@ New:
   evidence against the approved prototype or the base pictures. A screen,
   state, width or platform the brief or the phase's obligations name without
   a picture, a picture from another platform offered as the target's, or a
-  difference from the approved prototype other than in live data or the
-  placeholders it marks is a finding. The pictures of a platform the evidence
-  records as reachable by no agent, with a reason you accept, join the user's
-  batched check and are not a finding. In a spec review of design work with a
-  visual goal, a missing citation of an approved prototype with its approval
-  record is a finding. You judge conformance to approved pictures, never the
-  look itself; the look is the user's to judge.
+  difference from the approved prototype in layout, content, colour, the kind
+  of a component or a missing or extra element is a finding, except in live
+  data or the placeholders it marks; what the prototype only approximates
+  (font rendering, a few pixels of spacing, native controls in place of web
+  ones) is not. The pictures of a platform the evidence records as reachable
+  by no agent, with a reason you accept, join the user's batched check and
+  are not a finding. In a spec review of design work with a visual goal, a
+  missing citation of an approved prototype with its approval record is a
+  finding. You judge conformance to approved pictures, never the look itself;
+  the look is the user's to judge.
 ```
 
 ### `decisions.md` entry
@@ -713,10 +717,14 @@ integrator commits it.
   that could not run before landing and the phase review's open wording
   points. The reviewer's picture check now binds only the brief and phase
   classes, as the evidence rule does, so a small change keeps its one look; a
-  platform no agent can reach goes to the user's batched check instead of
-  becoming a finding nobody can fix; and any departure from the approved
-  prototype other than live data or marked placeholders is a finding, since
-  recording a difference does not change a contract only the user may change.
+  platform no agent can reach, with a reason the reviewer accepts, goes to the
+  user's batched check instead of becoming a finding nobody can fix; and a
+  departure from the approved prototype in layout, content, colour, the kind
+  of a component or a missing or extra element is a finding, other than in
+  live data or marked placeholders, since recording a difference does not
+  change a contract only the user may change, while what the prototype only
+  approximates (font rendering, a few pixels of spacing, native controls) is
+  not, as the user decided on approving the amendment.
   The widths come from the brief or the phase's obligations, since a phase
   task carries no criteria of its own and a brief has no tasks, and the
   prototype sheet always shows the narrowest supported width the evidence
