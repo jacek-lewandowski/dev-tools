@@ -243,7 +243,7 @@ mv "$remote" "$remote.away"
 knowledge sync "$proj" >"$tmp/offline.out" 2>&1; rc=$?
 assert_eq "offline sync exits 0" "$rc" 0
 assert_status "offline status" "$clone" "offline:"
-assert_contains "manual fetch of main printed" "$(cat "$tmp/offline.out")" "git -C $AI_KNOWLEDGE_ROOT/main fetch origin"
+assert_contains "manual fetch of main printed" "$(cat "$tmp/offline.out")" "git -C $AI_KNOWLEDGE_ROOT/main fetch --prune origin"
 assert_contains "manual fetch of the clone printed" "$(cat "$tmp/offline.out")" "git -C $clone fetch --prune origin"
 assert_contains "manual sync printed" "$(cat "$tmp/offline.out")" "ai-knowledge sync $proj"
 assert_eq "no push printed when nothing is pending" "$(grep -c 'git -C .* push ' "$tmp/offline.out")" 0
@@ -906,7 +906,7 @@ d9="$home9/.ai-sandbox/$(ai_sandbox_project_id "$p9")-agent"; mkdir -p "$d9"
 mv "$remote" "$remote.away"
 HOME="$home9" AI_SANDBOX_ROOT="$home9/.ai-sandbox" knowledge sync "$p9" >"$tmp/space.out" 2>&1
 mv "$remote.away" "$remote"
-assert_contains "fetch hint quotes the path with a space" "$(cat "$tmp/space.out")" "git -C $(printf '%q' "$home9/.ai-sandbox/knowledge/main") fetch origin"
+assert_contains "fetch hint quotes the path with a space" "$(cat "$tmp/space.out")" "git -C $(printf '%q' "$home9/.ai-sandbox/knowledge/main") fetch --prune origin"
 assert_contains "clone hint quotes the path with a space" "$(cat "$tmp/space.out")" "git clone file://$remote $(printf '%q' "$d9/knowledge")"
 
 # --- two sync --all runs at once: locks keep every clone ok and no child fails
@@ -921,6 +921,18 @@ assert_status "concurrent all: manual clone ok" "$mdir/knowledge" "ok:"
 assert_eq "concurrent all: no error row in either table" "$(cat "$tmp/conc1.out" "$tmp/conc2.out" | grep -c 'error:')" 0
 assert_eq "concurrent all: no unexpected-error trace" "$(cat "$tmp/conc1.out" "$tmp/conc2.out" | grep -c 'unexpected error')" 0
 assert_eq "concurrent all: scratch files removed" "$(ls "$AI_SANDBOX_ROOT"/*-agent/.sync-output.* "$AI_SANDBOX_ROOT"/*-agent/.sync-exit.* 2>/dev/null | wc -l | tr -d ' ')" 0
+
+has_ref_plain() {   # <repo> <ref>
+    git -C "$1" show-ref -q --verify "$2" && echo yes || echo no
+}
+# --- the host's own checkout prunes tracking refs of proposal branches deleted on the remote
+b_prune=$(propose_in "$clone" prune)
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "host checkout tracks the pushed proposal" "$(has_ref_plain "$AI_KNOWLEDGE_ROOT/main" "refs/remotes/origin/$b_prune")" yes
+git -C "$remote" update-ref -d "refs/heads/$b_prune"
+git -C "$clone" branch -q -D "$b_prune"
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "host checkout drops the tracking ref of a deleted proposal" "$(has_ref_plain "$AI_KNOWLEDGE_ROOT/main" "refs/remotes/origin/$b_prune")" no
 
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"

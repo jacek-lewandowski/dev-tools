@@ -218,7 +218,7 @@ cmd_init() {
     else
         # An existing checkout may be behind: the integrator record and the
         # drift diff below must read the remote's current main.
-        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q origin 2>&1) || rc=$?
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin 2>&1) || rc=$?
         [ "$rc" -eq 0 ] || { net_failed "$rc" "$out"; warn "cannot fetch $remote: $NET_REASON; working from the last fetch"; }
     fi
     # "Empty" means the remote has no main. A bare remote made with plain
@@ -405,11 +405,11 @@ MAIN_FETCHED=yes
 sync_main() {
     [ -d "$KNOWLEDGE_MAIN/.git" ] || { warn "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"; return 1; }
     local rc=0 out
-    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q origin 2>&1) || rc=$?
+    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
         net_failed "$rc" "$out"
         warn "cannot fetch $REMOTE; rendering the last fetched main"
-        HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch origin)")
+        HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin)")
         MAIN_FETCHED=no
     fi
     # A manual fetch lands here on the next sync, so the merge runs either way.
