@@ -1,7 +1,7 @@
 # UI prototype track: visual work approved on pictures, verified in pictures
 
 Date: 2026-11-09
-Status: draft by Hania (spec author), fix round 1 of the spec review applied
+Status: approved by the user on 2026-11-09 (spec by Hania, reviewed in two rounds; decisions recorded below)
 Class: phase (design work that changes the shared rules and adds a role)
 Inputs, all read for this spec:
 - Process reports of 2026-11-09, untracked copies in `.tmp/`:
@@ -149,7 +149,7 @@ spec's author, prototypers, implementers and reviewers carry the flow:
   (`skills/process-report/SKILL.md`, step 2), and takes the role from the
   agent type with no list of names.
 - A standing screen gallery (PP3) and a style lint with a shrinking baseline
-  (PP6, second half), unless the user decides otherwise in Q3 and Q4.
+  (PP6, second half), as decided in Q3 and Q4.
 
 ## Fate of every input
 
@@ -168,7 +168,7 @@ S1 to S5 and S7, OME S1, S2 and S4) are outside this spec and not listed; UKF S6
 | ANA S7 prototyper for mockups and probes | Mockups taken, probes non-goal | X1 | probes are implementer spikes already |
 | NOD S6 publish screenshots to the owner at implementation time | Taken | G8 | NOD #21: scratchpad screenshots, O9 open |
 | OME S3 read-only repository scout | Non-goal | none | not visual work |
-| PP1 pictures before the plan | Taken for a visual direction; brief-level before-pictures to Q2 | G1, P1, P2, R1 | PP evidence; UKF |
+| PP1 pictures before the plan | Taken for a visual direction; brief-level before-pictures rejected (Q2) | G1, P1, P2, R1 | PP evidence; UKF |
 | PP2 evidence from every platform that ships | Taken | G8 first sub-bullet | PP evidence: web-only screenshots, a tab-bar fix applied only to the web component |
 | PP3 screen gallery | Rejected as a global rule (Q3) | none | the per-change page of G8 shows every changed screen at each delivery; a standing gallery is per-project upkeep with no incident behind it beyond what that page covers |
 | PP4 device settings first | Merged | G8 first sub-bullet | "missing animations" were the phone's remove-animations setting |
@@ -262,24 +262,22 @@ whitespace; recomputed in fix round 1): G1 +118, G2 +1, G3 +3, G4 +32, G5 +5,
 G6 +1, G7 +13, G8 +219; +392 on 6158 (`wc -w` at `8a9b911`), about 6550
 after.
 
-## Open decisions for the user
+## Decisions (user, 2026-11-09)
 
-- Q1 Who builds prototypes: (a) a new `prototyper` role as above, (b) an
-  implementer task kind, under implementer names. Recommend (a): the implementer
-  role is built on tests, obligations and commits, none of which a throw-away
-  variant has, and three of four reports asked for a role.
-- Q2 A brief that restyles a screen inside an approved direction: (a) after
-  pictures beside base pictures, shown at delivery (G8), (b) also before/after
-  pictures approved with the brief, before implementation. Recommend (a): the
-  rework evidence (UKF, PP) is about a direction approved in words; NOD #21's
-  miss was caught by the after picture.
-- Q3 Screen gallery (PP3): (a) no global rule, the per-change page only, (b)
-  every project with a UI keeps one page of all screens and states, refreshed
-  after each visual phase. Recommend (a).
-- Q4 Style values (PP6): (a) only the §3 symbol clause for code a task writes
-  or touches (G7), (b) also a lint in every UI project rejecting raw values,
-  with a per-file baseline that only shrinks. Recommend (a); (b) is a
-  per-project refactor the user can order.
+Each decided as recommended.
+
+- Q1 Who builds prototypes: a new `prototyper` role (X1), not an implementer
+  task kind. The implementer role is built on tests, obligations and commits,
+  none of which a throw-away variant has, and three of four reports asked for
+  a role.
+- Q2 A brief that restyles a screen inside an approved direction: after
+  pictures beside base pictures, shown at delivery (G8); no before/after
+  pictures approved with the brief. The rework evidence (UKF, PP) is about a
+  direction approved in words; NOD #21's miss was caught by the after picture.
+- Q3 Screen gallery (PP3): no global rule; the per-change page of G8 only.
+- Q4 Style values (PP6): only the §3 symbol clause for code a task writes or
+  touches (G7); no lint with a shrinking baseline as a global rule, which
+  stays a per-project refactor the user can order.
 
 ## Appendix A: contract blocks
 
