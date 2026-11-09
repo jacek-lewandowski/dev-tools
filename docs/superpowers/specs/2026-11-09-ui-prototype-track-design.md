@@ -568,3 +568,168 @@ integrator commits them.
   sideways can still clip an element, so a fit check measures every visible
   element's box, at the narrowest width and in every shipped language.
 ```
+
+## Amendment A1 (2026-11-09)
+
+Status: draft for the user's approval (task 2026-11-09-ui-track-fixes, class
+brief, spec by Hania). It changes the text of G8, P1, P2 and R1 as landed; no
+goal, invariant or user decision (Q1–Q4) changes. Where this amendment and
+Appendix A differ, this amendment holds.
+
+Goal: on `~/knowledge` main, the landed blocks no longer contradict each other
+or the spec's flow: R1 binds the classes G8 binds, lets an unreachable platform
+go to the user's batched check, and treats every unrecorded or recorded
+departure from the approved prototype as a finding, as the flow line "The
+delivered pictures differ from the prototype: a review finding" states; G8, P2
+and R1 name the brief or the phase's obligations, not a task, as what names
+the widths; the prototype sheet always carries the narrowest supported width
+that G8 requires in the evidence.
+
+Sources: the late second review
+(`docs/superpowers/evidence/2026-11-09-ui-prototype-track-second-review.md`,
+findings S1–S6 in file order) and lesser finding 3 (a–c) of the phase review
+(`docs/superpowers/evidence/2026-11-09-ui-prototype-track/phase-review.md`).
+Every Old block below is copied from `~/knowledge` main at `abbc2b9`.
+
+### Points judged
+
+| Point | Verdict | Reason | Block |
+|---|---|---|---|
+| S1 R1 flags a platform no agent can reach | Real | G8 sends what no agent can reach to the user's batched check; R1 makes the same missing picture a finding the implementer cannot fix | R1 |
+| S2 R1 lets a recorded difference pass | Real | "a difference from the prototype the evidence does not record" passes any recorded one, against the invariant that the approved prototype is contract and the flow line that a difference is a finding | R1 |
+| S3 G8 and R1 say "the task names" and "the evidence directory" | Real | a phase task carries no criteria of its own (the obligations name the widths, P2), and a brief has one evidence file, no directory and no tasks | G8, P2, R1 |
+| S4 fit check not required by P2 or R1 | Not a problem | G8's sub-bullet states how a fit check is done, as PF proposed it (PF: "A check that a screen's content fits its width measures the box …"); a fit check by scroll width breaks an explicit rule and is a finding by the reviewer's blocking rule; making a fit check mandatory for every visible change is a new obligation no input asked for | none |
+| S5 P1 sheet may omit the narrowest width | Real (minor) | G8 always needs pictures at the narrowest supported width; without it in the sheet the visual contract is silent exactly where the PF overflow occurred | P1 |
+| S6 R1 does not check the cited prototype exists | Settled elsewhere | the reviewer's Spec row already reads "the sources the spec cites" against the tree (`roles/reviewer.md`, class table) | none |
+| 3a R1 not limited to brief and phase | Real | the spec's invariant says G8 binds only the brief and phase classes; R1 would ask a small change for pictures its class does not require | R1 |
+| 3b "The user sees only reviewed versions" next to the unreviewed prototype | Settled elsewhere | the bullet excepts "questions and confirmations the rules route to the user", G1 routes the choice of a variant to the user and says it gets no agent review, and the bullet's review clause names only a plan, brief or spec change | none |
+| 3c `roles/planner.md` calls prototypes the implementer's work | Not a problem | both sentences are about code ("implementation snippets … extraction scripts or prototype results"; a spike), kept unchanged by this spec's assumption; the planner builds neither kind, and G1 and P1 name prototypers for visual ones | none |
+
+### G8 `rules/global.md` §4, "Work judged by eye is shown in pictures", first paragraph
+
+Old:
+
+```markdown
+- **Work judged by eye is shown in pictures.** The evidence of a visible
+  change of the brief or phase class holds screenshots of every screen and
+  state it touches, in the evidence directory, at the widths the task names,
+  the narrowest supported width always among them; a small change keeps the
+  one look its class names. Where no approved prototype covers the change,
+  pictures of the same screens on the base tree stand beside them.
+```
+
+New:
+
+```markdown
+- **Work judged by eye is shown in pictures.** The evidence of a visible
+  change of the brief or phase class holds screenshots of every screen and
+  state it touches, at the widths the brief or the phase's obligations name,
+  the narrowest supported width always among them; a small change keeps the
+  one look its class names. Where no approved prototype covers the change,
+  pictures of the same screens on the base tree stand beside them.
+```
+
+### P1 `roles/planner.md`, "The spec", prototype sheet paragraph, first lines
+
+Old:
+
+```markdown
+For design work with a visual goal you also write the prototype sheet, a file
+beside the spec: the screens and states to show, the widths and target
+platforms, where the text and figures come from, and for each variant, at most
+three, what sets it apart. The sheet is not a brief of the brief class: it
+```
+
+New:
+
+```markdown
+For design work with a visual goal you also write the prototype sheet, a file
+beside the spec: the screens and states to show; the widths, the narrowest
+supported width always among them; the target platforms; where the text and
+figures come from; and for each variant, at most three, what sets it apart.
+The sheet is not a brief of the brief class: it
+```
+
+### P2 `roles/planner.md`, "Obligations"
+
+Old:
+
+```markdown
+Where the goal is visible, the obligations name the screens, states, widths
+and platforms whose pictures the phase delivers and what each is compared
+with: the approved prototype, or pictures of the base tree.
+```
+
+New:
+
+```markdown
+Where the goal is visible, the obligations, or for a brief its acceptance
+criterion, name the screens, states, widths and platforms whose pictures the
+work delivers and what each is compared with: the approved prototype, or
+pictures of the base tree.
+```
+
+### R1 `roles/reviewer.md`, the visible-change bullet
+
+Old:
+
+```markdown
+- For a visible change, read the pictures in the evidence against the approved
+  prototype or the base pictures. A screen, state, width or platform the task
+  names without a picture, a picture from another platform offered as the
+  target's, or a difference from the prototype the evidence does not record
+  is a finding. In a spec of design work with a visual goal, a missing
+  citation of an approved prototype with its approval record is a finding.
+  You judge conformance to approved pictures, never the look itself; the look
+  is the user's to judge.
+```
+
+New:
+
+```markdown
+- For a visible change of the brief or phase class, read the pictures in the
+  evidence against the approved prototype or the base pictures. A screen,
+  state, width or platform the brief or the phase's obligations name without
+  a picture, a picture from another platform offered as the target's, or a
+  difference from the approved prototype other than in live data or the
+  placeholders it marks is a finding. A platform the evidence records, with
+  the reason, as reachable by no agent is the user's batched check, not a
+  finding. In a spec of design work with a visual goal, a missing citation of
+  an approved prototype with its approval record is a finding. You judge
+  conformance to approved pictures, never the look itself; the look is the
+  user's to judge.
+```
+
+### `decisions.md` entry
+
+Prepended under "## Entries", newest first; `<landing date>` is the date the
+integrator commits it.
+
+```markdown
+- <landing date> ui-prototype-track amendment A1 integrated
+  rules/global.md, roles/planner.md, roles/reviewer.md: no proposal file; the
+  dev-tools spec "UI prototype track", amendment A1, from the second review
+  that could not run before landing and the phase review's open wording
+  points. The reviewer's picture check now binds only the brief and phase
+  classes, as the evidence rule does, so a small change keeps its one look; a
+  platform no agent can reach goes to the user's batched check instead of
+  becoming a finding nobody can fix; and any departure from the approved
+  prototype other than live data or marked placeholders is a finding, since
+  recording a difference does not change a contract only the user may change.
+  The widths come from the brief or the phase's obligations, since a phase
+  task carries no criteria of its own and a brief has no tasks, and the
+  prototype sheet always shows the narrowest supported width the evidence
+  must show. Left as they were: the fit check stays a rule on how a fit check
+  is done, as proposed, not a new duty for every visible change; the
+  reviewer's spec row already checks that a cited prototype exists; and
+  "reviewed versions" already excepts questions routed to the user, which the
+  choice of a variant is.
+```
+
+### Landing
+
+Lands through the integrator clone like Phase 1. Evidence file:
+`docs/superpowers/evidence/2026-11-09-ui-track-fixes.md`, holding: each New
+block occurs once verbatim in its file, each Old block occurs zero times, the
+entry heads "## Entries", and `wc -w rules/global.md` before and after (the G8
+block keeps its 76 words, so the count is unchanged).
