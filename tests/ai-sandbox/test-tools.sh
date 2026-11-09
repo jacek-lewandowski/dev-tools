@@ -154,9 +154,11 @@ assert_contains "entrypoint carries the merge" "$(cat "$ep")" 'read_url(*)'
 mh="$tmp/merge-home"; mkdir -p "$mh/.gemini/antigravity-cli"
 sf="$mh/.gemini/antigravity-cli/settings.json"
 printf '{"colorScheme":"x","permissions":{"allow":["a"],"deny":["d"]}}' > "$sf"; chmod 0640 "$sf"
-python3 "$merge" "$sf"
+HOME="$mh" python3 "$merge" "$sf"
 assert_eq "rules merged, other keys kept" \
-    "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));a=d["permissions"]["allow"];print(d["colorScheme"],a[:2],a[-1],len(a),d["permissions"]["deny"])' "$sf")" "x ['a', 'read_url(*)'] command(jq) 28 ['d']"
+    "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));a=d["permissions"]["allow"];print(d["colorScheme"],a[:2],a[-2],a[-1],len(a),d["permissions"]["deny"])' "$sf")" "x ['a', 'read_url(*)'] command(jq) read_file($mh/knowledge) 29 ['d']"
+assert_eq "knowledge dir is readable outside the workspace" "$(grep -c -F "read_file($mh/knowledge)\"" "$sf")" '1'
+assert_eq "no write grant" "$(grep -c 'write_file' "$sf")" '0'
 assert_contains "ls is granted" "$(cat "$sf")" 'command(ls)'
 assert_eq "no write-capable tool is granted" "$(grep -c -E 'command\\((sed|awk|tee|xargs|git|rm|mv|cp|bash|sh|python3?)\\)' "$sf")" '0'
 assert_eq "mode kept" "$(stat -c %a "$sf")" '640'

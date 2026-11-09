@@ -1494,10 +1494,13 @@ fi
 # grant for every program in a line, so "ls && touch x" is denied while
 # "ls -la" runs (verified on agy 1.4.0, D29). The list holds read-only tools:
 # no sed, awk, tee, xargs or git, which can write or run other programs.
+# read_file(<dir>) lets agy read the shared knowledge clone outside its workspace; a
+# trailing glob is not accepted (verified on agy 1.4.0), a plain directory path is.
 python3 - "$HOME/.gemini/antigravity-cli/settings.json" <<'PYEOF' 2>/dev/null || true
 import json, os, sys
 TOOLS = "ls cat head tail wc grep rg find sort uniq cut tr diff file stat du df which pwd date echo tree realpath basename dirname jq".split()
 GRANTS = ["read_url(*)"] + ["command(%s)" % t for t in TOOLS]
+GRANTS.append("read_file(%s)" % os.path.expanduser("~/knowledge"))
 path = sys.argv[1]
 if os.path.isfile(path):
     with open(path, encoding="utf-8") as f:
