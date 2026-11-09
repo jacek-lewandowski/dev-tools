@@ -37,6 +37,20 @@ FULL_LINE = MAIN_PART + " | Write superv:~375k Land the con:138k"
 SEGMENT_TAIL = " | handover ready"
 
 
+# Trimmed from a real line of this project's transcripts (2026-10-28):
+# a non-meta user entry Claude Code writes when a background agent ends.
+TASK_NOTIFICATION = {
+    "type": "user",
+    "isSidechain": False,
+    "timestamp": "2026-10-28T07:26:11.311Z",
+    "origin": {"kind": "task-notification", "producer": "session-task"},
+    "message": {
+        "role": "user",
+        "content": "<task-notification>\n<task-id>a0018b4cbf543638e</task-id>\n",
+    },
+}
+
+
 def visible(line):
     return ANSI.sub("", line)
 
@@ -348,6 +362,68 @@ class StatuslineTest(unittest.TestCase):
             "torn line",
         ]
         self.write_transcript(data, lines, marker_age=30)
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now),
+            MAIN_PART + SEGMENT_TAIL,
+        )
+
+    def test_task_notification_is_not_the_user_coming_back(self):
+        later = self.iso(self.now - 5)
+        with_origin = dict(TASK_NOTIFICATION, timestamp=later)
+        without_origin = {k: v for k, v in with_origin.items() if k != "origin"}
+        for entry in (with_origin, without_origin):
+            data = self.stdin()
+            self.write_transcript(
+                data,
+                [self.user_entry(self.iso(self.now - 60)), json.dumps(entry) + "\n"],
+                marker_age=30,
+            )
+            self.assertEqual(
+                render(data, columns=200, colour=False, now=self.now),
+                MAIN_PART + SEGMENT_TAIL,
+                entry.get("origin"),
+            )
+
+    def test_human_origin_counts_and_other_prefixes_do_not(self):
+        later = self.iso(self.now - 5)
+        for prefix in ("<command-name>", "<local-command-stdout>", "<system-reminder>"):
+            data = self.stdin()
+            self.write_transcript(
+                data,
+                [self.user_entry(self.iso(self.now - 60)), self.user_entry(later)],
+                marker_age=30,
+            )
+            lines = [
+                self.user_entry(self.iso(self.now - 60)),
+                self.user_entry(later, message={"role": "user", "content": prefix}),
+            ]
+            self.write_transcript(data, lines, marker_age=30)
+            self.assertEqual(
+                render(data, columns=200, colour=False, now=self.now),
+                MAIN_PART + SEGMENT_TAIL,
+                prefix,
+            )
+        data = self.stdin()
+        self.write_transcript(
+            data,
+            [self.user_entry(later, origin={"kind": "human"})],
+            marker_age=30,
+        )
+        self.assertEqual(
+            render(data, columns=200, colour=False, now=self.now), MAIN_PART
+        )
+
+    def test_malformed_user_lines_never_fail_the_line(self):
+        data = self.stdin()
+        bad = [
+            self.user_entry("not a time"),
+            self.user_entry(self.iso(self.now), message="a string"),
+            self.user_entry(self.iso(self.now), message=None),
+            self.user_entry(self.iso(self.now), message={"content": [1, None]}),
+            self.user_entry(None),
+            json.dumps({"type": "user"}) + "\n",
+        ]
+        self.write_transcript(data, bad, marker_age=30)
         self.assertEqual(
             render(data, columns=200, colour=False, now=self.now),
             MAIN_PART + SEGMENT_TAIL,
