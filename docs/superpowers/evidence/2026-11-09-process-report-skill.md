@@ -1,7 +1,7 @@
 # Evidence: the process-report skill (Zuzia, implementer 1, 2026-11-09)
 
 Brief: `docs/superpowers/specs/2026-11-09-process-report-skill-brief.md`. Skill commit in
-`~/knowledge` main: `ce6e89c` (feat(skills)). Register row and this file: the dev-tools
+`~/knowledge` main: `ce6e89c` (feat(skills)); fix round `9f7c263` (fix(skills), see below). Register row and this file: the dev-tools
 `docs:` commit that contains this file. ruff 0.17.3 (pinned in `requirements-dev.txt`) was
 installed in a scratch venv; the sandbox python is 3.10.12.
 
@@ -24,7 +24,7 @@ Mutation check of the dedup: removing the `mid not in acc.ids` guard made 9 test
 ## Full suite on the final tree
 
 `python3 -B -m unittest discover -s ~/knowledge/skills/process-report/scripts -v` (run from `/tmp`):
-`Ran 32 tests in 0.818s / OK`. Groups: TestDedup 2, TestDerived 10, TestRobust 5, TestReport 15.
+`Ran 32 tests in 0.818s / OK`; after the fix round `Ran 33 tests in 0.825s / OK`, ruff check `All checks passed!`, ruff format `4 files already formatted`. Groups: TestDedup 2, TestDerived 10, TestRobust 5, TestReport 15 (33 tests, 11 derived, after the fix round).
 
 ## O1 dedup, known case
 
@@ -87,14 +87,11 @@ a row over 25 words; a changed judgement cell passes; eye rows may be removed, n
 ## O6 skill text and install path
 
 `head -4 SKILL.md`: `name: process-report` = directory; description 343 characters, no steps;
-body (`sed -n '5,$p' SKILL.md | wc -w`) 495 words; `report-template.md` headings (`grep -n '^#'`):
+body (`sed -n '5,$p' SKILL.md | wc -w`) 495 words (486 after the fix round); `report-template.md` headings (`grep -n '^#'`):
 title + Work done, Cost, Work judged by eye, Waste, Fit of kinds and roles, Suggestions, Method
 and gaps (eight, in order; `test_template_headings_in_order`). SKILL.md has the period rule,
 five steps with the reviewer's sample and two-round limit, output path, `unknown`, agy usage
-from delegation reports. `SKILL.md` at the directory top. **`du -sk` is 112, not under 100**:
-`du -sk --apparent-size` is 98; the excess is 4 KB block rounding of 9 files and 3 directories
-(script 45 KB, tests 28 KB; ruff's formatter lays the code out long). Not discharged as
-written; reducing it means cutting tests or code, which I did not do.
+from delegation reports. `SKILL.md` at the directory top. `du -sk` is 112 (116 after the fix round) because of 4 KB block rounding of 9 files and 3 directories; `du -sk --apparent-size` is 98 (99 after). The lead accepted `du -sk --apparent-size` as the measure of this obligation (2026-11-09), so it is met: 99, under 100.
 
 ## O7 no project content
 
@@ -124,6 +121,15 @@ letter or digit, comments excluded; `--check`'s limit uses this count), 1027 by 
 Unclear in SKILL.md / found on real data: (1) the eye table lists all work rows and the lead
 must delete the non-ui ones (now stated in step 2); (2) the empty "candidate repeats" table
 shows only its header (this project's runs are single-agent); (3) 7 days means today and the
-six before; (4) a commit touching `<key>.md` and `<key>-brief-request.md` is `ambiguous`
-because `-request` is not a stripped suffix (the process-report-skill row here), and
-`<key>-review-fixes` is a task of its own. Step 4 needs a spawned reviewer: not run.
+six before; (4) a commit touching `<key>.md` and `<key>-brief-request.md` was `ambiguous` because
+`-request` was not a stripped suffix; fixed in the fix round below. `<key>-review-fixes` stays a task
+of its own (lead's decision). Step 4 needs a spawned reviewer: not run.
+
+## Fix round (lead decisions of 2026-11-09)
+
+1. `-request` added to `KEY_SUFFIXES`. Test first: `test_request_file_shares_the_task_key`
+   (a commit touching `<key>.md`, `<key>-brief-request.md`, `<key>-brief.md` gives one key, not
+   ambiguous) failed on the old code (`Ran 33 tests ... FAILED (failures=1)`), then passed:
+   `Ran 33 tests in 0.825s / OK`. The SKILL.md note about `-request` keys was removed. Commit
+   `9f7c263`. The O10 dry-run report was produced before the fix and is untouched.
+2. Size cap: see O6.
