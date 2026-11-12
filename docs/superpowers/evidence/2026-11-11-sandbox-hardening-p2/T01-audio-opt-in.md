@@ -5,7 +5,9 @@ Class: phase
 
 Implementer: Wojtek, 2026-11-12. Worktree `.worktrees/2026-11-11-sandbox-hardening-p2`,
 branch `2026-11-11-sandbox-hardening-p2`. Code and tests: commit `2b942bd`
-(`feat: host audio is off by default in a new sandbox`). Plan:
+(`feat: host audio is off by default in a new sandbox`) and `4dd41ad` (`test: audio request
+without a display shares no sound device`: the case pair 83 and 84). The `82 run, 0 failed`
+lines below are the run at `2b942bd`; the run after `4dd41ad` is `84 run, 0 failed` (last section). Plan:
 `docs/superpowers/plans/2026-11-11-sandbox-hardening-p2-plan.md`. Texts name no daemon
 command or module and no security-review input (S-1).
 
@@ -39,18 +41,19 @@ the seam's check.
   `SANDBOX_WITH_AUDIO=0`; the shared brain has no `parec`; output contains `not shared by
   default` and `--audio`. Also the `--display=none` cases 5 to 9. Command
   `bash tests/ai-sandbox/test-devices.sh`: `82 run, 0 failed`, exit 0. Commit `2b942bd`.
-- **O2** (old remembered value). Cases 22 to 24, 25 (notice not repeated), 27 (`--audio` over
-  a stored 1), 28 and 29 (unknown value), and 49 to 58 in the display mode: stored `1` gives no
+- **O2** (old remembered value). Cases 22 to 25 (stored 1; the notice is not repeated), 26 and 27 (`--audio` over
+  a stored 1), 28 and 29 (unknown value), and 49 to 61 in the display mode: stored `1` gives no
   socket, no variable, no device mount, no rule, `.env` rewritten as `0`, exactly one notice
   (`used to be the default`, `Pass --audio`), a second bare run does not repeat it.
   `82 run, 0 failed`. Commit `2b942bd`. R1 is clean (the notice avoids the phrase).
-- **O3** (`--audio`). Cases 10 to 14 and 59 to 69: socket mount, `PULSE_SERVER`, device
+- **O3** (`--audio`). Cases 10 to 14 and 62 to 68: socket mount, `PULSE_SERVER`, device
   directory mounted at `/dev/snd` from the faked directory, `c 116:* rwm`, `.env` `2`, a `warn`
   naming the sound socket and devices, the microphone, `act on its requests` and `outside`;
-  `--display=none` mounts the socket and no device and rule (cases 10 to 14, display `none`);
-  case 30 and 31, `--audio` with no host socket: the warning `no sound socket at ...` and no
+  `--display=none` mounts the socket and, with the faked device directory, no device and no
+  rule (cases 10 to 14, and 83 and 84, commit `4dd41ad`);
+  cases 30 and 31, `--audio` with no host socket: the warning `no sound socket at ...` and no
   mount. `82 run, 0 failed`. Commit `2b942bd`.
-- **O4** (remembered request). Cases 15 to 21 (display `none`) and 70 to 82 (stubbed display):
+- **O4** (remembered request). Cases 15 to 21 (display `none`) and 69 to 82 (stubbed display):
   a bare run after `--audio` keeps the mounts, `.env` `2` and repeats the warning with
   `--no-audio`; `--no-audio` removes all four and records `0`; a bare run after keeps off.
   `82 run, 0 failed`. Commit `2b942bd`.
@@ -87,15 +90,17 @@ the seam's check.
 
 ## Last step: checks after the last edit (tree at `2b942bd`)
 
-- `bash tests/ai-sandbox/test-devices.sh`: `82 run, 0 failed`, exit 0 (the base has 17 cases).
-- `bash tests/ai-sandbox/run-tests.sh`: 20 files; the per-file summaries are 32, 151, 56, 13,
-  69 (`test-delegate.sh`: `69 run, 2 failed`), 82 (`test-devices.sh`), 5, 23, 20, 19, 17,
-  14, 473, 32, 30, 33, 65, 27, 39 and 82 cases, `0 failed` in each except `test-delegate.sh`;
-  total 1282 run (the base's 1217 plus the 65 new cases of `test-devices.sh`), 2 failed; the
-  run ended `SOME SUITES FAILED`, exit 1. The two failures are cases 54 (`writer prompt has
-  no-tools line`) and 59 (`second-reviewer prompt has no-commands line`) of `test-delegate.sh`,
-  the known D15 cases of the plan (PA5).
-- `shellcheck -S warning` on create: 2 findings, as on the base (2); `test-devices.sh`: none.
+- `bash tests/ai-sandbox/test-devices.sh`: `84 run, 0 failed`, exit 0 (the base has 17 cases).
+- `bash tests/ai-sandbox/run-tests.sh` (second run, after the last edit, tree at `4dd41ad`):
+  20 files; per-file summaries 32, 151, 56, 13, 69 (`test-delegate.sh`: `69 run, 2
+  failed`), 84 (`test-devices.sh`), 5, 23, 20, 19, 17, 14, 473, 32, 30, 33, 65, 27, 39 and 82
+  cases, `0 failed` in each except `test-delegate.sh`; total 1284 run (the base's 1217 plus the 67
+  new cases of `test-devices.sh`), 2 failed; exit 1. The two failures are cases 54 (`writer
+  prompt has no-tools line`) and 59 (`second-reviewer prompt has no-commands line`) of
+  `test-delegate.sh`, the known D15 cases of the plan (PA5). (The first run, at `2b942bd`, gave
+  1282 run, the same 2 failed.)
+- `shellcheck -S warning` on create: 2 findings, as on the base (2); `test-devices.sh`: none
+  (after the last edit).
 - `/tmp/.X11-unix` holds no leftover directory of the stubbed display runs.
 
 ## Deviations from the plan
