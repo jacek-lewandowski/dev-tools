@@ -203,5 +203,81 @@ assert_eq "a timed-out fetch does not fail the sync" "$rc" 0
 assert_contains "the timeout is reported as before" "$(cat "$tmp/timeout.out")" "timed out after 1s"
 assert_contains "and the manual fetch is printed" "$(cat "$tmp/timeout.out")" "fetch --prune origin"
 
+# --- ai_sandbox_confined_git: one docker run with the confining options; git's status,
+# --- standard input and output; 125 without an image; 124 on the time limit
+served="$tmp/served"; mkdir -p "$served"; git init -q "$served/repo"
+git -C "$served/repo" commit -q --allow-empty -m "served one"; mkdir -p "$served/repo/pkg/inner"
+ubase=$(ai_sandbox_image_name base); udocker=$(ai_sandbox_image_name docker)
+confined() { DOCKER_STUB_IMAGES="${IMAGES-$ubase}" ai_sandbox_confined_git "$@"; }
+runs() { grep -c '^run ' "$DOCKER_STUB_LOG"; }
+runline() { grep '^run ' "$DOCKER_STUB_LOG" | head -1; }
+
+: > "$DOCKER_STUB_LOG"
+out=$(confined "$served" repo log --format=%s 2>&1); rc=$?
+assert_eq "confined: exit 0 for a git that succeeds" "$rc" 0
+assert_eq "confined: git's standard output comes back" "$out" "served one"
+assert_eq "confined: exactly one docker run" "$(runs)" 1
+line=$(runline)
+assert_contains "confined: removed afterwards" "$line" " --rm "
+assert_contains "confined: standard input attached" "$line" " -i "
+assert_contains "confined: no image pull" "$line" "--pull never"
+assert_contains "confined: no network" "$line" "--network none"
+assert_contains "confined: the host's uid and gid" "$line" "--user $(id -u):$(id -g) "
+assert_contains "confined: the root is mounted read-only at its own path" "$line" " -v $served:$served:ro "
+assert_eq "confined: the root is the only mount" "$(printf '%s' "$line" | grep -o ' -v \| --mount\| --volume' | wc -l | tr -d ' ')" 1
+assert_contains "confined: git works in the subdirectory" "$line" " -w $served/repo "
+assert_contains "confined: the image's entrypoint is replaced by git" "$line" "--entrypoint git "
+assert_contains "confined: the base image when it exists" "$line" " $ubase log --format=%s"
+for bad in --env-file ' -e ' --env= ' --env ' --privileged --cap-add --device --network=host --pid --ipc --volumes-from; do
+    case "$line" in *"$bad"*) TESTS_RUN=$((TESTS_RUN + 1)); _fail "confined: no '$bad' option" "$line" ;;
+                    *) TESTS_RUN=$((TESTS_RUN + 1)); _pass "confined: no '$bad' option" ;; esac
+done
+assert_eq "confined: nothing is pulled and no other image is fetched" "$(grep -cE '^(pull|image pull|build|compose)' "$DOCKER_STUB_LOG")" 0
+
+: > "$DOCKER_STUB_LOG"
+IMAGES="$udocker" confined "$served" repo log --format=%s >/dev/null 2>&1
+assert_contains "confined: the docker variant when the base image is absent" "$(runline)" " $udocker "
+: > "$DOCKER_STUB_LOG"
+IMAGES="$ubase $udocker" confined "$served" repo log --format=%s >/dev/null 2>&1
+assert_contains "confined: the base image wins when both exist" "$(runline)" " $ubase "
+: > "$DOCKER_STUB_LOG"
+out=$(IMAGES=none confined "$served" repo log --format=%s 2>&1); rc=$?
+assert_eq "confined: no image gives 125" "$rc" 125
+assert_eq "confined: and starts no container" "$(runs)" 0
+assert_contains "confined: and says what is missing" "$out" "no sandbox image"
+DOCKER_STUB_IMAGES="$ubase" DOCKER_STUB_RUN_EXIT=125 ai_sandbox_confined_git "$served" repo log >/dev/null 2>&1; rc=$?
+assert_eq "confined: a container that cannot start gives 125" "$rc" 125
+
+# git's own status, standard input and the subdirectory
+confined "$served" repo rev-parse --verify -q no-such-ref >/dev/null 2>&1; rc=$?
+( cd "$served/repo" && "$REAL_GIT" rev-parse --verify -q no-such-ref >/dev/null 2>&1 ); want=$?
+assert_ne "(control: that git command fails)" "$want" 0
+assert_eq "confined: a git failure keeps git's status" "$rc" "$want"
+assert_eq "confined: standard input reaches git" "$(printf 'piped\n' | confined "$served" repo hash-object --stdin)" "$(printf 'piped\n' | "$REAL_GIT" hash-object --stdin)"
+assert_eq "confined: the subdirectory is entered" "$(confined "$served" repo/pkg/inner rev-parse --show-prefix)" "pkg/inner/"
+ln -s "$served" "$tmp/served-link"
+: > "$DOCKER_STUB_LOG"
+confined "$tmp/served-link" repo log -1 >/dev/null 2>&1
+assert_contains "confined: a root given through a link is mounted by its resolved path" "$(runline)" " -v $served:$served:ro "
+
+# nothing of the caller's environment reaches git
+envgit="$tmp/envgit"; mkdir -p "$envgit"
+printf '#!/bin/sh\nenv | grep -c "^SECRET_FROM_CALLER="\n' > "$envgit/git"; chmod +x "$envgit/git"
+assert_eq "(control: the probe sees a variable it is given)" "$(SECRET_FROM_CALLER=1 PATH="$envgit:$PATH" git)" 1
+assert_eq "confined: a variable of the caller does not reach git" "$(SECRET_FROM_CALLER=1 PATH="$envgit:$PATH" confined "$served" repo anything)" 0
+
+# the time limit: 124, quickly, and the named container is removed
+: > "$DOCKER_STUB_LOG"; SECONDS=0
+PATH="$slow:$PATH" AI_SANDBOX_GIT_TIMEOUT=1 confined "$served" repo fetch >/dev/null 2>&1; rc=$?
+assert_eq "confined: a run that exceeds AI_SANDBOX_GIT_TIMEOUT exits 124" "$rc" 124
+assert_eq "confined: and was cut short" "$([ "$SECONDS" -lt 9 ] && echo yes || echo no)" yes
+cname=$(runline | sed -n 's/.* --name \([^ ]*\) .*/\1/p')
+assert_ne "(the run was named)" "$cname" ""
+assert_contains "confined: and the named container is removed" "$(stub_docker_log)" "rm -f $cname"
+: > "$DOCKER_STUB_LOG"
+AI_SANDBOX_GIT_TIMEOUT=5 confined "$served" repo log --format=%s >/dev/null 2>&1; rc=$?
+assert_eq "confined: a run inside the limit keeps git's status" "$rc" 0
+assert_eq "confined: and removes nothing" "$(grep -c '^rm ' "$DOCKER_STUB_LOG")" 0
+
 rm -rf "$tmp"
 finish

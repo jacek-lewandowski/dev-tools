@@ -346,6 +346,41 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
     )
 }
 
+# C-GIT, confined side: git run on a tree a sandbox can write, inside a
+# throwaway container of the sandbox image: no network, no entrypoint, the
+# host's uid, <root> (resolved) the only mount, read-only and at its own path,
+# no variable of the caller or of any .env reaches it, nothing is pulled.
+# <subdirectory> of <root> is the working directory. Standard input and output
+# are git's; so is the exit status, except 125 (no image, or docker could not
+# start the container) and 124 (AI_SANDBOX_GIT_TIMEOUT expired, and the named
+# container is removed so that nothing keeps running).
+# A caller that serves a fetch (--upload-pack) gets exit 128 from git when this
+# fails, not 125: it has to find out about a missing image by itself.
+ai_sandbox_confined_git() {   # <root> <subdirectory> <git args...>
+    local root sub=$2 variant tag="" name rc=0
+    root=$(readlink -m -- "$1" 2>/dev/null) && [ -n "$root" ] || { echo "ai_sandbox_confined_git: no such root: $1" >&2; return 125; }
+    shift 2
+    command -v docker >/dev/null 2>&1 || { echo "ai_sandbox_confined_git: docker is not available" >&2; return 125; }
+    for variant in base docker; do
+        if docker image inspect "$(ai_sandbox_image_name "$variant")" >/dev/null 2>&1; then
+            tag=$(ai_sandbox_image_name "$variant"); break
+        fi
+    done
+    [ -n "$tag" ] || { echo "ai_sandbox_confined_git: no sandbox image exists yet (create-ai-sandbox.sh builds it)" >&2; return 125; }
+    name="ai-sandbox-git-$$-$RANDOM"
+    set -- docker run --rm -i --pull never --network none --user "$(id -u):$(id -g)" \
+        --name "$name" -v "$root:$root:ro" -w "$root/$sub" --entrypoint git "$tag" "$@"
+    if [ -n "${AI_SANDBOX_GIT_TIMEOUT:-}" ]; then
+        timeout -k 5 "$AI_SANDBOX_GIT_TIMEOUT" "$@" || rc=$?
+        if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            return 124
+        fi
+        return "$rc"
+    fi
+    "$@"
+}
+
 # True when the sandbox container NAME is running. Without docker on PATH
 # nothing can be running, so the answer is no rather than an error.
 ai_sandbox_container_running() {
