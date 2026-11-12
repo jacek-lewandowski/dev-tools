@@ -1626,17 +1626,30 @@ assert_ne "(control: the recorder saw git processes)" "$(wc -l < "$GWLOG" | tr -
 # M1: every fetch the host starts from a clone (a URL <sandbox root>/<sandbox>/knowledge) names the confined program as
 # git's remote program, so no fetch of a clone can run git's own upload-pack on the host; and each of them ran a
 # container (the docker stub's log). One awk for the clone's fetches, used by the sync, init and create runs below.
-clone_fetches() {   # <git log> <sandbox root> <confined|unconfined>: how many recorded fetches of a clone are
+clone_fetches() {   # <git log> <sandbox root> <confined|unconfined>: how many recorded runs of fetch, ls-remote, pull
+    # or clone on a clone (a URL or path <sandbox root>/<sandbox>/knowledge, with file://, /.git or a slash after it) are
     awk -F'|' -v root="$2" -v want="$3" '
-        { n = split($2, a, " "); fetch = 0; url = 0
+        { n = split($2, a, " "); verb = 0; url = 0
           for (i = 1; i <= n; i++) {
-              if (a[i] == "fetch") fetch = 1
-              if (index(a[i], root "/") == 1 && substr(a[i], length(root) + 2) ~ /^[^\/]+\/knowledge$/) url = 1
+              if (a[i] == "fetch" || a[i] == "ls-remote" || a[i] == "pull" || a[i] == "clone") verb = 1
+              t = a[i]; sub(/^file:\/\//, "", t)
+              if (index(t, root "/") == 1 && substr(t, length(root) + 2) ~ /^[^\/]+\/knowledge(\/|$)/) url = 1
           }
-          if (!(fetch && url)) next
+          if (!(verb && url)) next
           if ($2 ~ /--upload-pack=.*ai_sandbox_confined_git/) c++; else u++ }
         END { print (want == "confined" ? c + 0 : u + 0) }' "$1"
 }
+# the function recognises every form of a clone's URL and every verb that reads it (a synthetic log, one line each)
+printf '%s\n' \
+    '/h|fetch -q --no-tags /r/sb/knowledge +refs/heads/*:refs/x/*' \
+    '/h|fetch -q file:///r/sb/knowledge +refs/heads/*:refs/x/*' \
+    '/h|fetch -q /r/sb/knowledge/.git +refs/heads/*:refs/x/*' \
+    '/h|fetch -q /r/sb/knowledge/ +refs/heads/*:refs/x/*' \
+    '/h|ls-remote /r/sb/knowledge' '/h|pull /r/sb/knowledge main' '/h|clone /r/sb/knowledge /tmp/y' \
+    '/h|fetch -q --upload-pack=bash -c ai_sandbox_confined_git /r/sb/knowledge refs' \
+    '/h|fetch -q /r/knowledge/main refs' '/h|fetch -q /r/sb/knowledge-origin.git refs' '/h|show /r/sb/knowledge' > "$tmp/cf-synth.log"
+assert_eq "clone_fetches counts every verb and URL form as unconfined" "$(clone_fetches "$tmp/cf-synth.log" /r unconfined)" 7
+assert_eq "clone_fetches counts a fetch with the confined program as confined, and ignores the host repository, the origin and other verbs" "$(clone_fetches "$tmp/cf-synth.log" /r confined)" 1
 gw_confined=$(clone_fetches "$GWLOG" "$AI_SANDBOX_ROOT" confined)
 assert_ne "M1 (control): the recorder saw fetches of a clone" "$gw_confined" 0
 assert_eq "M1: no fetch of a clone runs without the confined remote program" "$(clone_fetches "$GWLOG" "$AI_SANDBOX_ROOT" unconfined)" 0
