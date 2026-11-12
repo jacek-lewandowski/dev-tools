@@ -525,7 +525,7 @@ readonly CPU_LIMIT
 
 if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
 IMAGE_NAME=$(ai_sandbox_image_name "$IMAGE_VARIANT")
-IMAGE_STAMP="$IMAGE_DIR/${IMAGE_VARIANT}-u${HOST_UID}.stamp"
+IMAGE_STAMP="$IMAGE_DIR/${IMAGE_NAME#ai-sandbox:}.stamp"   # <variant>-u<uid>, as before
 
 if [ "$DISPLAY_MODE_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_MODE=$(sed -n 's/^SANDBOX_DISPLAY_MODE=//p' "$ENV_FILE" | tail -n 1)
