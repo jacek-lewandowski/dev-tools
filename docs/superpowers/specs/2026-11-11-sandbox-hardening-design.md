@@ -5,7 +5,12 @@ Class: phase
 
 Date: 2026-11-11
 Status: approved by the user on 2026-11-11 ("U17:b / Akceptuję, planowanie już modelem
-opus"): revision 3 with the fixes of its review, review closed, U17 answered
+opus"): revision 3 with the fixes of its review, review closed, U17 answered. Changes
+S-1 ("Inputs"), S-2 (C-MODULES) and S-3 (C-GIT), raised while planning phase 1,
+approved by the user on 2026-11-12 with the phase 1 plan ("Ja zajmę się uruchomieniem
+na hoście, natomiast ty zajmij się implementacją i planowaniem kolejnych faz.", read
+back to the user as approval of the plan and of the three changes); deferred entry E2
+added with them
 Author: Hania (planner 1), the spec's author for this task
 Tree: `96540a5` (`main`)
 Scope: `bin/ai/` (the toolchain), `tools/` as far as the host and the sandboxes load it,
@@ -16,8 +21,17 @@ Inputs. The security review of 2026-11-11 (findings C1 to L5), the options repor
 addendum, the user's decisions, the accepted task list and two scout reports are kept
 untracked under `.tmp/security/` on purpose: the repository is public. This spec names
 findings by key and states the property each phase establishes; it holds no reproduction
-steps, and no phase plan, evidence file or test description committed for this work may
-hold them either.
+steps, and nothing committed for this work may hold them either, except the fixture code
+of a test as stated here. A plan, an evidence file, a batch for the user, a commit
+message, a review and a test's name, header, assertion message or comment state the
+property and the finding key, and name an input only by its class, as this spec does (a
+clone's configuration, its refs, a link placed where a sandbox can write). A closing
+check that needs a fixture gets one in committed test code: the smallest that shows the
+property, whose only effect is a marker inside the test's own temporary directory; the
+specific settings, paths and commands it uses appear in nothing committed but that code.
+A host step outside the suite that needs such a fixture, before that code exists or
+after, takes it from an untracked file under `.tmp/security/`, which the plan names by
+path.
 
 How facts are cited. `[Gn]`, `[Bn]`, `[Ln]`, `[Sn]`, `[Rn]` are primary sources fetched
 for this spec on 2026-11-11 and listed at the end with URL and quote; every fact about an
@@ -380,6 +394,16 @@ here are fixed; everything else is the phase plan's.
   untrusted server, the case git documents as safe ([L3], [L4]). And for read-only
   queries whose output the host compares as text and never evaluates, and prints only
   with control characters removed.
+- A fetch through it changes refs of the fetching repository only below the
+  destinations its refspecs name, whatever else the served repository holds. Those
+  destinations lie below a prefix kept for that served repository alone, outside
+  `refs/heads/` and `refs/tags/` (for the knowledge sync `refs/sandbox/<sandbox id>/`,
+  C-KNOW). In such a repository every git call of the toolchain gives a revision as a
+  full ref name or an object id, never as a short name or `FETCH_HEAD`, so no name
+  the served repository chose can stand for one of the host's refs. In a repository
+  the user works in (phase 6) this binds the toolchain's calls, not what the user
+  types: a short name the user gives for one of their own refs never resolves below
+  the prefix.
 - A host-owned repository is one outside every sandbox mount whose configuration only
   the host writes. All validation, comparison and pushing happens there, through a
   second function, `ai_sandbox_host_git`.
@@ -451,11 +475,18 @@ another; each generated file has one owner.
 | `create.d/compose.sh` | the managed keys of `.env`, `docker-compose.yml` |
 | `create.d/install.sh` | helper installation, the `~/.bashrc` block (phase 4 replaces both with C-INSTALL) |
 | `create.d/start.sh` | capacity check, start under the cache lock, the closing summary |
-| `image/` | what is baked into the image, as files instead of heredocs: `entrypoint.sh`, `sandbox-doctor`, `sandbox-knowledge-sync`, `sandbox-desktop`, `sandbox-idea`, `xdg-open`, `sandbox-bashrc.sh`, `sandbox-env.sh`, `sandbox-sdk`, `claude-managed-settings.json`, the Dockerfile parts |
+| `image/` | what is baked into the image, as files instead of heredocs: `entrypoint.sh`, `sandbox-doctor`, `sandbox-knowledge-sync`, `ai-delegate`, `sandbox-desktop`, `sandbox-idea`, `xdg-open`, `sandbox-bashrc.sh`, `sandbox-env.sh`, `sandbox-sdk`, `claude-managed-settings.json`, the Dockerfile parts |
 
 Later phases cite these files: compose mounts and the runtime line in `compose.sh`,
 credential and knowledge commands in `image/`, the seed in `seed.sh`, audio in
 `devices.sh`.
+
+Every program that runs only inside the container lives in `image/`. The host
+executes or sources nothing there itself (the host's `docker exec` of
+`sandbox-knowledge-sync` runs it inside the container), nothing there is installed
+on the host, and C-INSTALL's `PATH` entry does not reach it; so C-GIT's structural
+rule leaves out `image/` by directory and names no file. A program that also runs
+on the host (`context-statusline`, the host's status line) stays in `bin/ai`.
 
 ### C-INSTALL, the installed revision (phase 4)
 
@@ -1306,7 +1337,7 @@ are not asked: Q1 to Q3, Q8, Q9 and the addendum's Q-A, Q-B and Q-E.
 
 ## Deferred list
 
-One open entry. Cap: ten open entries; an entry needs a failure a user or an
+Two open entries. Cap: ten open entries; an entry needs a failure a user or an
 operator can reach, or a broken invariant.
 
 - **E1 Egress is unchecked** (U8, 2026-11-11). Failure: whatever a sandbox holds can
@@ -1314,6 +1345,12 @@ operator can reach, or a broken invariant.
   destination; the earlier candidate was an allow-list proxy. Kept for the planning
   of phase 10, where the user decides whether it becomes a phase of its own, which
   is a spec change.
+- **E2 `bin/ai/MANIFEST` would be ignored by git** (noticed while planning phase 1,
+  2026-11-11). Failure: `.gitignore` ignores every path named `MANIFEST` (its Python
+  packaging section), so C-INSTALL's manifest is skipped by `git add` of its directory
+  and missing from a revision exported from a commit. Kept for phase 4: its plan
+  adds `!bin/ai/MANIFEST` to `.gitignore`, a one-line change outside the scope line at
+  the top of the spec, needed by the contract's fixed name.
 
 ## Residual risk the user accepts with this spec
 
