@@ -523,10 +523,8 @@ CPU_LIMIT=$(( (MEMORY_GB + 1) / 2 ))
 [ "$CPU_LIMIT" -ge 1 ] || CPU_LIMIT=1
 readonly CPU_LIMIT
 
-# The uid suffix keeps two host users sharing one Docker daemon from fighting
-# over a single tag, since the image bakes in USER_ID.
 if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
-IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"
+IMAGE_NAME=$(ai_sandbox_image_name "$IMAGE_VARIANT")
 IMAGE_STAMP="$IMAGE_DIR/${IMAGE_VARIANT}-u${HOST_UID}.stamp"
 
 if [ "$DISPLAY_MODE_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
@@ -2185,8 +2183,10 @@ ENVEOF
 fi
 chmod 600 "$ENV_FILE"
 
-HOST_GIT_NAME=$(git config user.name 2>/dev/null || true)
-HOST_GIT_EMAIL=$(git config user.email 2>/dev/null || true)
+# The host's own identity, from its global git configuration: no repository is
+# discovered, so a project cannot choose which identity its sandbox commits as.
+HOST_GIT_NAME=$(ai_sandbox_host_git - config user.name 2>/dev/null || true)
+HOST_GIT_EMAIL=$(ai_sandbox_host_git - config user.email 2>/dev/null || true)
 
 HOST_UID="$HOST_UID" \
 HOST_GID="$HOST_GID" \

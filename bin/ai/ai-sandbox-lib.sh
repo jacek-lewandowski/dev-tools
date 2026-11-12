@@ -218,6 +218,87 @@ ai-sandbox-extensions
 HELPERS
 }
 
+# The image tag of one variant. The uid suffix keeps two host users sharing one
+# Docker daemon from fighting over a single tag, since the image bakes in USER_ID.
+ai_sandbox_image_name() {   # <base|docker>
+    printf 'ai-sandbox:%s-u%s' "$1" "$(id -u)"
+}
+
+# C-GIT, host side. Whether PATH, a bind source a sandbox's compose file mounts
+# read-write, or a project directory a stamp names holds the path (links
+# resolved): then a sandbox can write the repository's configuration and refs.
+# 0 when it does, 1 when it does not. A path that cannot be resolved counts as
+# writable: the caller refuses, which is the safe side.
+ai_sandbox_writable_path() {   # <path>
+    local real d line f src
+    local -a srcs=() resolved=()
+    real=$(readlink -m -- "$1" 2>/dev/null) && [ -n "$real" ] || return 0
+    for d in "$AI_SANDBOX_ROOT"/*-agent; do
+        [ -d "$d" ] || continue
+        # the project directories the stamps name
+        if [ -f "$d/project-path" ] && IFS= read -r line < "$d/project-path" && [ -n "$line" ]; then srcs+=("$line"); fi
+        line=$(ai_sandbox_env_value "$d" SANDBOX_PROJECT_DIR)
+        [ -z "$line" ] || srcs+=("$line")
+        # the bind sources of the compose file that carry no :ro; only quoted
+        # list items under the service's volumes: key, as create-ai-sandbox.sh
+        # writes them (src:dst or src:dst:options; named volumes do not start
+        # with a slash and a relative source is relative to the compose file)
+        [ -f "$d/docker-compose.yml" ] || continue
+        while IFS= read -r src; do
+            case $src in /*) srcs+=("$src") ;; ./*|../*) srcs+=("$d/$src") ;; esac
+        done < <(awk '
+            /^    volumes:[[:space:]]*$/ { inv = 1; next }
+            inv && $0 !~ /^[[:space:]]*(#.*)?$/ { match($0, /^ */); if (RLENGTH <= 4) inv = 0 }
+            inv && /^[[:space:]]+-[[:space:]]+"[^"]*"[[:space:]]*$/ {
+                item = $0; sub(/^[[:space:]]+-[[:space:]]+"/, "", item); sub(/"[[:space:]]*$/, "", item)
+                n = split(item, f, ":")
+                if (n >= 2 && f[1] !~ /\$/) {
+                    if (n >= 3 && f[n] ~ /(^|,)ro(,|$)/) next
+                    print f[1]
+                }
+            }' "$d/docker-compose.yml")
+    done
+    [ ${#srcs[@]} -gt 0 ] || return 1
+    mapfile -t resolved < <(readlink -m -- "${srcs[@]}" 2>/dev/null)
+    for src in "${resolved[@]}"; do
+        [ -n "$src" ] || continue
+        case $real in "$src"|"$src"/*) return 0 ;; esac
+    done
+    return 1
+}
+
+# C-GIT, host side: the only way the host runs git against a repository, apart
+# from ai_sandbox_confined_git. <repository> is a host-owned directory (status
+# 3, without starting git, when a sandbox can write it); '-' discovers no
+# repository, for commands given a URL alone, because a git started inside a
+# repository reads that repository's configuration even then. The working
+# directory is / in that form and the repository's own path, links resolved,
+# in the other. Variables set for the call (GIT_SSH_COMMAND and the like) reach
+# git; GIT_DIR and GIT_WORK_TREE never do, since they would override the
+# repository this function has just vetted. AI_SANDBOX_GIT_TIMEOUT=<seconds>
+# bounds the run (exit 124).
+ai_sandbox_host_git() {   # <repository|-> <git args...>
+    local repo=$1 real=""
+    shift
+    if [ "$repo" != - ]; then
+        real=$(readlink -m -- "$repo" 2>/dev/null) || real=$repo
+        if ai_sandbox_writable_path "$real"; then
+            echo "ai_sandbox_host_git: refusing to run git in $repo: a sandbox can write it" >&2
+            return 3
+        fi
+    fi
+    (
+        unset GIT_DIR GIT_WORK_TREE
+        if [ -n "$real" ]; then
+            cd -- "$real" 2>/dev/null || { echo "ai_sandbox_host_git: cannot enter $repo" >&2; exit 128; }
+        else
+            cd / || exit 128
+        fi
+        if [ -n "${AI_SANDBOX_GIT_TIMEOUT:-}" ]; then exec timeout "$AI_SANDBOX_GIT_TIMEOUT" git "$@"; fi
+        exec git "$@"
+    )
+}
+
 # True when the sandbox container NAME is running. Without docker on PATH
 # nothing can be running, so the answer is no rather than an error.
 ai_sandbox_container_running() {

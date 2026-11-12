@@ -55,6 +55,20 @@ assert_file "sandbox-side .antigravity-ide is pre-created so docker does not mak
 assert_contains "compose mounts .antigravity-ide" \
                 "$(cat "$dir/docker-compose.yml")" "\"$dir/.antigravity-ide:$HOME/.antigravity-ide\""
 
+# O5: the identity the sandbox commits as is the host's global one, also when the
+# project's own configuration sets other values; the project cannot choose it.
+env_value() { sed -n "s/^$1=//p" "$dir/.env" | tail -1; }
+git config --global user.name "Host Person"; git config --global user.email host@example.com
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-id" 2>&1 \
+    || { echo "script failed:"; cat "$tmp/out-id"; }
+assert_eq "HOST_GIT_NAME is the global one, not the project's" "$(env_value HOST_GIT_NAME)" "Host Person"
+assert_eq "HOST_GIT_EMAIL is the global one, not the project's" "$(env_value HOST_GIT_EMAIL)" "host@example.com"
+git config --global --unset user.name; git config --global --unset user.email
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-id2" 2>&1 \
+    || { echo "script failed:"; cat "$tmp/out-id2"; }
+assert_eq "no global identity: HOST_GIT_NAME stays empty even though the project sets one" "$(env_value HOST_GIT_NAME)" ""
+assert_eq "no global identity: HOST_GIT_EMAIL stays empty" "$(env_value HOST_GIT_EMAIL)" ""
+
 # Two projects with the same basename must land in different directories.
 proj2="$tmp/play/dev-tools"
 mkdir -p "$proj2"
