@@ -1110,7 +1110,7 @@ cmd_sync_all() {
     done < <(ai_sandbox_list)
     wait "${pids[@]+"${pids[@]}"}" 2>/dev/null || true
 
-    local i hint_project
+    local i
     for i in "${!sbs[@]}"; do
         sb=${sbs[$i]}
         [ -s "$sb/.sync-output.$$" ] || continue
@@ -1134,13 +1134,11 @@ cmd_sync_all() {
     for i in "${!sbs[@]}"; do
         sb=${sbs[$i]}; project=${projects[$i]}
         state=$(ai_sandbox_knowledge_state "$sb")
-        # The repair is a plain create-ai-sandbox.sh run for that sandbox; the
-        # bulk script is the shortcut for every stale one at once.
+        # The one repair is a plain create-ai-sandbox.sh run for that sandbox.
         if [ -z "$project" ]; then
-            hint_project=$(head -1 "$sb/project-path" 2>/dev/null || true)
-            status="not synced: unstamped; recreate it: create-ai-sandbox.sh ${hint_project:-<project dir>} (every sandbox at once: ai-sandbox-migrate-knowledge)"
+            status="not synced: unstamped; recreate it: $(ai_sandbox_recreate_command "$sb")"
         elif [ "$state" != current ]; then
-            status="not synced: $state; recreate it: create-ai-sandbox.sh $project (every sandbox at once: ai-sandbox-migrate-knowledge)"
+            status="not synced: $state; recreate it: $(ai_sandbox_recreate_command "$sb")"
         elif [ "$(cat "$sb/.sync-exit.$$" 2>/dev/null)" != 0 ]; then
             if [ ! -d "$project" ]; then status="missing project: $project"
             else status="error: exit $(cat "$sb/.sync-exit.$$" 2>/dev/null || echo '?'); see its output above"

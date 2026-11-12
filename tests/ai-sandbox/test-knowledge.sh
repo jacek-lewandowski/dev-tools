@@ -355,7 +355,8 @@ assert_contains "sandbox block names the proposal branch pattern" "$(cat "$AI_KN
 assert_file "seed installed beside the helper" "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"
 assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" "Shared knowledge repository"
 
-assert_contains "create stamps SANDBOX_KNOWLEDGE=1" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=1'
+assert_contains "create stamps SANDBOX_KNOWLEDGE=2" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=2'
+assert_eq "create writes the stamp the lib names, once" "$(grep -c "^SANDBOX_KNOWLEDGE=$AI_SANDBOX_KNOWLEDGE_STAMP\$" "$pdir/.env")" 1
 assert_contains "create records the project dir" "$(cat "$pdir/.env")" "SANDBOX_PROJECT_DIR=$proj"
 assert_contains "stamp passed into the container" "$compose" 'SANDBOX_KNOWLEDGE=${SANDBOX_KNOWLEDGE}'
 assert_contains "subagent cache TTL passed into the container" "$compose" 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h'
@@ -365,13 +366,24 @@ fab() {   # <name> [env lines...]: a fabricated sandbox directory with a compose
     mkdir -p "$d"; printf 'services: {}\n' > "$d/docker-compose.yml"
     printf '%s\n' "$@" > "$d/.env"
 }
-fab fab-a "SANDBOX_KNOWLEDGE=1" "SANDBOX_PROJECT_DIR=$tmp/work/fab-a"
+fab fab-a "SANDBOX_KNOWLEDGE=2" "SANDBOX_PROJECT_DIR=$tmp/work/fab-a"
 fab fab-b "SANDBOX_KNOWLEDGE=0" "SANDBOX_PROJECT_DIR=$tmp/work/fab-b"
 fab fab-c "HOST_UID=1"
+# fab-e is a sandbox as the base left it (stamp 1): no status directory, no origin repository
+fab fab-e "SANDBOX_KNOWLEDGE=1" "SANDBOX_PROJECT_DIR=$tmp/work/fab-e"
+assert_no_file "a sandbox as the base left it has no status directory" "$AI_SANDBOX_ROOT/fab-e-agent/status"
+assert_no_file "a sandbox as the base left it has no origin repository" "$AI_SANDBOX_ROOT/fab-e-agent/knowledge-origin.git"
 mkdir -p "$AI_SANDBOX_ROOT/fab-d-agent"   # no compose file: not a sandbox
-assert_eq "stamp read" "$(ai_sandbox_knowledge_stamp "$AI_SANDBOX_ROOT/fab-a-agent")" 1
+assert_eq "stamp read" "$(ai_sandbox_knowledge_stamp "$AI_SANDBOX_ROOT/fab-a-agent")" 2
 assert_eq "missing stamp is empty" "$(ai_sandbox_knowledge_stamp "$AI_SANDBOX_ROOT/fab-c-agent")" ""
-assert_eq "stamp 1 is current when configured" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-a-agent")" current
+assert_eq "stamp 2 is current when configured" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-a-agent")" current
+assert_eq "stamp 1 is stale when configured" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-e-agent")" stale
+assert_eq "stamp 2 is stale when knowledge is not configured" \
+    "$( ai_knowledge_configured() { return 1; }; ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-a-agent")" stale
+assert_eq "stamp 1 is stale when knowledge is not configured" \
+    "$( ai_knowledge_configured() { return 1; }; ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-e-agent")" stale
+assert_eq "stamp 0 is current when knowledge is not configured" \
+    "$( ai_knowledge_configured() { return 1; }; ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-b-agent")" current
 assert_eq "stamp 0 is stale when configured" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-b-agent")" stale
 assert_eq "no stamp is unstamped" "$(ai_sandbox_knowledge_state "$AI_SANDBOX_ROOT/fab-c-agent")" unstamped
 listing=$(ai_sandbox_list)
@@ -382,10 +394,14 @@ ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-a-agent" 2>/dev/null && r=0 || 
 assert_eq "current sandbox passes the prerequisite" "$r" 0
 msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-b-agent" 2>&1) && r=0 || r=$?
 assert_eq "stale sandbox fails the prerequisite" "$r" 1
-assert_contains "refusal names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
+assert_eq "refusal names exactly one repair command" "$(printf '%s\n' "$msg" | grep -c '^    ')" 1
 assert_contains "refusal names the sandbox" "$msg" "fab-b-agent"
 assert_contains "stale refusal explains the mismatch" "$msg" "disagrees"
 assert_contains "stale refusal names the single-sandbox repair with the stamped project" "$msg" "create-ai-sandbox.sh $tmp/work/fab-b"
+msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-e-agent" 2>&1) && r=0 || r=$?
+assert_eq "a sandbox stamped 1 fails the prerequisite" "$r" 1
+assert_contains "the stamp-1 refusal names the re-create command with the stamped project" "$msg" "create-ai-sandbox.sh $tmp/work/fab-e"
+assert_eq "the stamp-1 refusal names exactly one repair command" "$(printf '%s\n' "$msg" | grep -c '^    ')" 1
 msg=$(ai_sandbox_require_current "$AI_SANDBOX_ROOT/fab-c-agent" 2>&1) || true
 assert_contains "unstamped refusal explains the missing stamp" "$msg" "before the knowledge stamp"
 assert_contains "unstamped refusal without a recoverable project shows a placeholder" "$msg" "create-ai-sandbox.sh <project dir>"
@@ -402,9 +418,9 @@ assert_eq "_sync-clone does not render" "$(grep -c 'rendered' "$tmp/one.out")" 0
 third="$tmp/work/third"; mkdir -p "$third"; git -C "$third" init -q
 tdir=$(ai_sandbox_dir_for "$third"); mkdir -p "$tdir"
 printf 'services: {}\n' > "$tdir/docker-compose.yml"
-printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$third" > "$tdir/.env"
-printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$proj" > "$pdir/.env.keep"; cp "$pdir/.env.keep" "$pdir/.env"
-printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$integ" > "$idir/.env"
+printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$third" > "$tdir/.env"
+printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$proj" > "$pdir/.env.keep"; cp "$pdir/.env.keep" "$pdir/.env"
+printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$integ" > "$idir/.env"
 printf 'services: {}\n' > "$idir/docker-compose.yml"
 knowledge sync --all >"$tmp/all1.out" 2>&1 || cat "$tmp/all1.out"
 assert_status "all: project clone ok" "$clone" "ok:"
@@ -415,11 +431,15 @@ assert_contains "all: table row for the third sandbox" "$(grep "$(basename "$tdi
 assert_contains "all: unstamped sandbox reported, not synced" "$(grep fab-c-agent "$tmp/all1.out" | tail -1)" "unstamped"
 assert_contains "all: unstamped row names create-ai-sandbox.sh" "$(grep fab-c-agent "$tmp/all1.out" | tail -1)" "create-ai-sandbox.sh"
 assert_contains "all: stale row names create-ai-sandbox.sh with the stamped project" "$(grep fab-b-agent "$tmp/all1.out" | tail -1)" "create-ai-sandbox.sh $tmp/work/fab-b"
-assert_contains "all: stale row names the bulk script as the shortcut" "$(grep fab-b-agent "$tmp/all1.out" | tail -1)" "ai-sandbox-migrate-knowledge"
+assert_eq "all: stale row names no other repair" "$(grep fab-b-agent "$tmp/all1.out" | tail -1 | grep -c 'at once')" 0
+assert_contains "all: a sandbox stamped 1 is listed as stale" "$(grep fab-e-agent "$tmp/all1.out" | tail -1)" " stale "
+assert_contains "all: the stamp-1 row names the re-create command" "$(grep fab-e-agent "$tmp/all1.out" | tail -1)" "create-ai-sandbox.sh $tmp/work/fab-e"
+assert_no_file "all: no clone for the stamp-1 sandbox" "$AI_SANDBOX_ROOT/fab-e-agent/knowledge"
+assert_no_file "all: no status file for the stamp-1 sandbox" "$AI_SANDBOX_ROOT/fab-e-agent/status"
 assert_no_file "all: no clone for the unstamped sandbox" "$AI_SANDBOX_ROOT/fab-c-agent/knowledge"
 assert_contains "all: stamped sandbox with a missing project reported" "$(grep fab-a-agent "$tmp/all1.out" | tail -1)" "missing project"
 eproj="$tmp/work/e"; mkdir -p "$eproj"; edir=$(ai_sandbox_dir_for "$eproj"); mkdir -p "$edir"
-printf 'services: {}\n' > "$edir/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$eproj" > "$edir/.env"
+printf 'services: {}\n' > "$edir/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$eproj" > "$edir/.env"
 chmod 000 "$eproj"
 knowledge sync --all >"$tmp/all-err.out" 2>&1 || cat "$tmp/all-err.out"
 assert_contains "all: a failing child reports its exit code" "$(grep "$(basename "$edir")" "$tmp/all-err.out" | tail -1)" "error: exit 1"
@@ -445,7 +465,7 @@ one=$(knowledge status "$proj" 2>&1)
 assert_contains "status with a project keeps the single view" "$one" "clone:       $pdir/knowledge"
 assert_eq "status with a project lists no other sandbox" "$(printf '%s\n' "$one" | grep -c fab-)" 0
 assert_contains "doctor reads the stamp" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'SANDBOX_KNOWLEDGE'
-assert_contains "doctor names the migration script" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'ai-sandbox-migrate-knowledge'
+assert_eq "doctor names no repair but the single one" "$(grep -c 'at once' "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 0
 assert_contains "doctor names the single repair" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 'create-ai-sandbox.sh'
 # --- the start scripts refuse a sandbox whose stamp does not match the host
 stale="$tmp/work/stale"; mkdir -p "$stale"; git -C "$stale" init -q
@@ -462,13 +482,44 @@ assert_eq "no compose up for a running stale sandbox" "$(grep -c ' up' "$DOCKER_
 : > "$DOCKER_STUB_LOG"
 msg=$(cd "$stale" && DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
 assert_eq "ai-sandbox refuses to start a stale sandbox" "$r" 1
-assert_contains "ai-sandbox names the migration script" "$msg" "ai-sandbox-migrate-knowledge"
+assert_eq "ai-sandbox names exactly one repair command" "$(printf '%s\n' "$msg" | grep -c '^    ')" 1
 assert_contains "ai-sandbox names create-ai-sandbox.sh with the project directory" "$msg" "create-ai-sandbox.sh $stale"
 assert_eq "no compose call for a refused start" "$(grep -c compose "$DOCKER_STUB_LOG")" 0
 msg=$(cd "$stale" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" 2>&1) && r=0 || r=$?
 assert_eq "ai-sandbox-restart refuses a running stale sandbox" "$r" 1
 assert_eq "no compose down for a refused restart" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
 assert_contains "restart refusal names create-ai-sandbox.sh with the project directory" "$msg" "create-ai-sandbox.sh $stale"
+# a sandbox stamped 1, as the base left it (no status directory, no origin repository): the state of every
+# existing sandbox at its first entry after the change
+oldp="$tmp/work/old1"; mkdir -p "$oldp"; git -C "$oldp" init -q
+odir=$(ai_sandbox_dir_for "$oldp"); mkdir -p "$odir"
+printf 'services: {}\n' > "$odir/docker-compose.yml"
+printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$oldp" > "$odir/.env"
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$oldp" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox enters a running sandbox stamped 1" "$r" 0
+assert_contains "the host says a running sandbox stamped 1 must be re-created" "$msg" "must be re-created"
+assert_contains "the host names the re-create command for it" "$msg" "create-ai-sandbox.sh $oldp"
+assert_eq "the notice names exactly one repair command" "$(printf '%s\n' "$msg" | grep -c '^    ')" 1
+assert_status "the host side of a running sandbox stamped 1 is synced" "$odir/knowledge" "ok:"
+assert_eq "nothing is executed in a running sandbox stamped 1 but the entered shell" "$(grep -c '^compose.* exec ' "$DOCKER_STUB_LOG")" 1
+assert_eq "the in-sandbox sync is not run in a sandbox stamped 1" "$(grep -c 'sandbox-knowledge-sync' "$DOCKER_STUB_LOG")" 0
+assert_eq "no compose up for a running sandbox stamped 1" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$oldp" && DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox refuses to start a sandbox stamped 1" "$r" 1
+assert_contains "the refusal names the re-create command" "$msg" "create-ai-sandbox.sh $oldp"
+assert_eq "the refusal for a sandbox stamped 1 names exactly one repair command" "$(printf '%s\n' "$msg" | grep -c '^    ')" 1
+assert_eq "no compose call for a refused start of a sandbox stamped 1" "$(grep -c compose "$DOCKER_STUB_LOG")" 0
+msg=$(cd "$oldp" && DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox-restart refuses a sandbox stamped 1" "$r" 1
+assert_contains "the restart refusal names the re-create command" "$msg" "create-ai-sandbox.sh $oldp"
+# a current sandbox is entered without the notice
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox enters a running current sandbox" "$r" 0
+assert_eq "a running current sandbox gets no re-create notice" "$(printf '%s\n' "$msg" | grep -c 're-created')" 0
+rm -rf "$odir"
 : > "$DOCKER_STUB_LOG"
 out=$(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1) && r=0 || r=$?
 assert_eq "print-context works on a current sandbox" "$r" 0
@@ -494,7 +545,7 @@ assert_eq "migration refuses when a project directory is missing" "$r" 1
 assert_contains "refusal names the sandbox with the missing project" "$out" "fab-b-agent"
 assert_contains "refusal names the sandbox without a recoverable path" "$out" "fab-c-agent"
 assert_eq "nothing migrated on a refused run" "$(ai_sandbox_knowledge_state "$mdir2")" unstamped
-rm -rf "$AI_SANDBOX_ROOT"/fab-[bcd]-agent
+rm -rf "$AI_SANDBOX_ROOT"/fab-[bcde]-agent
 # a project create-ai-sandbox.sh cannot enter: that sandbox fails, the others still migrate
 bproj="$tmp/work/bad"; mkdir -p "$bproj"
 bdir=$(ai_sandbox_dir_for "$bproj"); mkdir -p "$bdir"
@@ -529,7 +580,7 @@ done
 git -C "$oldc" add -A; git -C "$oldc" commit -qm "two old proposals"; git -C "$oldc" push -q origin proposals/oldproj-1234
 # a clone on this host sits on the old branch with one unpushed proposal
 printf 'services: {}\n' > "$mdir/docker-compose.yml"
-printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$manual" > "$mdir/.env"
+printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$manual" > "$mdir/.env"
 git -C "$mdir/knowledge" fetch -q origin; git -C "$mdir/knowledge" checkout -q -b proposals/oldproj-1234 origin/proposals/oldproj-1234
 printf -- '---\nscope: global\n---\n\n# gamma\n\nunpushed\n' > "$mdir/knowledge/proposals/oldproj-1234/2026-09-03-gamma.md"
 git -C "$mdir/knowledge" add -A; git -C "$mdir/knowledge" commit -q --no-verify -m "gamma"
@@ -1206,14 +1257,25 @@ doctor="$AI_SANDBOX_ROOT/image/build/sandbox-doctor"
 fx="$tmp/status-fixture"; mkdir -p "$fx" "$tmp/doctor-home"
 printf '2026-02-02T01:02:03 warn first\033[1mfile\nrole=integrator\nsecond-line-secret\n' > "$fx/knowledge"
 printf '2026-02-02T01:02:04 ok other\n' > "$fx/other"
-dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_STATUS_DIR="$fx" SANDBOX_KNOWLEDGE=1 bash "$doctor" 2>&1)
+dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_STATUS_DIR="$fx" SANDBOX_KNOWLEDGE=2 bash "$doctor" 2>&1)
 assert_contains "doctor prints line 1 of a status file with its age" "$dout" "2026-02-02T01:02:03 warn first[1mfile ["
 assert_contains "doctor prints line 1 of every status file" "$dout" "2026-02-02T01:02:04 ok other ["
 assert_contains "doctor gives the age" "$dout" " min ago]"
 assert_eq "doctor prints no line but line 1" "$(printf '%s\n' "$dout" | grep -c 'second-line-secret')" 0
 assert_eq "doctor prints no control character from a status file" "$(printf '%s' "$dout" | tr -d '\n' | LC_ALL=C grep -c "[[:cntrl:]]")" 0
-dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=1 bash "$doctor" 2>&1)
+dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=2 bash "$doctor" 2>&1)
 assert_contains "doctor without a status directory says the clone is not synced" "$dout" "clone not synced yet"
+dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE="$AI_SANDBOX_KNOWLEDGE_STAMP" bash "$doctor" 2>&1)
+assert_contains "doctor handles the stamp the lib names" "$dout" "clone not synced yet"
+dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=1 bash "$doctor" 2>&1)
+assert_contains "doctor says a sandbox stamped 1 must be re-created" "$dout" "re-create"
+assert_contains "doctor names the one re-create command" "$dout" "create-ai-sandbox.sh"
+assert_eq "doctor says nothing about the clone for a sandbox stamped 1" "$(printf '%s\n' "$dout" | grep -c 'clone not synced yet')" 0
+dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=0 bash "$doctor" 2>&1)
+assert_contains "doctor says knowledge is not configured for stamp 0" "$dout" "not configured on the host"
+dout=$(env -u DISPLAY -u WAYLAND_DISPLAY -u SANDBOX_KNOWLEDGE HOME="$tmp/doctor-home" bash "$doctor" 2>&1)
+assert_contains "doctor says an unstamped sandbox must be re-created" "$dout" "re-create"
+assert_eq "doctor names no bulk repair" "$(printf '%s\n' "$dout" | grep -c 'at once')" 0
 rm -rf "$fx" "$tmp/doctor-home"
 
 # --- O10 (the origin): create makes knowledge/ and an empty bare origin before any start and binds the origin
@@ -1492,6 +1554,7 @@ run_ep_sks() {   # <value of SANDBOX_KNOWLEDGE, or "unset"> [fail]: prints the e
     printf '%s:%s' "$rc" "$(wc -l < "$o11/sks.log" | tr -d ' ')"
 }
 assert_eq "the entrypoint runs the command when SANDBOX_KNOWLEDGE=2" "$(run_ep_sks 2)" "0:1"
+assert_eq "the entrypoint runs the command for the stamp the lib names" "$(run_ep_sks "$AI_SANDBOX_KNOWLEDGE_STAMP")" "0:1"
 assert_eq "not for SANDBOX_KNOWLEDGE=1" "$(run_ep_sks 1)" "0:0"
 assert_eq "not for SANDBOX_KNOWLEDGE=0" "$(run_ep_sks 0)" "0:0"
 assert_eq "not when SANDBOX_KNOWLEDGE is unset" "$(run_ep_sks unset)" "0:0"

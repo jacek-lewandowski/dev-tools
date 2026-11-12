@@ -147,34 +147,44 @@ ai_sandbox_list() {
     done
 }
 
-# The knowledge stamp create-ai-sandbox.sh writes: 1 when the compose file
-# carries the knowledge mounts, 0 when it carries the live GEMINI.md mount,
-# nothing for a sandbox created before stamps existed.
+# The knowledge stamp create-ai-sandbox.sh writes: AI_SANDBOX_KNOWLEDGE_STAMP
+# when the sandbox runs the in-sandbox knowledge sync (knowledge configured),
+# 0 when it carries the live GEMINI.md mount, nothing for a sandbox created
+# before stamps existed. Stamp 1 (the host-written clone) is no longer current:
+# such a sandbox has to be re-created. The generated entrypoint and doctor
+# compare the same value as a literal; a test keeps the three equal.
+AI_SANDBOX_KNOWLEDGE_STAMP=2
 ai_sandbox_knowledge_stamp() { ai_sandbox_env_value "$1" SANDBOX_KNOWLEDGE; }
 
 # current | stale | unstamped: whether the sandbox's compose file matches the
 # host's knowledge configuration. A stale sandbox with knowledge configured
-# mounts the live GEMINI.md, which now resolves to the render, read-write.
+# mounts the live GEMINI.md, which now resolves to the render, read-write, or
+# predates the in-sandbox sync.
 ai_sandbox_knowledge_state() {
     local stamp want=0
     stamp=$(ai_sandbox_knowledge_stamp "$1")
-    ai_knowledge_configured && want=1
+    ai_knowledge_configured && want=$AI_SANDBOX_KNOWLEDGE_STAMP
     if [ -z "$stamp" ]; then echo unstamped
     elif [ "$stamp" = "$want" ]; then echo current
     else echo stale
     fi
 }
 
-# The start path only checks; it never rewrites a sandbox. The repair is a
-# plain create-ai-sandbox.sh run for this sandbox; the disposable migration
-# script from the dev-tools checkout is the shortcut for every sandbox at once.
-ai_sandbox_require_current() {   # <sandbox dir>
-    local state dev_tools="" project
-    state=$(ai_sandbox_knowledge_state "$1")
-    [ "$state" = current ] && return 0
-    [ -f "$AI_SANDBOX_CONFIG" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_CONFIG" | head -1)
+# The one repair, told with the project dir: the stamped one, else the path
+# file of a sandbox from before stamps.
+ai_sandbox_recreate_command() {   # <sandbox dir>
+    local project
     project=$(ai_sandbox_env_value "$1" SANDBOX_PROJECT_DIR)
     if [ -z "$project" ] && [ -f "$1/project-path" ]; then project=$(head -1 "$1/project-path"); fi
+    echo "create-ai-sandbox.sh ${project:-<project dir>}"
+}
+
+# The start path only checks; it never rewrites a sandbox. The repair is a
+# plain create-ai-sandbox.sh run for this sandbox.
+ai_sandbox_require_current() {   # <sandbox dir>
+    local state
+    state=$(ai_sandbox_knowledge_state "$1")
+    [ "$state" = current ] && return 0
     {
         if [ "$state" = stale ]; then
             echo "Sandbox $(basename "$1") is stale: its compose file disagrees with the host's knowledge configuration."
@@ -182,11 +192,22 @@ ai_sandbox_require_current() {   # <sandbox dir>
             echo "Sandbox $(basename "$1") is unstamped: it was created before the knowledge stamp existed."
         fi
         echo "It cannot be started until it has been recreated. Run on the host:"
-        echo "    create-ai-sandbox.sh ${project:-<project dir>}"
-        echo "To recreate every stale or unstamped sandbox at once instead:"
-        echo "    ${dev_tools:-<dev-tools checkout>}/bin/ai/ai-sandbox-migrate-knowledge"
+        echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
     return 1
+}
+
+# A running sandbox is entered whatever its stamp; this is what the host says
+# about one that is not current (nothing is executed in it).
+ai_sandbox_say_recreate() {   # <sandbox dir>
+    local state
+    state=$(ai_sandbox_knowledge_state "$1")
+    [ "$state" = current ] && return 0
+    {
+        echo "Sandbox $(basename "$1") is running and $state: it keeps working, but it predates the host's current knowledge setup and the host runs nothing in it."
+        echo "It must be re-created (this restarts it). Run on the host when it suits you:"
+        echo "    $(ai_sandbox_recreate_command "$1")"
+    } >&2
 }
 # Resolve the sandbox for the current directory. Sets AI_SANDBOX_DIR,
 # AI_SANDBOX_NAME and AI_SANDBOX_PROJECT, or returns 1 with a message.

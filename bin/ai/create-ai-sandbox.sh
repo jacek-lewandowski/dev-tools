@@ -1616,11 +1616,11 @@ if [ -d "${SANDBOX_STATUS_DIR:-/nonexistent}" ]; then
         status "$(basename "$_f")" "$(head -1 "$_f" | tr -d '[:cntrl:]') [${_age} min ago]"
     done
 fi
-# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: unset means
-# the compose file predates the knowledge mounts and the host refuses to start
-# it until the migration script has recreated it.
+# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: 2 is the
+# current setup, 1 predates the in-sandbox sync, unset predates the stamp; the
+# host refuses to start either until create-ai-sandbox.sh has recreated it.
 case "${SANDBOX_KNOWLEDGE-unset}" in
-    1)     if [ -f "${SANDBOX_STATUS_DIR:-/nonexistent}/knowledge" ]; then
+    2)     if [ -f "${SANDBOX_STATUS_DIR:-/nonexistent}/knowledge" ]; then
                # Each open proposal branch: on the remote already, or waiting for the next host sync.
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' 2>/dev/null); do
                    if [ "$(git -C "$HOME/knowledge" rev-parse -q --verify "refs/remotes/origin/$_b" 2>/dev/null)" = "$(git -C "$HOME/knowledge" rev-parse "$_b" 2>/dev/null)" ]; then
@@ -1639,7 +1639,8 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
            fi ;;
     0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
-    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts; on the host run create-ai-sandbox.sh <project> (every sandbox at once: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
+    1)     status "knowledge" "stale: this sandbox predates the in-sandbox sync; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
+    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge stamp; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
 esac
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
 if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
@@ -2225,6 +2226,7 @@ DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
 MEM_GB="$MEMORY_GB" \
+KNOWLEDGE_STAMP="$AI_SANDBOX_KNOWLEDGE_STAMP" \
 python3 - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
@@ -2237,9 +2239,9 @@ managed = {
     "SANDBOX_WITH_DOCKER": "1" if os.environ.get("WITH_DOCKER") == "yes" else "0",
     "SANDBOX_WITH_AUDIO": "1" if os.environ.get("WITH_AUDIO") == "yes" else "0",
     # The knowledge stamp: the start scripts refuse a sandbox whose stamp does
-    # not match the host's configuration, and the migration script uses the
-    # project dir to recreate it.
-    "SANDBOX_KNOWLEDGE": "1" if os.environ.get("KNOWLEDGE") == "yes" else "0",
+    # not match the host's configuration (value and rule: ai-sandbox-lib.sh),
+    # and its project dir is what the re-create command names.
+    "SANDBOX_KNOWLEDGE": os.environ.get("KNOWLEDGE_STAMP", "") if os.environ.get("KNOWLEDGE") == "yes" else "0",
     "SANDBOX_PROJECT_DIR": os.environ.get("PROJECT_ABS_DIR", ""),
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
