@@ -667,6 +667,13 @@ refresh_origin() {   # <sandbox dir> <proposals|integrator>
     done < <(ai_sandbox_host_git "$o" for-each-ref --format='%(refname)')
 }
 
+# The status says once that the origin could not be refreshed, however many refreshes of a sync failed.
+refresh_origin_noted() {   # <sandbox dir> <proposals|integrator>
+    local note="the knowledge origin could not be refreshed"
+    refresh_origin "$@" && return 0
+    case $STATUS_NOTE in *"$note"*) ;; *) STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }$note" ;; esac
+}
+
 # ---------------------------------------------------------------------------
 # per-sandbox clone
 # ---------------------------------------------------------------------------
@@ -783,7 +790,7 @@ sync_clone() {
     status_context "$sb" "$id" "$role"
     mirror="refs/sandbox/$id"
     # First, so that every outcome below leaves the origin as current as the host's refs.
-    refresh_origin "$sb" "$role" || STATUS_NOTE="the knowledge origin could not be refreshed"
+    refresh_origin_noted "$sb" "$role"
     [ "$MAIN_FETCHED" = yes ] || net=no
 
     if [ ! -d "$CLONE/.git" ]; then
@@ -1004,7 +1011,7 @@ sync_clone() {
 
     # The origin carries the host's refs as this sync left them, pushes and deletions included: the
     # sandbox's command that follows reads it, and so does the doctor's pushed or pending.
-    refresh_origin "$sb" "$role" || STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }the knowledge origin could not be refreshed"
+    refresh_origin_noted "$sb" "$role"
 
     if [ -n "$refused" ]; then
         set_status "refused: not pushed:$refused; fix or delete those branches"

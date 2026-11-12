@@ -1299,6 +1299,15 @@ git -C "$hostrepo" tag -d o10-tag >/dev/null 2>&1; git -C "$hostrepo" symbolic-r
 knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "after the cleanup the integrator origin's reports equal the remote's" "$(orefs "$orig_integ" refs/reports)" "$(orefs "$remote" refs/reports)"
 assert_eq "after the cleanup the origins hold the remote's heads and nothing else" "$(orefs "$orig_proj")$(orefs "$orig_integ" refs/heads)" "$(orefs "$remote" refs/heads)$(orefs "$remote" refs/heads)"
+# an origin that cannot be refreshed (a directory whose HEAD is there but which is no repository) is said once in the status
+note_count() { status_of "$1" | grep -o 'the knowledge origin could not be refreshed' | wc -l | tr -d ' '; }   # <clone>
+for o in "$orig_proj" "$orig_integ"; do mv "$o" "$o.keep"; mkdir "$o"; echo junk > "$o/HEAD"; done
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "an origin that cannot be refreshed is named once in a writer's status" "$(note_count "$clone")" 1
+assert_eq "an origin that cannot be refreshed is named once in an integrator's status" "$(note_count "$iclone")" 1
+for o in "$orig_proj" "$orig_integ"; do rm -rf "$o"; mv "$o.keep" "$o"; done
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+assert_status "the next sync with a sound origin is ok again" "$clone" "ok:"
 
 # create: knowledge/ and the origin exist before the sync step runs, and before any start
 o10p="$tmp/work/o10p"; mkdir -p "$o10p"
