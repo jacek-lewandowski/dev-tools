@@ -820,7 +820,7 @@ sync_clone() {
     current=$(git -C "$CLONE" branch --show-current)
     case $current in
         proposals/*)
-            set_status "skipped: ~/knowledge is on the old-style branch '$current'; run ai-sandbox-migrate-knowledge on the host"
+            set_status "skipped: ~/knowledge is on the old-style branch '$current'; check out main there (git -C ~/knowledge checkout main) and sync again"
             return 0 ;;
     esac
 
