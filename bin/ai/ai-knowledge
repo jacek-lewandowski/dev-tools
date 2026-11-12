@@ -188,6 +188,8 @@ seed_dir() {
 # never removed. Prints the new path; nothing when there was nothing to move.
 move_aside() {   # <path>
     [ -e "$1" ] || [ -L "$1" ] || return 0
+    # create makes the clone's directory before the first sync; empty, it is where the clone goes
+    if [ -d "$1" ] && [ ! -L "$1" ] && [ -z "$(ls -A -- "$1")" ]; then return 0; fi
     local to="$1.not-a-clone.$(date +%Y%m%d%H%M%S)"
     mv "$1" "$to" && printf '%s\n' "$to"
 }
@@ -428,15 +430,18 @@ lock_drop() {
 # ---------------------------------------------------------------------------
 
 # The canonical checkout only ever fast-forwards; nobody edits it by hand.
+# One fetch brings the remote's heads and its reports, each into a namespace of its own
+# (C-KNOW): the reports reach the integrator's origin, nothing else reads them here.
+FETCH_SPECS=('+refs/heads/*:refs/remotes/origin/*' '+refs/reports/*:refs/origin-reports/*')
 MAIN_FETCHED=yes
 sync_main() {
     [ -d "$KNOWLEDGE_MAIN/.git" ] || { warn "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"; return 1; }
     local rc=0 out
-    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin 2>&1) || rc=$?
+    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin "${FETCH_SPECS[@]}" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
         net_failed "$rc" "$out"
         warn "cannot fetch $REMOTE; rendering the last fetched main"
-        HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin)")
+        HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin "${FETCH_SPECS[@]}")")
         MAIN_FETCHED=no
     fi
     # A manual fetch lands here on the next sync, so the merge runs either way.
@@ -631,6 +636,26 @@ prepare_targets() {
     done
 }
 
+# C-KNOW: the sandbox's origin is rewritten from the host's own refs, never from the
+# clone: refs/heads/* from refs/remotes/origin/*, and for the integrator alone
+# refs/reports/* from refs/origin-reports/*. Whatever else an origin holds is removed.
+# The refs are named in full; origin/HEAD is a pointer and not a branch.
+refresh_origin() {   # <sandbox dir> <proposals|integrator>
+    local o ref
+    local -a specs=('+refs/remotes/origin/*:refs/heads/*' '^refs/remotes/origin/HEAD')
+    ai_sandbox_make_origin "$1" || return 1
+    o=$(ai_sandbox_origin_dir "$1")
+    [ "$2" != integrator ] || specs+=('+refs/origin-reports/*:refs/reports/*')
+    ai_sandbox_host_git "$o" fetch -q --prune --no-tags "$KNOWLEDGE_MAIN" "${specs[@]}" || return 1
+    while IFS= read -r ref; do
+        case $ref in
+            refs/heads/*) continue ;;
+            refs/reports/*) [ "$2" = integrator ] && continue ;;
+        esac
+        ai_sandbox_host_git "$o" update-ref -d "$ref" || return 1
+    done < <(ai_sandbox_host_git "$o" for-each-ref --format='%(refname)')
+}
+
 # ---------------------------------------------------------------------------
 # per-sandbox clone
 # ---------------------------------------------------------------------------
@@ -759,6 +784,8 @@ sync_clone() {
     local pushed=0 closed=0 empty=0 pending=0 main_state=current refused="" conflicts="" pushfail=""
     local rpushed=0 rname rref rtip
     status_context "$sb" "$id" "$role"
+    # First, so that every outcome below leaves the origin as current as the host's refs.
+    refresh_origin "$sb" "$role" || STATUS_NOTE="the knowledge origin could not be refreshed"
 
     if [ ! -d "$CLONE/.git" ]; then
         aside=$(move_aside "$CLONE")

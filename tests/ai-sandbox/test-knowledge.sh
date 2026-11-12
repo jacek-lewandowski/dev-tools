@@ -1216,6 +1216,122 @@ dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLED
 assert_contains "doctor without a status directory says the clone is not synced" "$dout" "clone not synced yet"
 rm -rf "$fx" "$tmp/doctor-home"
 
+# --- O10 (the origin): create makes knowledge/ and an empty bare origin before any start and binds the origin
+# --- read-only; every sync refreshes it from the host's own refs, so that it holds exactly the contract's refs
+orefs() {   # <repo> [pattern...]: "<ref> <object>" per ref, sorted
+    git -C "$1" for-each-ref --format='%(refname) %(objectname)' "${@:2}" | LC_ALL=C sort
+}
+orig_proj="$pdir/knowledge-origin.git"; orig_integ="$idir/knowledge-origin.git"
+hostrepo="$AI_KNOWLEDGE_ROOT/main"
+omain=$(git -C "$remote" rev-parse main)
+# remote: a branch, a tag and two reports; the host's own repository: refs no origin may carry
+git -C "$remote" update-ref refs/heads/proposal/2026-01-01-o10-aaaa "$omain"
+git -C "$remote" update-ref refs/heads/other-o10 "$omain"
+git -C "$remote" tag o10-tag "$omain"
+git -C "$remote" update-ref refs/reports/2026-01-01-o10-aaaa "$omain"
+git -C "$remote" update-ref refs/reports/2026-01-02-o10-bbbb "$omain"
+git -C "$hostrepo" update-ref refs/sandbox/zz/heads/x "$omain"
+git -C "$hostrepo" update-ref refs/pushed-reports/zz/2026-01-01-o10-aaaa "$omain"
+git -C "$hostrepo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+# refs an origin once held or a sandbox-side process wrote: the next sync removes them
+mkdir -p "$orig_proj" "$orig_integ"
+git init -q --bare "$orig_proj" 2>/dev/null; git init -q --bare "$orig_integ" 2>/dev/null
+for o in "$orig_proj" "$orig_integ"; do
+    git -C "$o" update-ref refs/heads/stale-o10 "$omain" 2>/dev/null
+    git -C "$o" update-ref refs/odd/o10 "$omain" 2>/dev/null
+done
+git -C "$orig_proj" update-ref refs/reports/2026-01-03-o10-cccc "$omain" 2>/dev/null
+knowledge sync "$proj" >"$tmp/o10-sync-p.out" 2>&1 || cat "$tmp/o10-sync-p.out"
+knowledge sync "$integ" >"$tmp/o10-sync-i.out" 2>&1 || cat "$tmp/o10-sync-i.out"
+assert_eq "origin is a bare repository" "$(git -C "$orig_proj" rev-parse --is-bare-repository 2>&1)" true
+assert_eq "origin HEAD follows main" "$(git -C "$orig_proj" symbolic-ref HEAD 2>&1)" refs/heads/main
+assert_eq "origin heads equal the remote's heads (proposals sandbox)" "$(orefs "$orig_proj" refs/heads)" "$(orefs "$remote" refs/heads)"
+assert_eq "origin heads equal the remote's heads (integrator)" "$(orefs "$orig_integ" refs/heads)" "$(orefs "$remote" refs/heads)"
+assert_eq "origin heads equal the host's remote-tracking refs" \
+    "$(orefs "$orig_proj" refs/heads | sed 's#^refs/heads/##')" \
+    "$(orefs "$hostrepo" refs/remotes/origin | grep -v '^refs/remotes/origin/HEAD ' | sed 's#^refs/remotes/origin/##')"
+assert_eq "the proposals origin holds no ref but heads" "$(orefs "$orig_proj" | grep -vc '^refs/heads/')" 0
+assert_eq "the proposals origin holds no report" "$(orefs "$orig_proj" refs/reports | wc -l | tr -d ' ')" 0
+assert_eq "no origin holds a head named for the symbolic HEAD" "$(orefs "$orig_proj" refs/heads/HEAD | wc -l | tr -d ' ')" 0
+assert_eq "the integrator origin's reports equal the remote's" "$(orefs "$orig_integ" refs/reports)" "$(orefs "$remote" refs/reports)"
+assert_eq "the integrator origin holds no ref but heads and reports" "$(orefs "$orig_integ" | grep -vc '^refs/heads/\|^refs/reports/')" 0
+assert_eq "the integrator origin holds the reports this section gave the remote" "$(orefs "$orig_integ" refs/reports | grep -c -- '-o10-')" 2
+assert_eq "the host fetched the remote's reports into refs/origin-reports" \
+    "$(orefs "$hostrepo" refs/origin-reports | sed 's#^refs/origin-reports/##')" "$(orefs "$remote" refs/reports | sed 's#^refs/reports/##')"
+assert_eq "a sync leaves a sandbox's namespace in the host repository as it was" "$(orefs "$hostrepo" refs/sandbox refs/pushed-reports | wc -l | tr -d ' ')" 2
+# the remote drops a branch and a report; the host is offline once: the origin keeps the last fetch
+before_off=$(orefs "$orig_integ")
+git -C "$hostrepo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main   # an offline sync prunes nothing on the host
+mv "$remote" "$remote.away"
+knowledge sync "$integ" >"$tmp/o10-off.out" 2>&1 || cat "$tmp/o10-off.out"
+assert_eq "offline: the host's pointer origin/HEAD is not published as a branch" "$(orefs "$orig_integ" refs/heads/HEAD | wc -l | tr -d ' ')" 0
+assert_status "offline status" "$iclone" "offline:"
+assert_eq "offline: the origin keeps the last fetch" "$(orefs "$orig_integ")" "$before_off"
+mv "$remote.away" "$remote"
+git -C "$remote" update-ref -d refs/heads/other-o10; git -C "$remote" update-ref -d refs/reports/2026-01-02-o10-bbbb
+git -C "$iclone" update-ref -d refs/reports/2026-01-02-o10-bbbb   # else the integrator's clone would push it back
+# a dirty clone is skipped whole by the clone-side sync; the origin is refreshed first all the same
+echo dirt > "$clone/o10-dirt"
+knowledge sync "$proj" >"$tmp/o10-dirty.out" 2>&1 || cat "$tmp/o10-dirty.out"
+assert_status "dirty clone: skipped" "$clone" "skipped:"
+assert_eq "dirty clone: the origin is refreshed (a deleted branch is pruned)" "$(orefs "$orig_proj" refs/heads)" "$(orefs "$remote" refs/heads)"
+rm -f "$clone/o10-dirt"
+knowledge sync "$integ" >"$tmp/o10-i2.out" 2>&1 || cat "$tmp/o10-i2.out"
+assert_eq "a report deleted on the remote leaves the integrator's origin" "$(orefs "$orig_integ" refs/reports)" "$(orefs "$remote" refs/reports)"
+assert_eq "and the host's refs/origin-reports" \
+    "$(orefs "$hostrepo" refs/origin-reports | sed 's#^refs/origin-reports/##')" "$(orefs "$remote" refs/reports | sed 's#^refs/reports/##')"
+# sync --all refreshes every current sandbox's origin
+git -C "$remote" update-ref refs/heads/all-o10 "$omain"
+knowledge sync --all >"$tmp/o10-all.out" 2>&1 || cat "$tmp/o10-all.out"
+assert_eq "sync --all refreshes the proposals origin" "$(orefs "$orig_proj" refs/heads)" "$(orefs "$remote" refs/heads)"
+assert_eq "sync --all refreshes the integrator origin" "$(orefs "$orig_integ" refs/heads)" "$(orefs "$remote" refs/heads)"
+# clean up the remote and the host's planted refs
+for r in refs/heads/all-o10 refs/heads/proposal/2026-01-01-o10-aaaa refs/reports/2026-01-01-o10-aaaa refs/tags/o10-tag; do git -C "$remote" update-ref -d "$r"; done
+git -C "$iclone" update-ref -d refs/reports/2026-01-01-o10-aaaa; git -C "$iclone" branch -q -D proposal/2026-01-01-o10-aaaa 2>/dev/null
+git -C "$hostrepo" update-ref -d refs/sandbox/zz/heads/x; git -C "$hostrepo" update-ref -d refs/pushed-reports/zz/2026-01-01-o10-aaaa
+git -C "$hostrepo" tag -d o10-tag >/dev/null 2>&1; git -C "$hostrepo" symbolic-ref --delete refs/remotes/origin/HEAD 2>/dev/null
+knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "after the cleanup the integrator origin's reports equal the remote's" "$(orefs "$orig_integ" refs/reports)" "$(orefs "$remote" refs/reports)"
+assert_eq "after the cleanup the origins hold the remote's heads and nothing else" "$(orefs "$orig_proj")$(orefs "$orig_integ" refs/heads)" "$(orefs "$remote" refs/heads)$(orefs "$remote" refs/heads)"
+
+# create: knowledge/ and the origin exist before the sync step runs, and before any start
+o10p="$tmp/work/o10p"; mkdir -p "$o10p"
+rec="$tmp/o10-tree"; mkdir -p "$rec/bin/ai"; cp -a "$REPO_ROOT/bin/ai/." "$rec/bin/ai/"; ln -s "$REPO_ROOT/tools" "$rec/tools"
+o10dir=$(ai_sandbox_dir_for "$o10p")
+cat > "$rec/bin/ai/ai-knowledge" <<REC
+#!/usr/bin/env bash
+{ [ -d "$o10dir/knowledge" ] && echo knowledge-dir; [ -d "$o10dir/knowledge-origin.git" ] && echo origin-dir
+  [ "\$(git -C "$o10dir/knowledge-origin.git" rev-parse --is-bare-repository 2>/dev/null)" = true ] && echo origin-bare
+  git -C "$o10dir/knowledge-origin.git" for-each-ref | wc -l | sed 's/^/refs /'; } > "$tmp/o10-rec.out"
+exit 1
+REC
+bash "$rec/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$o10p" >"$tmp/o10-create1.out" 2>&1 || cat "$tmp/o10-create1.out"
+assert_eq "create made knowledge/ and an empty bare origin before the sync step, which failed here" "$(tr '\n' ' ' < "$tmp/o10-rec.out")" "knowledge-dir origin-dir origin-bare refs 0 "
+assert_contains "the failed sync step did not fail create" "$(cat "$tmp/o10-create1.out")" "knowledge sync reported a problem"
+assert_file "the compose file was written although the sync failed" "$o10dir/docker-compose.yml"
+oc=$(cat "$o10dir/docker-compose.yml")
+assert_contains "create binds the origin read-only at its mount" "$oc" "\"$o10dir/knowledge-origin.git:/run/ai-sandbox/knowledge-origin.git:ro\""
+assert_contains "create binds the clone read-write beside it" "$oc" "\"$o10dir/knowledge:$HOME/knowledge\""
+ai_sandbox_writable_path "$o10dir/knowledge-origin.git" && r=writable || r=host-only
+assert_eq "no sandbox can write the origin (the compose parser sees the bind as read-only)" "$r" host-only
+ai_sandbox_writable_path "$o10dir/knowledge" && r=writable || r=host-only
+assert_eq "the clone stays writable to its sandbox" "$r" writable
+# a sync that works finds the empty knowledge/ create made and clones into it
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$o10p" >"$tmp/o10-create2.out" 2>&1 || cat "$tmp/o10-create2.out"
+assert_file "the sync cloned into the directory create made" "$o10dir/knowledge/.git"
+assert_eq "an empty knowledge/ is not moved aside" "$(ls -d "$o10dir"/knowledge.not-a-clone.* 2>/dev/null | wc -l | tr -d ' ')" 0
+assert_eq "the sync of a create fills the origin" "$(orefs "$o10dir/knowledge-origin.git" refs/heads)" "$(orefs "$remote" refs/heads)"
+# the same with a remote that cannot be reached: the directories are there all the same
+cp "$AI_KNOWLEDGE_CONFIG" "$tmp/o10-config.keep"
+sed -i "s#^REMOTE=.*#REMOTE=file://$tmp/no-such-remote.git#" "$AI_KNOWLEDGE_CONFIG"
+o10q="$tmp/work/o10q"; mkdir -p "$o10q"; o10qdir=$(ai_sandbox_dir_for "$o10q")
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$o10q" >"$tmp/o10-create3.out" 2>&1 || cat "$tmp/o10-create3.out"
+assert_file "offline create: knowledge/ exists" "$o10qdir/knowledge"
+assert_eq "offline create: the origin is a bare repository" "$(git -C "$o10qdir/knowledge-origin.git" rev-parse --is-bare-repository 2>&1)" true
+assert_contains "offline create: the origin is bound" "$(cat "$o10qdir/docker-compose.yml")" "knowledge-origin.git:/run/ai-sandbox/knowledge-origin.git:ro\""
+cp "$tmp/o10-config.keep" "$AI_KNOWLEDGE_CONFIG"
+rm -rf "$rec"
+
 # --- O6 (C-STAMP): the project and the role come from the stamps and the host's
 # --- configuration, not from what a sandbox can write in the project or its clone
 mkdir -p "$proj/sub/deep" "$proj/plainsub"
@@ -1281,6 +1397,8 @@ assert_contains "live GEMINI.md mount kept without config" "$compose" "$HOME/.ge
 assert_eq "no knowledge mounts without config" "$(printf '%s\n' "$compose" | grep -c knowledge)" 0
 assert_contains "create stamps SANDBOX_KNOWLEDGE=0 without config" "$(cat "$(ai_sandbox_dir_for "$other")/.env")" 'SANDBOX_KNOWLEDGE=0'
 assert_no_file "no clone created without config" "$(ai_sandbox_dir_for "$other")/knowledge"
+assert_no_file "no origin created without config" "$(ai_sandbox_dir_for "$other")/knowledge-origin.git"
+assert_eq "no origin mount without config" "$(printf '%s\n' "$compose" | grep -c 'knowledge-origin')" 0
 assert_file "create makes status/ without config" "$(ai_sandbox_dir_for "$other")/status"
 assert_contains "create binds status/ read-only without config" "$compose" "\"$(ai_sandbox_dir_for "$other")/status:/run/ai-sandbox/status:ro\""
 assert_contains "status/ is among the state directories" "$(ai_sandbox_state_dirs)" "status"

@@ -461,6 +461,12 @@ while IFS= read -r _dir; do
     [ -n "$_dir" ] && mkdir -p "$SANDBOX_DIR/$_dir"
 done < <(ai_sandbox_state_dirs)
 unset _dir
+# The clone's directory and the bare origin it fetches from (C-KNOW), made here for the
+# same reason, before the sync step below, which may fail or find the lock busy.
+if ai_knowledge_configured; then
+    mkdir -p "$SANDBOX_DIR/knowledge"
+    ai_sandbox_make_origin "$SANDBOX_DIR" || warn "cannot make the knowledge origin in $SANDBOX_DIR"
+fi
 
 # ---------------------------------------------------------------------------
 # Locate the host tools/ directory
@@ -2385,6 +2391,8 @@ cat <<COMPOSE_KNOWLEDGE
       # proposals branch (main for the integrator). It holds no credentials, so
       # it can commit but never fetch or push: the host does that on every start.
       - "${SANDBOX_DIR}/knowledge:${CONTAINER_HOME}/knowledge"
+      # The origin that clone fetches from: bare, written by the host only.
+      - "$(ai_sandbox_origin_dir "$SANDBOX_DIR"):${AI_SANDBOX_ORIGIN_MOUNT}:ro"
 COMPOSE_KNOWLEDGE
 else
 cat <<COMPOSE_BRAIN

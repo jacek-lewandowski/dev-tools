@@ -22,6 +22,10 @@ AI_KNOWLEDGE_RENDER="$AI_SANDBOX_ROOT/shared/knowledge"
 # C-STATUS: where a sandbox sees <sandbox dir>/status, read-only. Defined once here;
 # the compose file binds it and passes it on as SANDBOX_STATUS_DIR.
 AI_SANDBOX_STATUS_MOUNT=/run/ai-sandbox/status
+# C-KNOW: the bare origin <sandbox dir>/knowledge-origin.git, written by the host only
+# and bound read-only at this path; the in-sandbox clone fetches from it. Defined once
+# here; create binds it, ai-knowledge refreshes it.
+AI_SANDBOX_ORIGIN_MOUNT=/run/ai-sandbox/knowledge-origin.git
 ai_knowledge_configured() { [ -f "$AI_KNOWLEDGE_CONFIG" ]; }
 
 # Lowercase, replace every non-alphanumeric with '-', collapse runs, trim both
@@ -108,6 +112,20 @@ ai_sandbox_create_root() {   # [dir]
     local rc=0
     ai_sandbox_root_scan "${1:-$PWD}" git || rc=$?
     [ "$rc" -ne 1 ]
+}
+
+# The origin's path in a sandbox directory, and its creation: empty and bare, HEAD on
+# main, made by the host before any start (a missing bind source would be created
+# root-owned by Docker). Nothing is fetched here; ai-knowledge fills it.
+ai_sandbox_origin_dir() {   # <sandbox dir>
+    printf '%s/knowledge-origin.git' "$1"
+}
+ai_sandbox_make_origin() {   # <sandbox dir>
+    local o
+    o=$(ai_sandbox_origin_dir "$1")
+    mkdir -p -- "$o" || return 1
+    [ -f "$o/HEAD" ] && return 0
+    ai_sandbox_host_git "$o" init -q --bare >/dev/null && ai_sandbox_host_git "$o" symbolic-ref HEAD refs/heads/main
 }
 
 ai_sandbox_dir_for() {
