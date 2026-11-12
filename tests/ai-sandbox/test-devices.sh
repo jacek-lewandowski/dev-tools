@@ -211,6 +211,7 @@ none_audio() { HOST_SND_DIR="$snd" XDG_RUNTIME_DIR="${1:-$rt}" bash "$REPO_ROOT/
 none_audio
 assert_contains "--audio promises what a sandbox is given in the warning" "$(cat "$tmp/out")" "given $i3e"
 assert_eq "the warning does not promise what a sandbox can reach" "$(grep -c 'reachable' "$tmp/out")" '0'
+assert_eq "the --audio warning is one block" "$(grep -c '^!!' "$tmp/out")" '1'
 assert_contains "--audio with no display: the warning names the socket" "$(cat "$tmp/out")" "host's sound socket, microphone included"
 assert_eq "--audio with no display: the warning names no sound devices" "$(grep -c 'sound devices' "$tmp/out")" '0'
 none_audio "$no_sock"
