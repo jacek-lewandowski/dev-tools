@@ -99,6 +99,7 @@ WITH_DOCKER_EXPLICIT="no"
 WITH_AUDIO="no"         # host sound socket and devices, microphone included; off unless asked for
 WITH_AUDIO_EXPLICIT="no"
 AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
+AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
 MEMORY_GB=""            # --memory=GB; the remembered size, else 6, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
@@ -151,8 +152,9 @@ Options:
                    sandbox can record from your microphone, and a program in
                    the sandbox can make the host's sound server, which runs as
                    you, act on its requests: a sandbox with --audio is outside
-                   the promise that no host daemon's socket but the display's
-                   is reachable from it. Remembered until --no-audio.
+                   the promise that a sandbox is
+                   given no host daemon's socket but its display's.
+                   Remembered until --no-audio.
   --no-audio       Drop a remembered --audio: the host's sound stays out of the
                    sandbox.
   --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 6.
@@ -509,6 +511,7 @@ if [ "$WITH_AUDIO_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     case "$STORED_AUDIO" in
         2) WITH_AUDIO="yes" ;;
         1) AUDIO_OLD_VALUE="yes" ;;
+        0) AUDIO_STORED_OFF="yes" ;;
     esac
 fi
 
@@ -790,14 +793,29 @@ PULSE_SOCKET_HOST="${XDG_RUNTIME_DIR:-/run/user/$HOST_UID}/pulse/native"
 if [ "$AUDIO_OLD_VALUE" = "yes" ] && [ "$WITH_AUDIO" != "yes" ]; then
     warn "Audio: the host's sound was shared with this sandbox because that used to be the default. It is now off. Pass --audio to share it again."
 fi
+# The sound devices are mounted only with a display (the device section below
+# reads AUDIO_DEVICES), so the warning names only what this run shares.
+AUDIO_DEVICES="no"
+[ "$WITH_AUDIO" = "yes" ] && [ -d "$HOST_SND_DIR" ] && [ "$DISPLAY_MODE" != "none" ] && AUDIO_DEVICES="yes"
 if [ "$WITH_AUDIO" != "yes" ]; then
-    log "Audio: not shared by default; pass --audio to share the host's sound, microphone included."
+    if [ "$WITH_AUDIO_EXPLICIT" = "yes" ] || [ "$AUDIO_STORED_OFF" = "yes" ]; then
+        log "Audio: not shared; pass --audio to share the host's sound, microphone included."
+    else
+        log "Audio: not shared by default; pass --audio to share the host's sound, microphone included."
+    fi
 else
-    warn "Audio is shared (--audio): the sandbox gets the host's sound socket and sound devices, microphone included.
-   A program in the sandbox can make the host's sound server, which runs as you,
-   act on its requests, so this sandbox is outside the promise that no host
-   daemon's socket but the display's is reachable from it.
-   Pass --no-audio to drop it."
+    audio_shared=""
+    [ -S "$PULSE_SOCKET_HOST" ] && audio_shared="sound socket"
+    [ "$AUDIO_DEVICES" = "yes" ] && audio_shared="${audio_shared:+$audio_shared and }sound devices"
+    if [ -n "$audio_shared" ]; then
+        warn "Audio is shared (--audio): the sandbox gets the host's ${audio_shared}, microphone included."
+        if [ -S "$PULSE_SOCKET_HOST" ]; then
+            warn "   A program in the sandbox can make the host's sound server, which runs as you,
+   act on its requests, so this sandbox is outside the promise that a
+   sandbox is given no host daemon's socket but its display's."
+        fi
+        warn "   Pass --no-audio to drop it."
+    fi
     if [ -S "$PULSE_SOCKET_HOST" ]; then
         add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
         add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
@@ -904,7 +922,7 @@ shopt -u nullglob
 add_cgroup 'c 188:* rwm'    # ttyUSB
 add_cgroup 'c 166:* rwm'    # ttyACM
 
-if [ "$WITH_AUDIO" = "yes" ] && [ -d "$HOST_SND_DIR" ] && [ "$DISPLAY_MODE" != "none" ]; then
+if [ "$AUDIO_DEVICES" = "yes" ]; then
     add_vol "\"${HOST_SND_DIR}:/dev/snd\""
     add_cgroup 'c 116:* rwm'
     log "audio: /dev/snd (ALSA)"

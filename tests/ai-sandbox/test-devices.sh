@@ -66,6 +66,8 @@ assert_contains "a kept request repeats the warning" "$(cat "$tmp/out")" 'act on
 audio --no-audio
 assert_eq "--no-audio turns it off" "$(grep -c 'sandbox-pulse' "$dir/docker-compose.yml")" '0'
 assert_eq "--no-audio is recorded" "$(env_value)" '0'
+assert_contains "--no-audio says audio is not shared" "$(cat "$tmp/out")" 'Audio: not shared; pass --audio'
+assert_eq "--no-audio does not say audio is off by default" "$(grep -c 'by default' "$tmp/out")" '0'
 TESTS_RUN=$((TESTS_RUN + 1))
 case "$(cat "$HOME/.gemini/GEMINI.md")" in
     *parec*) _fail "--no-audio does not advertise capture tools" "found parec" ;;
@@ -73,6 +75,8 @@ case "$(cat "$HOME/.gemini/GEMINI.md")" in
 esac
 audio
 assert_eq "a stored 0 keeps audio off" "$(grep -c 'sandbox-pulse' "$dir/docker-compose.yml")" '0'
+assert_contains "a stored 0 says audio is not shared" "$(cat "$tmp/out")" 'Audio: not shared; pass --audio'
+assert_eq "a stored 0 does not say audio is off by default" "$(grep -c 'by default' "$tmp/out")" '0'
 # The old shape: every run before audio became opt-in wrote 1, whether audio
 # was on by default or asked for, so 1 cannot count as a request.
 sed -i 's/^SANDBOX_WITH_AUDIO=.*/SANDBOX_WITH_AUDIO=1/' "$dir/.env"
@@ -107,6 +111,10 @@ assert_contains "help says the microphone is included" "$help" 'microphone inclu
 assert_contains "help says a program can make the sound server act on its requests" "$help" 'act on its requests'
 assert_contains "help says --audio is remembered" "$help" 'Remembered until --no-audio'
 assert_contains "help says --no-audio drops a remembered request" "$help" 'Drop a remembered --audio'
+# What I3e promises is what the toolchain gives a sandbox, not what a program can reach.
+i3e="no host daemon's socket but its display's"
+assert_contains "help states the promise as what a sandbox is given" "$help" "given $i3e"
+assert_eq "help does not promise what a sandbox can reach" "$(grep -c 'reachable' <<<"$help")" '0'
 
 # The closing check: a sandbox with a display, a host sound socket and a host
 # sound-device directory (both faked). Nothing of the host's sound is shared
@@ -195,6 +203,26 @@ shares_none "a bare run after --no-audio"
 HOST_SND_DIR="$snd" audio --audio
 assert_contains "--audio with no display still mounts the socket" "$(cat "$dir/docker-compose.yml")" 'sandbox-pulse'
 assert_eq "--audio with no display mounts no sound device and sets no rule" "$(grep -cE '/dev/snd|c 116:' "$dir/docker-compose.yml")" '0'
+
+# The warning says what this run shares: the devices only where they are
+# mounted (a display is used), the socket only where there is one.
+none_audio() { HOST_SND_DIR="$snd" XDG_RUNTIME_DIR="${1:-$rt}" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" \
+    --display=none --no-start --audio "$proj" >"$tmp/out" 2>&1 || true; }
+none_audio
+assert_contains "--audio promises what a sandbox is given in the warning" "$(cat "$tmp/out")" "given $i3e"
+assert_eq "the warning does not promise what a sandbox can reach" "$(grep -c 'reachable' "$tmp/out")" '0'
+assert_contains "--audio with no display: the warning names the socket" "$(cat "$tmp/out")" "host's sound socket, microphone included"
+assert_eq "--audio with no display: the warning names no sound devices" "$(grep -c 'sound devices' "$tmp/out")" '0'
+none_audio "$no_sock"
+assert_eq "--audio with no display and no socket: the warning promises no sharing" "$(grep -c 'Audio is shared' "$tmp/out")" '0'
+assert_contains "--audio with no display and no socket: the missing socket is named" "$(cat "$tmp/out")" "no sound socket at $no_sock/pulse/native"
+shown --audio
+assert_contains "--audio with a display: the warning names socket and devices" "$(cat "$tmp/out2")" "host's sound socket and sound devices, microphone included"
+PATH="$stubs:$PATH" XDG_RUNTIME_DIR="$no_sock" HOST_SND_DIR="$snd" \
+    bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=xpra --no-start --audio "$proj2" >"$tmp/out2" 2>&1 || true
+assert_contains "--audio with a display and no socket: the warning names the devices" "$(cat "$tmp/out2")" "host's sound devices, microphone included"
+assert_eq "--audio with a display and no socket: the warning names no socket it lacks" "$(grep -c 'sound socket and' "$tmp/out2")" '0'
+assert_contains "--audio with a display and no socket: the device directory is mounted" "$(cat "$dir2/docker-compose.yml")" "$snd:/dev/snd"
 
 rm -rf "$x11_dir" 2>/dev/null
 
