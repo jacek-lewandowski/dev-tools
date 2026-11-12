@@ -2710,6 +2710,11 @@ mkdir -p "$AI_SANDBOX_ROOT/bin"
 while IFS= read -r helper; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
 done < <(ai_sandbox_helpers)
+# ai-delegate runs only inside the image; an earlier run installed a host copy.
+if [ -e "$AI_SANDBOX_ROOT/bin/ai-delegate" ] || [ -L "$AI_SANDBOX_ROOT/bin/ai-delegate" ]; then
+    rm -f "$AI_SANDBOX_ROOT/bin/ai-delegate"
+    log "removed $AI_SANDBOX_ROOT/bin/ai-delegate: it runs only inside the image"
+fi
 # ai-sandbox-lib.sh is sourced, not run.
 chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 # The knowledge seed travels with the helper, so 'ai-knowledge init' on a fresh

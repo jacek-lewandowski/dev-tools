@@ -199,7 +199,9 @@ SHARED
 
 # Every helper installed into $AI_SANDBOX_ROOT/bin. create-ai-sandbox.sh
 # installs from this list and ai-sandbox-migrate refreshes from it, so a helper
-# added here is picked up by both without either being edited.
+# added here is picked up by both without either being edited. Programs that
+# run only inside the image (ai-delegate) are deliberately not listed: the host
+# has no use for them and a host copy is one more file to keep current.
 ai_sandbox_helpers() {
     cat <<'HELPERS'
 ai-sandbox-lib.sh
@@ -213,7 +215,6 @@ ai-sandbox-account
 ai-sandbox-gc
 ai-knowledge
 ai-sandbox-extensions
-ai-delegate
 HELPERS
 }
 
