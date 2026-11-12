@@ -135,14 +135,7 @@ tree=$(sg_reports "$REPO_ROOT/bin/ai" | while IFS= read -r r; do
     case " $NAMED_EXCEPTIONS " in *" bin/ai/${r%:*} "*) continue ;; esac
     echo "$r"
 done)
-# Until the reports are read through the mirror like the proposals (the last gateway task), these reports are the
-# report part of the sync's own; the count is exact, so removing one without lowering it fails here, and that task
-# sets it to 0 and deletes the allowance.
-PENDING_AI_KNOWLEDGE=10
-assert_eq "no report outside the two bodies, the named exceptions and the sync's pending clone starts" \
-    "$(printf '%s\n' "$tree" | command grep -vc '^ai-knowledge:\|^$')" 0
-assert_eq "the sync's pending clone starts are exactly the allowance" \
-    "$(printf '%s\n' "$tree" | command grep -c '^ai-knowledge:')" "$PENDING_AI_KNOWLEDGE"
+assert_eq "no report outside the two bodies and the named exceptions" "$(printf '%s\n' "$tree" | command grep -vc '^$')" 0
 
 # a direct start planted in a copy of a real helper is reported by the same run that finds nothing in the real one
 mkdir -p "$tmp/planted"

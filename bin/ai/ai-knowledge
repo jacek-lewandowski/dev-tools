@@ -66,14 +66,6 @@ git_net() {
     GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
         AI_SANDBOX_GIT_TIMEOUT="$GIT_TIMEOUT" ai_sandbox_host_git "$repo" "$@"
 }
-# The same for a sandbox's clone, which the host may not run git in. Only the report
-# part of the clone-side sync still calls it, until reports are mirrored through the
-# confined fetch like proposals and this function goes.
-clone_git_net() {
-    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
-        timeout "$GIT_TIMEOUT" git "$@"
-}
-
 # Every network failure is remembered with its manual equivalent; print_hints
 # shows them once, at the end, in the order they have to run.
 NET_REASON=""; HINT_FETCH=(); HINT_PUSH=()
@@ -910,27 +902,32 @@ sync_clone() {
         done < <(hostgit for-each-ref --format='%(refname)' 'refs/remotes/origin/proposal/*')
     fi
 
-    # Reports live in refs/reports/<name>, not in refs/heads, so nothing above
-    # touches them. Every clone pushes its own; only the integrator fetches them
-    # and acts on tombstones (refs/reports-closed/<name>, made by the integrator).
-    # A writer clone drops a ref once its push succeeded; the integrator keeps it
-    # until it is closed.
-    # The integrator holds refs it fetched: one ls-remote tells which already
-    # match the remote, so a sync with nothing new pushes and counts nothing.
-    local rremote=""
-    if [ "$role" = integrator ] && [ "$net" = yes ]; then
-        rremote=$(clone_git_net -C "$CLONE" ls-remote origin 'refs/reports/*' 2>/dev/null) || rremote=""
-    fi
+    # Reports live in refs/reports/<name>, not in refs/heads, so nothing above touches them. The mirror
+    # holds the clone's reports and, for the integrator, its tombstones (refs/reports-closed/<name>).
+    # A writer's report is pushed once per commit: the host records the push in
+    # refs/pushed-reports/<id>/<name> and lists the report as pushed-report= while the clone holds that
+    # commit; the clone's command drops it, and the record goes once the mirror no longer holds the
+    # report. The integrator keeps its reports until closed: it pushes one the host's own copy of the
+    # remote's reports lacks, and deletes a tombstone's report on the remote under a lease on the
+    # tombstone's value. closed-report= is written only for a tombstone whose report a fetch of the
+    # remote's reports, made after those deletions, no longer finds (N1): a sync that did not reach
+    # the remote lists nothing, and the clone keeps both refs.
+    local rrec rn
     while IFS= read -r rref; do
         [ -n "$rref" ] || continue
-        rname=${rref#refs/reports/}
-        if [ "$role" = integrator ] && git -C "$CLONE" show-ref -q --verify "refs/reports-closed/$rname"; then continue; fi
+        rn=${rref#"refs/pushed-reports/$id/"}
+        hostgit show-ref -q --verify "$mirror/reports/$rn" || hostgit update-ref -d "$rref" || true
+    done < <(hostgit for-each-ref --format='%(refname)' "refs/pushed-reports/$id/")
+    while IFS= read -r rref; do
+        [ -n "$rref" ] || continue
+        rname=${rref#"$mirror/reports/"}
+        if [ "$role" = integrator ] && hostgit show-ref -q --verify "$mirror/reports-closed/$rname"; then continue; fi
         if ! [[ $rname =~ $REPORT_RE ]]; then
-            refused="$refused $rref (name must be refs/reports/<date>-<project>-<4 hex>)"; continue
+            refused="$refused refs/reports/$rname (name must be refs/reports/<date>-<project>-<4 hex>)"; continue
         fi
-        rtip=$(git -C "$CLONE" rev-parse -q --verify "$rref^{commit}" 2>/dev/null || true)
+        rtip=$(hostgit rev-parse -q --verify "$rref^{commit}" 2>/dev/null || true)
         if [ -z "$rtip" ]; then refused="$refused $rname (not a commit)"; continue; fi
-        rc=0; out=$(git -C "$CLONE" diff --name-only --no-renames "origin/main...$rtip" 2>/dev/null) || rc=$?
+        rc=0; out=$(hostgit diff --name-only --no-renames "$HOST_MAIN...$rtip" 2>/dev/null) || rc=$?
         if [ "$rc" -ne 0 ]; then
             refused="$refused $rname (no common history with main)"; continue
         fi
@@ -938,46 +935,63 @@ sync_clone() {
         if [ -n "$out" ]; then
             refused="$refused $rname changes $(printf '%s' "$out" | tr '\n' ' ')"; continue
         fi
-        if [ "$role" = integrator ] && grep -qxF "$rtip	$rref" <<<"$rremote"; then continue; fi
-        if [ "$net" = no ]; then
-            HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")"); pending=$((pending + 1)); continue
+        rrec="refs/pushed-reports/$id/$rname"
+        if [ "$role" = integrator ]; then
+            [ "$(hostgit rev-parse -q --verify "refs/origin-reports/$rname" 2>/dev/null || true)" != "$rtip" ] || continue
+        elif [ "$(hostgit rev-parse -q --verify "$rrec" 2>/dev/null || true)" = "$rtip" ]; then
+            STATUS_KEYS+=("pushed-report=$rname"); continue
         fi
-        rc=0; out=$(clone_git_net -C "$CLONE" push -q origin "$rref:$rref" 2>&1) || rc=$?
+        if [ "$net" = no ]; then
+            HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$rref:refs/reports/$rname")"); pending=$((pending + 1)); continue
+        fi
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$rtip:refs/reports/$rname" 2>&1) || rc=$?
         if [ "$rc" -ne 0 ]; then
-            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")")
+            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$rref:refs/reports/$rname")")
             pushfail="$pushfail $rname"; continue
         fi
         rpushed=$((rpushed + 1))
-        [ "$role" = integrator ] || git -C "$CLONE" update-ref -d "$rref"
-    done < <(git -C "$CLONE" for-each-ref --format='%(refname)' 'refs/reports/*')
+        if [ "$role" != integrator ]; then
+            hostgit update-ref "$rrec" "$rtip" || true
+            STATUS_KEYS+=("pushed-report=$rname")
+        fi
+    done < <(hostgit for-each-ref --format='%(refname)' "$mirror/reports/")
 
     if [ "$role" = integrator ] && [ "$net" = yes ]; then
-        # The lease is the tombstone's own value, the tip the integrator saw: a
-        # remote ref that moved since is kept, locally and remotely, and reported.
+        local -a rtombs=()
+        local rfail=" " rstale=" "
         while IFS= read -r rref; do
             [ -n "$rref" ] || continue
-            rname=${rref#refs/reports-closed/}
+            rname=${rref#"$mirror/reports-closed/"}
             [[ $rname =~ $REPORT_RE ]] || continue
-            rtip=$(git -C "$CLONE" rev-parse "$rref")
-            rc=0; out=$(clone_git_net -C "$CLONE" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
-            if [ "$rc" -ne 0 ]; then
-                case $out in
-                    *"remote ref does not exist"*) ;;
-                    *"stale info"*)
-                        # git answers "stale info" for a ref the remote no longer has
-                        # too; only a ref still there under another tip has moved.
-                        if clone_git_net -C "$CLONE" ls-remote origin "refs/reports/$rname" 2>/dev/null | grep -q .; then
-                            STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched"; continue
-                        fi ;;
-                    *) net_failed "$rc" "$out"; warn "cannot delete report $rname on the remote: $out"; continue ;;
-                esac
-            fi
-            git -C "$CLONE" update-ref -d "refs/reports/$rname"
-            git -C "$CLONE" update-ref -d "$rref"
-        done < <(git -C "$CLONE" for-each-ref --format='%(refname)' 'refs/reports-closed/*')
-        clone_git_net -C "$CLONE" fetch -q origin 'refs/reports/*:refs/reports/*' >/dev/null 2>&1 || true
-    elif [ "$role" = integrator ]; then
-        HINT_FETCH+=("$(hint git -C "$CLONE" fetch origin 'refs/reports/*:refs/reports/*')")
+            rtip=$(hostgit rev-parse -q --verify "$rref" 2>/dev/null || true)
+            [ -n "$rtip" ] || continue
+            rtombs+=("$rname")
+            rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
+            [ "$rc" -ne 0 ] || continue
+            case $out in
+                *"remote ref does not exist"*) ;;
+                *"stale info"*) rstale="$rstale$rname " ;;
+                *) net_failed "$rc" "$out"; warn "cannot delete report $rname on the remote: $out"; rfail="$rfail$rname " ;;
+            esac
+        done < <(hostgit for-each-ref --format='%(refname)' "$mirror/reports-closed/")
+        # git answers "stale info" for a report the remote no longer has too, so only this fetch tells
+        # a report that moved from one that is gone.
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin '+refs/reports/*:refs/origin-reports/*' 2>&1) || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            for rname in ${rtombs[@]+"${rtombs[@]}"}; do
+                case $rfail in *" $rname "*) continue ;; esac
+                if hostgit show-ref -q --verify "refs/origin-reports/$rname"; then
+                    case $rstale in *" $rname "*) STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched" ;; esac
+                    continue
+                fi
+                STATUS_KEYS+=("closed-report=$rname")
+            done
+        else
+            net_failed "$rc" "$out"
+            HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin '+refs/reports/*:refs/origin-reports/*')")
+        fi
+        # The origin carries the remote's reports as this sync left them.
+        refresh_origin "$sb" "$role" || STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }the knowledge origin could not be refreshed"
     fi
 
     if [ -n "$refused" ]; then

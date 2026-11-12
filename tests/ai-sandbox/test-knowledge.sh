@@ -860,13 +860,7 @@ rproj="$tmp/work/r"; mkdir -p "$rproj"; git -C "$rproj" init -q
 rdir=$(ai_sandbox_dir_for "$rproj"); mkdir -p "$rdir"
 ks "$rproj"
 rclone="$rdir/knowledge"
-ks "$integ"
-# Reports are still published from the clone by the host's older code, which fetches from and pushes to the
-# clone's origin: until reports are mirrored like proposals, the three clones of this section have the remote
-# as their origin, as the base design left them, and the sandbox's command is not run in it (it would adopt them back).
-for c in "$clone" "$iclone" "$rclone"; do
-    git -C "$c" remote set-url origin "file://$remote"; git -C "$c" fetch -q origin; git -C "$c" merge -q --ff-only origin/main 2>/dev/null || true
-done
+ks "$integ"; ks "$proj"
 assert_status "reports: integrator clone ok before the first report" "$iclone" "ok:"
 knowledge proposals --repo "$iclone" > "$tmp/proposals-before-reports.out" 2>&1
 
@@ -893,28 +887,45 @@ assert_eq "hook still refuses main" "$r" 1
 assert_contains "main refusal still names the skill" "$out" "propose-rule"
 git -C "$clone" checkout -q rules/global.md
 
-# R2/R4: an in-scope report is pushed to refs/reports/<name>, then dropped from the writer clone
+# R2/R4: an in-scope report is pushed once from the mirror to refs/reports/<name>; the host records the push in
+# refs/pushed-reports/<id>/<name> and lists the report as pushed-report=; the clone drops it when its command runs
+hostrepo="$AI_KNOWLEDGE_ROOT/main"
+mrecs() { git -C "$hostrepo" for-each-ref --format='%(refname)' "refs/pushed-reports/$1/" | wc -l | tr -d ' '; }   # <id>
 rr1=$(report_in "$clone" p 2026-11-01_2026-11-02 "")
-rr1_tip=$(git -C "$clone" rev-parse "$rr1")
+rr1_tip=$(git -C "$clone" rev-parse "$rr1"); rn_1=${rr1#refs/reports/}
 knowledge sync "$proj" >/dev/null 2>&1
 assert_eq "report pushed to refs/reports" "$(git -C "$remote" rev-parse "$rr1")" "$rr1_tip"
-assert_eq "report ref gone from the writer clone after the push" "$(has_ref "$clone" "$rr1")" no
+assert_eq "the host's sync leaves the report ref in the writer clone" "$(has_ref "$clone" "$rr1")" yes
+assert_eq "the host records the push: the commit, per name" "$(git -C "$hostrepo" rev-parse "refs/pushed-reports/$pid/$rn_1")" "$rr1_tip"
+assert_contains "the status lists the pushed report (pushed-report=)" "$(cat "$(status_file "$clone")")" "pushed-report=$rn_1"
 assert_eq "report file is the only change" "$(git -C "$remote" diff --name-only main "$rr1")" "reports/p/process-report-test-2026-11-01_2026-11-02.md"
 assert_contains "status counts the pushed report" "$(status_of "$clone")" "reports pushed 1"
 assert_status "status ok after a report" "$clone" "ok:"
 git -C "$remote" for-each-ref --format='%(refname)' 'refs/heads/*' | grep -q report && r=yes || r=no
 assert_eq "no branch carries the report" "$r" no
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "a second sync pushes nothing more (the record equals the commit)" "$(status_of "$clone" | grep -c 'reports pushed')" 0
+assert_contains "and still lists it while the clone holds it" "$(cat "$(status_file "$clone")")" "pushed-report=$rn_1"
+sbsync "$proj" >/dev/null
+assert_eq "report ref gone from the writer clone once its command ran" "$(has_ref "$clone" "$rr1")" no
+assert_eq "the record is still there until the next sync sees the clone without the report" "$(mrecs "$pid")" 1
+knowledge sync "$proj" >/dev/null 2>&1
+assert_eq "the record is dropped once the mirror no longer holds the report" "$(mrecs "$pid")" 0
+assert_eq "and the report stays on the remote" "$(has_ref "$remote" "$rr1")" yes
+assert_eq "and is not pushed again" "$(status_of "$clone" | grep -c 'reports pushed')" 0
 
 # the integrator receives it and lists it; a proposals-only run reads as before
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$integ"
 assert_eq "integrator holds the report ref" "$(git -C "$iclone" rev-parse "$rr1")" "$rr1_tip"
 assert_eq "reports listing" "$(knowledge reports --repo "$iclone")" "${rr1#refs/reports/} reports/p/process-report-test-2026-11-01_2026-11-02.md"
 assert_eq "proposals listing unchanged by reports" "$(knowledge proposals --repo "$iclone")" "$(cat "$tmp/proposals-before-reports.out")"
+knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "integrator status carries no report text for a no-op" "$(status_of "$iclone" | grep -c 'reports pushed')" 0
+assert_eq "a report the integrator only fetched is not recorded as a push" "$(mrecs "$(ai_sandbox_project_id "$integ")")" 0
 assert_contains "the report is readable from the ref" "$(git -C "$iclone" show "$rr1:reports/p/process-report-test-2026-11-01_2026-11-02.md")" "# report"
 
 # R5: no other clone ever receives it
-knowledge sync "$rproj" >/dev/null 2>&1
+ks "$rproj"
 assert_eq "existing second clone: no report ref" "$(git -C "$rclone" for-each-ref refs/reports | wc -l | tr -d ' ')" 0
 git -C "$rclone" cat-file -e "$rr1_tip" 2>/dev/null && r=yes || r=no
 assert_eq "existing second clone: no report commit" "$r" no
@@ -945,6 +956,7 @@ assert_contains "refusal names the report touching proposals/" "$(status_of "$cl
 assert_contains "refusal names the off-pattern name" "$(status_of "$clone")" "Bad_Name"
 assert_contains "refusal names the orphan" "$(status_of "$clone")" "$today-p-0f0f (no common history with main)"
 assert_contains "a proposal branch touching reports/ is refused" "$(status_of "$clone")" "proposal/$today-rsneak-abcd changes reports/p/x.md"
+assert_eq "a refused report has no record" "$(mrecs "$pid")" 0
 for rf in "$rr_bad_path" "$rr_prop_path" refs/reports/Bad_Name "refs/reports/$today-p-0f0f" "refs/heads/proposal/$today-rsneak-abcd"; do
     assert_eq "refused ref not on the remote: $rf" "$(has_ref "$remote" "$rf")" no
     git -C "$clone" update-ref -d "$rf"
@@ -958,62 +970,86 @@ assert_eq "mixed run: report pushed" "$(has_ref "$remote" "$rr2")" yes
 assert_eq "mixed run: proposal pushed" "$(has_ref "$remote" "refs/heads/$b_mix")" yes
 assert_status "mixed run: ok" "$clone" "ok:"
 assert_contains "mixed run: both counted" "$(status_of "$clone")" "pushed 1; closed 0; reports pushed 1"
+sbsync "$proj" >/dev/null
 
-# R2/R4: offline keeps the ref and counts it pending; the next online sync pushes and drops it
+# R2/R4: offline keeps the ref and counts it pending; the next online sync pushes it
 mv "$remote" "$remote.away"
 rr3=$(report_in "$clone" p 2026-11-09_2026-11-10 "")
+rn_3=${rr3#refs/reports/}
 knowledge sync "$proj" >"$tmp/roffline.out" 2>&1
 assert_status "offline status with a pending report" "$clone" "offline:"
 assert_contains "offline counts the pending report" "$(status_of "$clone")" "pending push: 1 branch(es)"
-assert_contains "pending report push printed" "$(cat "$tmp/roffline.out")" "git -C $clone push origin $rr3:$rr3"
+assert_contains "pending report push printed" "$(cat "$tmp/roffline.out")" "git -C $hostrepo push origin refs/sandbox/$pid/reports/$rn_3:$rr3"
 assert_eq "report still local while offline" "$(has_ref "$clone" "$rr3")" yes
+assert_eq "offline: no record of a push" "$(has_ref "$hostrepo" "refs/pushed-reports/$pid/$rn_3")" no
+assert_eq "offline: no pushed-report= line" "$(grep -c '^pushed-report=' "$(status_file "$clone")")" 0
 mv "$remote.away" "$remote"
 knowledge sync "$proj" >/dev/null 2>&1
 assert_eq "pending report pushed once online" "$(has_ref "$remote" "$rr3")" yes
-assert_eq "pending report dropped once pushed" "$(has_ref "$clone" "$rr3")" no
+assert_eq "pending report recorded and listed once pushed" "$(has_ref "$hostrepo" "refs/pushed-reports/$pid/$rn_3")$(grep -c "^pushed-report=$rn_3\$" "$(status_file "$clone")")" yes1
+sbsync "$proj" >/dev/null
+assert_eq "pending report dropped by the clone's command once pushed" "$(has_ref "$clone" "$rr3")" no
 
 # R4: a tombstone made in a non-integrator clone is ignored
 rr4=$(report_in "$clone" p 2026-11-11_2026-11-12 "")
 git -C "$clone" update-ref "refs/reports-closed/${rr4#refs/reports/}" "$rr4"
 knowledge sync "$proj" >/dev/null 2>&1
 assert_eq "a writer-clone tombstone does not delete the remote report" "$(has_ref "$remote" "$rr4")" yes
+assert_eq "a writer-clone tombstone writes no closed-report=" "$(grep -c '^closed-report=' "$(status_file "$clone")")" 0
 git -C "$clone" update-ref -d "refs/reports-closed/${rr4#refs/reports/}"
+sbsync "$proj" >/dev/null
 
-# R4: close = tombstone; offline keeps everything, the next sync completes it
-knowledge sync "$integ" >/dev/null 2>&1
+# R4: close = tombstone; offline keeps everything, the next sync completes it (the host writes closed-report=, the clone's command removes)
+ks "$integ"
 rn1=${rr1#refs/reports/}
 git -C "$iclone" update-ref "refs/reports-closed/$rn1" "$rr1"
 assert_eq "a tombstoned report is hidden from the listing" "$(knowledge reports --repo "$iclone" | grep -c "^$rn1 ")" 0
 assert_contains "other reports stay listed" "$(knowledge reports --repo "$iclone")" "${rr2#refs/reports/} "
+# the origin holds none of the remote's reports (a host that never fetched them): an offline sync must not read that as "closed"
+git -C "$hostrepo" for-each-ref --format='delete %(refname)' refs/origin-reports | git -C "$hostrepo" update-ref --stdin
 mv "$remote" "$remote.away"
 knowledge sync "$integ" >/dev/null 2>&1
+sbsync "$integ" >/dev/null
 assert_eq "offline close: local ref kept" "$(has_ref "$iclone" "$rr1")" yes
 assert_eq "offline close: tombstone kept" "$(has_ref "$iclone" "refs/reports-closed/$rn1")" yes
+assert_eq "offline close: no closed-report= (the origin lacked the report, which proves nothing)" "$(grep -c '^closed-report=' "$(status_file "$iclone")")" 0
 mv "$remote.away" "$remote"
 assert_eq "offline close: remote ref kept" "$(has_ref "$remote" "$rr1")" yes
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "close: remote ref deleted by the leased push" "$(has_ref "$remote" "$rr1")" no
+assert_eq "close: the status lists it closed-report=" "$(grep -c "^closed-report=$rn1\$" "$(status_file "$iclone")")" 1
+assert_eq "close: the host leaves the integrator's refs to the clone's command" "$(has_ref "$iclone" "$rr1")$(has_ref "$iclone" "refs/reports-closed/$rn1")" yesyes
+assert_eq "close: the host's refs/origin-reports no longer holds it" "$(has_ref "$hostrepo" "refs/origin-reports/$rn1")" no
+assert_eq "close: the integrator's origin no longer holds it" "$(has_ref "$idir/knowledge-origin.git" "refs/reports/$rn1")" no
+sbsync "$integ" >/dev/null
 assert_eq "close: integrator ref deleted" "$(has_ref "$iclone" "$rr1")" no
 assert_eq "close: tombstone deleted" "$(has_ref "$iclone" "refs/reports-closed/$rn1")" no
 assert_eq "close: other reports untouched" "$(has_ref "$remote" "$rr2")" yes
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "close: a later sync lists nothing and pushes nothing back" "$(grep -c '^closed-report=' "$(status_file "$iclone")")$(has_ref "$remote" "$rr1")" 0no
 
 # R4: a stale lease deletes nothing and says so
 rn2=${rr2#refs/reports/}
+ks "$integ"
 git -C "$iclone" update-ref "refs/reports-closed/$rn2" "$rr2"
 git -C "$remote" update-ref "$rr2" "$(git -C "$remote" rev-parse main)"
 knowledge sync "$integ" >"$tmp/rstale.out" 2>&1
+sbsync "$integ" >/dev/null
 assert_eq "stale lease: remote ref kept" "$(has_ref "$remote" "$rr2")" yes
 assert_eq "stale lease: local ref kept" "$(has_ref "$iclone" "$rr2")" yes
 assert_eq "stale lease: tombstone kept" "$(has_ref "$iclone" "refs/reports-closed/$rn2")" yes
 assert_contains "stale lease reported" "$(status_of "$iclone")" "$rn2"
-git -C "$iclone" update-ref -d "refs/reports-closed/$rn2"
+assert_eq "stale lease: no closed-report=" "$(grep -c '^closed-report=' "$(status_file "$iclone")")" 0
+git -C "$iclone" update-ref -d "refs/reports-closed/$rn2"; git -C "$iclone" update-ref -d "$rr2"; git -C "$remote" update-ref -d "$rr2"
+knowledge sync "$integ" >/dev/null 2>&1
 
 # R4: a tombstone whose name is off the pattern is ignored, even in the integrator clone
 git -C "$remote" update-ref refs/reports/Odd_Name "$(git -C "$remote" rev-parse main)"
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$integ"
 git -C "$iclone" update-ref refs/reports-closed/Odd_Name "$(git -C "$iclone" rev-parse main)"
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "off-pattern tombstone: remote ref kept" "$(has_ref "$remote" refs/reports/Odd_Name)" yes
+assert_eq "off-pattern tombstone: no closed-report=" "$(grep -c '^closed-report=' "$(status_file "$iclone")")" 0
 git -C "$iclone" update-ref -d refs/reports-closed/Odd_Name
 git -C "$remote" update-ref -d refs/reports/Odd_Name; git -C "$iclone" update-ref -d refs/reports/Odd_Name
 
@@ -1023,38 +1059,90 @@ rr_own=$(report_in "$iclone" dev-tools 2026-11-13_2026-11-14 "")
 rn_own=${rr_own#refs/reports/}
 git -C "$iclone" update-ref "refs/reports-closed/$rn_own" "$rr_own"
 knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "own report closed before a push: never on the remote" "$(has_ref "$remote" "$rr_own")" no
+assert_eq "own report closed before a push: listed closed-report=" "$(grep -c "^closed-report=$rn_own\$" "$(status_file "$iclone")")" 1
+sbsync "$integ" >/dev/null
 assert_eq "own report closed before a push: local ref gone" "$(has_ref "$iclone" "$rr_own")" no
 assert_eq "own report closed before a push: tombstone gone" "$(has_ref "$iclone" "refs/reports-closed/$rn_own")" no
-assert_eq "own report closed before a push: never on the remote" "$(has_ref "$remote" "$rr_own")" no
 assert_eq "own report closed: no false moved note" "$(status_of "$iclone" | grep -c 'not closed')" 0
 # (b) the remote ref was deleted but the local cleanup did not follow
 rr5=$(report_in "$clone" p 2026-11-15_2026-11-16 "")
-knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+knowledge sync "$proj" >/dev/null 2>&1; sbsync "$proj" >/dev/null; ks "$integ"
 git -C "$remote" update-ref -d "$rr5"
 git -C "$iclone" update-ref "refs/reports-closed/${rr5#refs/reports/}" "$rr5"
 knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "remote already deleted: listed closed-report=" "$(grep -c "^closed-report=${rr5#refs/reports/}\$" "$(status_file "$iclone")")" 1
+sbsync "$integ" >/dev/null
 assert_eq "remote already deleted: local ref gone" "$(has_ref "$iclone" "$rr5")" no
 assert_eq "remote already deleted: tombstone gone" "$(has_ref "$iclone" "refs/reports-closed/${rr5#refs/reports/}")" no
 # (c) a moved remote ref is still kept (stale lease case above), and M1: a no-op integrator sync pushes nothing
 rr6=$(report_in "$clone" p 2026-11-17_2026-11-18 "")
-knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+knowledge sync "$proj" >/dev/null 2>&1; sbsync "$proj" >/dev/null; ks "$integ"
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "no-op integrator sync does not count fetched reports as pushed" "$(status_of "$iclone" | grep -c 'reports pushed')" 0
 git -C "$iclone" update-ref "refs/reports-closed/${rr6#refs/reports/}" "$rr6"
 git -C "$remote" update-ref "$rr6" "$(git -C "$remote" rev-parse main)"
 knowledge sync "$integ" >/dev/null 2>&1
+sbsync "$integ" >/dev/null
 assert_eq "moved remote ref: local ref kept" "$(has_ref "$iclone" "$rr6")" yes
 assert_contains "moved remote ref: reported" "$(status_of "$iclone")" "${rr6#refs/reports/}"
 git -C "$iclone" update-ref -d "refs/reports-closed/${rr6#refs/reports/}"; git -C "$iclone" update-ref -d "$rr6"
 git -C "$remote" update-ref -d "$rr6"
+knowledge sync "$integ" >/dev/null 2>&1
 # an integrator-written report that the remote lacks is pushed and kept until closed
 rr7=$(report_in "$iclone" dev-tools 2026-11-19_2026-11-20 "")
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "integrator's own open report pushed" "$(has_ref "$remote" "$rr7")" yes
 assert_eq "integrator's own open report kept" "$(has_ref "$iclone" "$rr7")" yes
 assert_contains "integrator push of its own report counted" "$(status_of "$iclone")" "reports pushed"
+sbsync "$integ" >/dev/null
+assert_eq "integrator's own open report is not dropped by its command" "$(has_ref "$iclone" "$rr7")" yes
 git -C "$iclone" update-ref -d "$rr7"; git -C "$remote" update-ref -d "$rr7"
+knowledge sync "$integ" >/dev/null 2>&1
 assert_contains "doctor labels reports by role" "$(cat "$AI_SANDBOX_ROOT/image/build/sandbox-doctor")" 's/^role=//p'
+
+# O18 (N1): a pending close whose first sync does not reach the remote (the clone's lock busy): both refs stay in the
+# clone and the report on the remote; the next sync that reaches the remote deletes it, lists it, and the command removes both
+rr8=$(report_in "$clone" p 2026-11-21_2026-11-22 "")
+rn_8=${rr8#refs/reports/}
+knowledge sync "$proj" >/dev/null 2>&1; sbsync "$proj" >/dev/null; ks "$integ"
+git -C "$iclone" update-ref "refs/reports-closed/$rn_8" "$rr8"
+rbusyd="$tmp/rbusyd"; mkdir -p "$rbusyd"; printf '#!/bin/sh\nexit 1\n' > "$rbusyd/flock"; chmod +x "$rbusyd/flock"
+PATH="$rbusyd:$PATH" knowledge sync "$integ" >/dev/null 2>&1
+sbsync "$integ" >/dev/null
+assert_eq "pending close, lock busy: both refs stay in the clone" "$(has_ref "$iclone" "$rr8")$(has_ref "$iclone" "refs/reports-closed/$rn_8")" yesyes
+assert_eq "pending close, lock busy: the report stays on the remote" "$(has_ref "$remote" "$rr8")" yes
+knowledge sync "$integ" >/dev/null 2>&1
+assert_eq "pending close: the next sync deletes it on the remote and lists it" "$(has_ref "$remote" "$rr8")$(grep -c "^closed-report=$rn_8\$" "$(status_file "$iclone")")" no1
+sbsync "$integ" >/dev/null
+assert_eq "pending close: the command then removes both refs" "$(has_ref "$iclone" "$rr8")$(has_ref "$iclone" "refs/reports-closed/$rn_8")" nono
+
+# O20: a report is published once, also when its container does not run the command: the integrator closes it, the
+# remote drops it, and no later sync pushes it back; its record goes once the clone no longer holds the report
+o20p="$tmp/work/o20"; mkdir -p "$o20p"; git -C "$o20p" init -q
+o20dir=$(ai_sandbox_dir_for "$o20p"); o20id=$(ai_sandbox_project_id "$o20p"); mkdir -p "$o20dir"
+printf 'services: {}\n' > "$o20dir/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$o20p" > "$o20dir/.env"
+ks "$o20p"; o20c="$o20dir/knowledge"
+for o20case in stopped stamp1; do
+    case $o20case in stopped) o20ft=2026-12-01_2026-12-02 ;; *) o20ft=2026-12-03_2026-12-04 ;; esac
+    rr20=$(report_in "$o20c" o20 "$o20ft" ""); rn20=${rr20#refs/reports/}
+    [ "$o20case" != stamp1 ] || printf 'SANDBOX_KNOWLEDGE=1\nSANDBOX_PROJECT_DIR=%s\n' "$o20p" > "$o20dir/.env"
+    knowledge sync "$o20p" >/dev/null 2>&1                    # no sbsync: the container does not run its command
+    assert_eq "O20 ($o20case): the report reached the remote" "$(has_ref "$remote" "$rr20")" yes
+    ks "$integ"; git -C "$iclone" update-ref "refs/reports-closed/$rn20" "$rr20"
+    ks "$integ"                                                  # the integrator closes it: the remote drops it
+    assert_eq "O20 ($o20case): the integrator closed it on the remote" "$(has_ref "$remote" "$rr20")" no
+    knowledge sync --all >/dev/null 2>&1
+    knowledge sync "$o20p" >/dev/null 2>&1
+    assert_eq "O20 ($o20case): not pushed again by sync --all and sync <project>" "$(has_ref "$remote" "$rr20")" no
+    assert_eq "O20 ($o20case): still listed pushed-report= while the clone holds it" "$(grep -c "^pushed-report=$rn20\$" "$(status_file "$o20c")")" 1
+    assert_eq "O20 ($o20case): its record is still there" "$(has_ref "$hostrepo" "refs/pushed-reports/$o20id/$rn20")" yes
+    git -C "$o20c" update-ref -d "$rr20"                         # the clone no longer holds it
+    knowledge sync "$o20p" >/dev/null 2>&1
+    assert_eq "O20 ($o20case): its record is gone after the next sync" "$(has_ref "$hostrepo" "refs/pushed-reports/$o20id/$rn20")" no
+done
+rm -rf "$o20dir"
+git -C "$hostrepo" for-each-ref --format='delete %(refname)' "refs/sandbox/$o20id" | git -C "$hostrepo" update-ref --stdin
 
 # R5 again after a file, sync, close, sync cycle
 assert_eq "cycle: remote main has no reports/ history" "$(git -C "$remote" log --full-history --oneline main -- reports/ | wc -l | tr -d ' ')" 0
@@ -1405,12 +1493,18 @@ ks "$gwp"
 gwc="$gwdir/knowledge"; gwm="$tmp/gw-markers"; mkdir -p "$gwm"
 assert_file "gateway: the clone exists (made by the sandbox's command)" "$gwc/.git"
 bgw=$(propose_in "$gwc" gateway)                                  # an in-scope proposal: the push must still go
+rgw=$(report_in "$gwc" gateway 2026-12-05_2026-12-06 "")           # and an in-scope report
 # a branch that is in scope only against a main the clone supplies: its parent carries a change to rules/
 git -C "$gwc" checkout -q -b gw-evil-base main
 echo '- planted by the clone' >> "$gwc/rules/global.md"; git -C "$gwc" commit -q --no-verify -am "planted rule"; gwevil=$(git -C "$gwc" rev-parse HEAD)
 git -C "$gwc" checkout -q -b "proposal/$today-gwevil-abcd"
 echo e > "$gwc/proposals/$today-gwevil.md"; git -C "$gwc" add -A; git -C "$gwc" commit -q --no-verify -m "evil proposal"
 git -C "$gwc" checkout -q main; git -C "$gwc" branch -q -D gw-evil-base
+# a report in scope only against the main the clone supplies, likewise
+git -C "$gwc" checkout -q -b gw-evil-report "$gwevil"
+mkdir -p "$gwc/reports/gw"; echo e > "$gwc/reports/gw/evil.md"; git -C "$gwc" add -f reports/gw/evil.md; git -C "$gwc" commit -q --no-verify -m "evil report"
+git -C "$gwc" update-ref "refs/reports/$today-gwevil-abcd" HEAD
+git -C "$gwc" checkout -q main; git -C "$gwc" branch -q -D gw-evil-report
 git -C "$gwc" update-ref refs/remotes/origin/main "$gwevil"       # the clone's idea of the remote's main
 git -C "$gwc" update-ref refs/heads/main "$gwevil"                # a proposing clone's main, ahead with the planted rule
 for r in refs/tags/main refs/tags/origin/main refs/stash refs/notes/commits refs/odd/kind; do git -C "$gwc" update-ref "$r" "$gwevil"; done
@@ -1467,26 +1561,27 @@ assert_eq "O7: the clone's url rewrite and push url reached nothing (the trap re
 assert_eq "O7: the in-scope proposal reached the remote" "$(git -C "$remote" rev-parse "$bgw" 2>/dev/null)" "$(git -C "$gwc" rev-parse "$bgw")"
 assert_eq "O7: the proposal that is in scope only against the main the clone supplies is not on the remote" "$(git -C "$remote" show-ref -q "refs/heads/proposal/$today-gwevil-abcd" && echo yes || echo no)" no
 assert_contains "O7: it is refused by name" "$(status_of "$gwc")" "proposal/$today-gwevil-abcd changes rules/global.md"
-assert_eq "O7: nothing else reached the remote" "$(git -C "$remote" for-each-ref --format='%(refname) %(objectname)' | grep -vxF "refs/heads/$bgw $(git -C "$gwc" rev-parse "$bgw")")" "$gw_remote_before"
+assert_eq "O7: the in-scope report reached the remote" "$(git -C "$remote" rev-parse "$rgw" 2>/dev/null)" "$(git -C "$gwc" rev-parse "$rgw")"
+assert_eq "O7: the report that is in scope only against the main the clone supplies is not on the remote" "$(git -C "$remote" show-ref -q "refs/reports/$today-gwevil-abcd" && echo yes || echo no)" no
+assert_contains "O7: it is refused by name" "$(status_of "$gwc")" " $today-gwevil-abcd changes rules/global.md"
+assert_eq "O7: nothing else reached the remote" "$(git -C "$remote" for-each-ref --format='%(refname) %(objectname)' | grep -vxF -e "refs/heads/$bgw $(git -C "$gwc" rev-parse "$bgw")" -e "$rgw $(git -C "$gwc" rev-parse "$rgw")")" "$gw_remote_before"
 assert_eq "O7: the remote's main is unchanged (a proposing clone's main does not reach it)" "$(git -C "$remote" rev-parse main)" "$(printf '%s\n' "$gw_remote_before" | sed -n 's/^refs\/heads\/main //p')"
 assert_ne "(the mirror holds the planted main, as data)" "$(git -C "$hostrepo" rev-parse -q --verify "refs/sandbox/$gwid/heads/main" 2>/dev/null)" ""
-assert_eq "O7: the stub remote saw one update, the in-scope proposal, and every update is a creation or a fast-forward" \
-    "$(awk -v ref="refs/heads/$bgw" '$1!=ref{bad++} END{print NR+0 " " bad+0}' "$tmp/gw-updates.log")" "1 0"
+assert_eq "O7: the stub remote saw two updates, the in-scope proposal and the in-scope report, and every update is a creation or a fast-forward" \
+    "$(awk -v ref="refs/heads/$bgw" -v rref="$rgw" '$1!=ref && $1!=rref{bad++} END{print NR+0 " " bad+0}' "$tmp/gw-updates.log")" "2 0"
 while read -r ref old new; do
     case $old in 0*) continue ;; esac
     git -C "$remote" merge-base --is-ancestor "$old" "$new" 2>/dev/null && r=ff || r=forced
     assert_eq "O7: the update of $ref is no forced update" "$r" ff
 done < "$tmp/gw-updates.log"
 # a path is inside the clone or the project when it is that directory or below it (the origin beside the clone is not)
-# Until the reports are read through the mirror too (the next task), the report part of the sync still reads the
-# clone's refs/reports with one host git; nothing else of the host may.
 gw_other=$(awk -F'|' -v k="$gwc" -v p="$gwp" '
     function inside(d) { return d == k || d == p || index(d, k "/") == 1 || index(d, p "/") == 1 }
     { n = split($2, a, " "); hit = inside($1)
       for (i = 1; i < n; i++) if (a[i] == "-C" && inside(a[i+1])) hit = 1
-      if (hit && index($2, "refs/reports") == 0) bad++ }
+      if (hit) bad++ }
     END { print bad+0 }' "$GWLOG")
-assert_eq "O7: no host git process but the reports' own had the clone or the project as repository, -C or working directory" "$gw_other" 0
+assert_eq "O7: no host git process had the clone or the project as repository, -C or working directory" "$gw_other" 0
 assert_ne "(control: the recorder saw git processes)" "$(wc -l < "$GWLOG" | tr -d ' ')" 0
 assert_eq "O8: nothing below <sandbox>/knowledge changed (path, type, size, mode, mtime, content)" "$(snapshot "$gwc")" "$gw_before"
 assert_eq "O8: no link planted where the base design wrote points at a changed target" "$(sha256sum "$tmp"/gw-targets/*)" "$gw_targets"
