@@ -423,6 +423,61 @@ ai_sandbox_confined_git() {   # <root> <subdirectory> <git args...>
     "$@"
 }
 
+# C-GIT, every fetch from a tree a sandbox can write. The host-owned <repository> is
+# an ordinary git client of an untrusted server: the remote program of the fetch is
+# ai_sandbox_confined_git (upload-pack, in the throwaway container), the URL is
+# <root>/<subdirectory>, and no tag is followed, so the fetch changes refs of
+# <repository> only at the destinations of its refspecs: each <ref pattern>
+# refs/<name>/* lands as <prefix>/<name>/*, pruned below it. <prefix> is a full ref
+# name below refs/, outside refs/heads/ and refs/tags/, and holds refs of this one
+# tree only. Exit: ai_sandbox_host_git's (3 for a sandbox-writable <repository>), 125
+# when no sandbox image exists or the container cannot start, 124 when
+# AI_SANDBOX_GIT_TIMEOUT expires, 2 for arguments that do not fit the contract.
+# git answers 128 when its remote program fails, whatever that program's own status
+# was, so the program records its status in a file this function reads afterwards.
+ai_sandbox_confined_fetch() {   # <repository> <prefix> <root> <subdirectory> <ref pattern>...
+    local repo=$1 prefix=$2 root=$3 sub=$4 pat name real tmpd stat prog rc=0 crc outer lib
+    local -a specs=()
+    shift 4
+    case $prefix in
+        refs/heads|refs/heads/*|refs/tags|refs/tags/*|refs/|"") echo "ai_sandbox_confined_fetch: bad prefix: $prefix" >&2; return 2 ;;
+        refs/*) ai_sandbox_host_git - check-ref-format "$prefix" 2>/dev/null || { echo "ai_sandbox_confined_fetch: bad prefix: $prefix" >&2; return 2; } ;;
+        *) echo "ai_sandbox_confined_fetch: bad prefix: $prefix" >&2; return 2 ;;
+    esac
+    case $sub in ""|/*|..|../*|*/..|*/../*) echo "ai_sandbox_confined_fetch: bad subdirectory: $sub" >&2; return 2 ;; esac
+    [ $# -gt 0 ] || { echo "ai_sandbox_confined_fetch: no ref pattern" >&2; return 2; }
+    for pat in "$@"; do
+        name=${pat#refs/}; name=${name%/\*}
+        case $pat in
+            refs/*/\*) ;;
+            *) echo "ai_sandbox_confined_fetch: bad ref pattern: $pat" >&2; return 2 ;;
+        esac
+        case $name in ""|*[!A-Za-z0-9._-]*|.*) echo "ai_sandbox_confined_fetch: bad ref pattern: $pat" >&2; return 2 ;; esac
+        specs+=("+refs/$name/*:$prefix/$name/*")
+    done
+    real=$(readlink -m -- "$root" 2>/dev/null) && [ -n "$real" ] || { echo "ai_sandbox_confined_fetch: no such root: $root" >&2; return 125; }
+    lib=$(readlink -f -- "${BASH_SOURCE[0]}")
+    tmpd=$(mktemp -d) || return 125
+    stat="$tmpd/status"
+    prog="AI_SANDBOX_FETCH_STATUS=$(printf '%q' "$stat")"
+    outer=${AI_SANDBOX_GIT_TIMEOUT:-}
+    if [ -n "$outer" ]; then
+        prog="$prog AI_SANDBOX_GIT_TIMEOUT=$(printf '%q' "$outer")"
+        # a backstop only: the container's own limit fires first and is the one reported
+        case $outer in *[!0-9]*) ;; *) outer=$((outer + 10)) ;; esac
+    fi
+    prog="$prog bash -c $(printf '%q' '. "$0"; ai_sandbox_confined_git "$@"; rc=$?; printf %s "$rc" > "$AI_SANDBOX_FETCH_STATUS"; exit "$rc"')"
+    prog="$prog $(printf '%q %q %q upload-pack' "$lib" "$real" "$sub")"
+    AI_SANDBOX_GIT_TIMEOUT=$outer ai_sandbox_host_git "$repo" fetch -q --no-tags --prune \
+        --upload-pack="$prog" "$real/$sub" "${specs[@]}" || rc=$?
+    if [ "$rc" -ne 0 ] && [ -s "$stat" ]; then
+        crc=$(cat "$stat")
+        case $crc in 124|125) rc=$crc ;; esac
+    fi
+    rm -rf -- "$tmpd"
+    return "$rc"
+}
+
 # True when the sandbox container NAME is running. Without docker on PATH
 # nothing can be running, so the answer is no rather than an error.
 ai_sandbox_container_running() {

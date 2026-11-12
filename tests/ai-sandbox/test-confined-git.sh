@@ -279,5 +279,124 @@ AI_SANDBOX_GIT_TIMEOUT=5 confined "$served" repo log --format=%s >/dev/null 2>&1
 assert_eq "confined: a run inside the limit keeps git's status" "$rc" 0
 assert_eq "confined: and removes nothing" "$(grep -c '^rm ' "$DOCKER_STUB_LOG")" 0
 
+# --- ai_sandbox_confined_fetch (O19, called directly): a fetch from a tree a sandbox can write, through
+# --- the confined git as the remote program, that changes refs of the host-owned repository only below
+# --- its prefix; a served tree holding a ref of every kind a clone can hold
+srv="$tmp/fetch-root"; mkdir -p "$srv"; git init -q "$srv/knowledge"
+sg() { git -C "$srv/knowledge" "$@"; }
+sg commit -q --allow-empty -m "served one"; c1=$(sg rev-parse HEAD)
+sg commit -q --allow-empty -m "served two"; c2=$(sg rev-parse HEAD)
+sg branch proposal/p1 "$c1"
+sg update-ref refs/reports/r1 "$c1"; sg update-ref refs/reports-closed/r1 "$c2"
+# refs a host could resolve as its own short names, and refs of kinds no pattern asks for
+sg update-ref refs/tags/main "$c2"; sg update-ref refs/tags/origin/main "$c2"; sg update-ref refs/remotes/origin/main "$c2"
+sg update-ref refs/stash "$c1"; sg update-ref refs/notes/commits "$c1"; sg update-ref refs/odd/kind "$c1"
+hostrepo="$tmp/fetch-host.git"; git init -q --bare "$hostrepo"
+hg() { git -C "$hostrepo" "$@"; }
+hg fetch -q --no-tags "$srv/knowledge" "$c2:refs/heads/main" 2>/dev/null
+hg update-ref refs/remotes/origin/main "$c1"; hg update-ref refs/tags/t0 "$c1"
+hg update-ref refs/sandbox/other/heads/main "$c1"; hg update-ref refs/sandbox/other/reports/old "$c1"
+hg update-ref refs/pushed-reports/other/old "$c1"
+refs_of() { hg for-each-ref --format='%(refname) %(objectname)' "$@" | LC_ALL=C sort; }
+fetchc() { DOCKER_STUB_IMAGES="${IMAGES-$ubase}" PATH="$rec:$PATH" ai_sandbox_confined_fetch "$@"; }
+PATS=('refs/heads/*' 'refs/reports/*' 'refs/reports-closed/*')
+other_before=$(refs_of refs/sandbox/other refs/pushed-reports)
+outside_before=$(refs_of | grep -v '^refs/sandbox/a/')
+
+: > "$DOCKER_STUB_LOG"; : > "$GITLOG"
+fetchc "$hostrepo" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >"$tmp/cf.out" 2>&1; rc=$?
+assert_eq "fetch: exit 0" "$rc" 0
+assert_eq "fetch: prints nothing" "$(cat "$tmp/cf.out")" ""
+assert_eq "fetch: heads arrive below <prefix>/heads" "$(refs_of refs/sandbox/a/heads)" "$(printf 'refs/sandbox/a/heads/main %s\nrefs/sandbox/a/heads/proposal/p1 %s' "$c2" "$c1")"
+assert_eq "fetch: reports arrive below <prefix>/reports" "$(refs_of refs/sandbox/a/reports)" "refs/sandbox/a/reports/r1 $c1"
+assert_eq "fetch: tombstones arrive below <prefix>/reports-closed" "$(refs_of refs/sandbox/a/reports-closed)" "refs/sandbox/a/reports-closed/r1 $c2"
+assert_eq "fetch: nothing else is below <prefix>" "$(refs_of refs/sandbox/a | grep -vc '^refs/sandbox/a/\(heads\|reports\|reports-closed\)/')" 0
+assert_eq "fetch: no ref outside <prefix> changed, none was added" "$(refs_of | grep -v '^refs/sandbox/a/')" "$outside_before"
+assert_eq "fetch: a second prefix and the pushed-report records are as they were" "$(refs_of refs/sandbox/other refs/pushed-reports)" "$other_before"
+assert_eq "fetch: no served tag arrived as a host tag" "$(hg for-each-ref --format='%(refname)' refs/tags | tr '\n' ' ')" "refs/tags/t0 "
+assert_eq "fetch: the short name origin/main still resolves to the host's own ref" "$(hg rev-parse origin/main)" "$c1"
+# the form of the run: B1a's options, upload-pack as git's program, no tag followed
+line=$(grep '^run ' "$DOCKER_STUB_LOG" | head -1)
+assert_eq "fetch: one container run" "$(grep -c '^run ' "$DOCKER_STUB_LOG")" 1
+assert_contains "fetch: removed afterwards, stdin attached" "$line" "run --rm -i "
+assert_contains "fetch: no image pull, no network" "$line" "--pull never --network none"
+assert_contains "fetch: the host's uid and gid" "$line" "--user $(id -u):$(id -g) "
+assert_contains "fetch: the root is the only mount, read-only at its own path" "$line" " -v $srv:$srv:ro "
+assert_eq "fetch: only one mount" "$(printf '%s' "$line" | grep -o ' -v \| --mount\| --volume' | wc -l | tr -d ' ')" 1
+assert_contains "fetch: the image's entrypoint is git" "$line" "--entrypoint git "
+assert_contains "fetch: the remote program is upload-pack on the served path" "$line" " $ubase upload-pack $srv/knowledge"
+for bad in --env-file ' -e ' --env= ' --env ' --privileged --cap-add --device --network=host; do
+    case "$line" in *"$bad"*) TESTS_RUN=$((TESTS_RUN + 1)); _fail "fetch: no '$bad' option" "$line" ;;
+                    *) TESTS_RUN=$((TESTS_RUN + 1)); _pass "fetch: no '$bad' option" ;; esac
+done
+gl=$(grep '|fetch ' "$GITLOG" | head -1)
+assert_eq "fetch: git runs in the host-owned repository" "${gl%%|*}" "$(readlink -f "$hostrepo")"
+assert_contains "fetch: no tag followed, pruned, by a remote program" "$gl" "fetch -q --no-tags --prune --upload-pack="
+assert_contains "fetch: the refspecs name only the namespace" "$gl" "+refs/heads/*:refs/sandbox/a/heads/* +refs/reports/*:refs/sandbox/a/reports/* +refs/reports-closed/*:refs/sandbox/a/reports-closed/*"
+assert_eq "fetch: no other git ran in the host-owned repository (the host's one fetch)" "$(grep -c "^$(readlink -f "$hostrepo")|" "$GITLOG")" 1
+
+# a ref the served tree no longer holds is dropped below <prefix>, and only there
+sg update-ref -d refs/heads/proposal/p1; sg update-ref -d refs/reports/r1
+fetchc "$hostrepo" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >/dev/null 2>&1; rc=$?
+assert_eq "fetch again: exit 0" "$rc" 0
+assert_eq "fetch again: a deleted head is pruned" "$(refs_of refs/sandbox/a/heads)" "refs/sandbox/a/heads/main $c2"
+assert_eq "fetch again: a deleted report is pruned" "$(refs_of refs/sandbox/a/reports | wc -l | tr -d ' ')" 0
+assert_eq "fetch again: the second prefix is as it was" "$(refs_of refs/sandbox/other refs/pushed-reports)" "$other_before"
+assert_eq "fetch again: nothing outside <prefix> changed" "$(refs_of | grep -v '^refs/sandbox/a/')" "$outside_before"
+# a second prefix fetched from the same tree does not touch the first
+fetchc "$hostrepo" refs/sandbox/b "$srv" knowledge "${PATS[@]}" >/dev/null 2>&1
+assert_eq "second prefix: delivered" "$(refs_of refs/sandbox/b/heads)" "refs/sandbox/b/heads/main $c2"
+assert_eq "second prefix: the first is as it was" "$(refs_of refs/sandbox/a/heads)" "refs/sandbox/a/heads/main $c2"
+hg update-ref -d refs/sandbox/b/heads/main; hg update-ref -d refs/sandbox/b/reports-closed/r1
+# a root given through a link
+ln -s "$srv" "$tmp/fetch-root-link"
+: > "$DOCKER_STUB_LOG"
+fetchc "$hostrepo" refs/sandbox/a "$tmp/fetch-root-link" knowledge "${PATS[@]}" >/dev/null 2>&1; rc=$?
+assert_eq "fetch: a root given through a link works" "$rc" 0
+assert_contains "fetch: and is mounted by its resolved path" "$(grep '^run ' "$DOCKER_STUB_LOG" | head -1)" " -v $srv:$srv:ro "
+
+# the negative case: the same fetch without the confinement (no --no-tags, no namespace) sees a ref outside it
+negrepo="$tmp/fetch-neg.git"; git init -q --bare "$negrepo"
+git -C "$negrepo" fetch -q --prune "$srv/knowledge" '+refs/heads/*:refs/sandbox/a/heads/*' >/dev/null 2>&1
+assert_ne "negative control: without --no-tags a served tag lands outside the namespace" \
+    "$(git -C "$negrepo" for-each-ref --format='%(refname)' | grep -v '^refs/sandbox/a/' | tr '\n' ' ')" ""
+
+# exit statuses: 3 for a repository a sandbox can write (no git, no container), 125 without an image, 124 on the limit
+: > "$DOCKER_STUB_LOG"; : > "$GITLOG"
+git init -q "$sb2/knowledge"
+fetchc "$sb2/knowledge" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >"$tmp/cf-w.out" 2>&1; rc=$?
+assert_eq "fetch: a sandbox-writable repository gives 3" "$rc" 3
+assert_eq "fetch: and starts no git in it" "$(grep -c "^$(readlink -f "$sb2/knowledge")|" "$GITLOG")" 0
+assert_eq "fetch: and no container" "$(grep -c '^run ' "$DOCKER_STUB_LOG")" 0
+: > "$DOCKER_STUB_LOG"; before=$(refs_of)
+IMAGES=none fetchc "$hostrepo" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >"$tmp/cf-i.out" 2>&1; rc=$?
+assert_eq "fetch: no image gives 125" "$rc" 125
+assert_contains "fetch: and says what is missing" "$(cat "$tmp/cf-i.out")" "no sandbox image"
+assert_eq "fetch: and changes no ref" "$(refs_of)" "$before"
+DOCKER_STUB_IMAGES="$ubase" DOCKER_STUB_RUN_EXIT=125 ai_sandbox_confined_fetch "$hostrepo" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >/dev/null 2>&1; rc=$?
+assert_eq "fetch: a container that cannot start gives 125" "$rc" 125
+slowup="$tmp/slowup"; mkdir -p "$slowup"
+# a container that hangs (git prepends its own directory to PATH for the remote program, so the stand-in is docker)
+printf '#!/bin/sh\ncase "$1" in run) exec sleep 10 ;; esac\nexec %s "$@"\n' "$(command -v docker)" > "$slowup/docker"; chmod +x "$slowup/docker"
+: > "$DOCKER_STUB_LOG"; SECONDS=0
+DOCKER_STUB_IMAGES="$ubase" PATH="$slowup:$PATH" AI_SANDBOX_GIT_TIMEOUT=1 ai_sandbox_confined_fetch "$hostrepo" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >/dev/null 2>&1; rc=$?
+assert_eq "fetch: a run that exceeds AI_SANDBOX_GIT_TIMEOUT exits 124" "$rc" 124
+assert_eq "fetch: and was cut short" "$([ "$SECONDS" -lt 9 ] && echo yes || echo no)" yes
+assert_contains "fetch: and the named container is removed" "$(stub_docker_log)" "rm -f ai-sandbox-git-"
+AI_SANDBOX_GIT_TIMEOUT=20 fetchc "$hostrepo" refs/sandbox/a "$srv" knowledge "${PATS[@]}" >/dev/null 2>&1; rc=$?
+assert_eq "fetch: a run inside the limit exits 0" "$rc" 0
+# a served path that is no repository: git's own failure, neither 124 nor 125
+fetchc "$hostrepo" refs/sandbox/a "$srv" no-such-dir "${PATS[@]}" >/dev/null 2>&1; rc=$?
+assert_ne "fetch: a failing git is not reported as success" "$rc" 0
+assert_eq "fetch: nor as a container problem" "$([ "$rc" -eq 124 ] || [ "$rc" -eq 125 ] && echo container || echo git)" git
+# arguments that do not fit the contract
+for args in "refs/heads/x|$srv|knowledge|refs/heads/*" "refs/tags/x|$srv|knowledge|refs/heads/*" "other|$srv|knowledge|refs/heads/*" \
+            "refs/sandbox/a|$srv|..|refs/heads/*" "refs/sandbox/a|$srv|/abs|refs/heads/*" "refs/sandbox/a|$srv|knowledge|heads/*" \
+            "refs/sandbox/a|$srv|knowledge|refs/heads/x" "refs/sandbox/a|$srv|knowledge|refs/a/b/*" "refs/sandbox/a|$srv|knowledge"; do
+    IFS='|' read -r -a av <<<"$args"
+    fetchc "$hostrepo" "${av[@]}" >/dev/null 2>&1; rc=$?
+    assert_eq "fetch: arguments outside the contract give 2 ($args)" "$rc" 2
+done
+
 rm -rf "$tmp"
 finish
