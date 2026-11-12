@@ -809,12 +809,14 @@ sync_clone() {
     fi
 
     # Where the clone's main stands against the host's own: ahead or equal is the
-    # integrator's to push; anything else has local commits the remote lacks.
+    # integrator's to push; behind is the sandbox's command to fast-forward, never
+    # pushed (the remote would reject it); anything else has local commits the remote lacks.
     mmain=$(hostgit rev-parse -q --verify "$mirror/heads/main^{commit}" 2>/dev/null || true)
     hmain=$(hostgit rev-parse -q --verify "$HOST_MAIN^{commit}" 2>/dev/null || true)
     if [ -n "$mmain" ] && [ -n "$hmain" ]; then
         if [ "$role" = integrator ] && hostgit merge-base --is-ancestor "$hmain" "$mmain" 2>/dev/null; then :
-        elif ! hostgit merge-base --is-ancestor "$mmain" "$hmain" 2>/dev/null; then main_state=diverged
+        elif hostgit merge-base --is-ancestor "$mmain" "$hmain" 2>/dev/null; then main_state=behind
+        else main_state=diverged
         fi
     fi
     # An ours-merge keeps proposal files off main; one that got there was

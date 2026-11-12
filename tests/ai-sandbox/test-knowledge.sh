@@ -787,6 +787,24 @@ rm -f "$remote/hooks/pre-receive"
 knowledge sync "$integ" >/dev/null 2>&1
 assert_status "integrator ok once the push goes through" "$iclone" "ok:"
 
+# --- an integrator clone strictly behind the host's main (the remote moved, the sandbox's command has not run):
+# --- main is not pushed, that is not an error, and the closed branch is still deleted on the remote
+b_beh=$(propose_in "$clone" behind)
+ks "$proj"; ks "$integ"
+assert_eq "the integrator clone and the remote main agree before the remote moves" "$(git -C "$iclone" rev-parse main)" "$(git -C "$remote" rev-parse main)"
+git -C "$side" pull -q --no-edit origin main
+git -C "$side" fetch -q origin "$b_beh"
+git -C "$side" merge -q -s ours --no-ff -m "proposal: behind closed elsewhere" FETCH_HEAD
+echo '- from elsewhere' >> "$side/rules/global.md"; git -C "$side" commit -qam "feat: elsewhere"; git -C "$side" push -q origin main
+behind_tip=$(git -C "$remote" rev-parse main)
+knowledge sync "$integ" >/dev/null 2>&1
+assert_status "a clone behind the host's main is ok, not a push failure" "$iclone" "ok:"
+assert_eq "the remote's main is not rewound by the older clone" "$(git -C "$remote" rev-parse main)" "$behind_tip"
+git -C "$remote" show-ref -q "refs/heads/$b_beh" && r=yes || r=no
+assert_eq "the closed branch is deleted although the clone is behind" "$r" no
+sbsync "$integ" >/dev/null
+assert_eq "the sandbox's command then brings the clone up to main" "$(git -C "$iclone" rev-parse main)" "$behind_tip"
+
 # --- a knowledge path that is not a clone: the host moves nothing aside and writes nothing in it; the
 # --- sandbox's own command leaves it alone and says so; the host's status names the problem
 ng="$tmp/work/nongit"; mkdir -p "$ng"; git -C "$ng" init -q
