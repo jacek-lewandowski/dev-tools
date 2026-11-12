@@ -19,6 +19,9 @@ AI_SANDBOX_CONFIG="$AI_SANDBOX_ROOT/config"     # defined once, in the lib
 AI_KNOWLEDGE_ROOT="$AI_SANDBOX_ROOT/knowledge"
 AI_KNOWLEDGE_CONFIG="$AI_KNOWLEDGE_ROOT/config"
 AI_KNOWLEDGE_RENDER="$AI_SANDBOX_ROOT/shared/knowledge"
+# C-STATUS: where a sandbox sees <sandbox dir>/status, read-only. Defined once here;
+# the compose file binds it and passes it on as SANDBOX_STATUS_DIR.
+AI_SANDBOX_STATUS_MOUNT=/run/ai-sandbox/status
 ai_knowledge_configured() { [ -f "$AI_KNOWLEDGE_CONFIG" ]; }
 
 # Lowercase, replace every non-alphanumeric with '-', collapse runs, trim both
@@ -531,6 +534,7 @@ ai_sandbox_state_dirs() {
 .claude
 .claude/projects
 .codex
+status
 antigravity-data
 antigravity-ide-data
 claude-data

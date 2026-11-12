@@ -1594,13 +1594,20 @@ if [ -n "${DISPLAY:-}" ]; then
         status "X server" "NOT reachable -- $(printf '%s' "$_err" | head -1)"
     fi
 fi
+# What the host reports about this sandbox: line 1 of every file in the status
+# directory (the host writes it, read-only here), with its age.
+if [ -d "${SANDBOX_STATUS_DIR:-/nonexistent}" ]; then
+    for _f in "$SANDBOX_STATUS_DIR"/*; do
+        [ -f "$_f" ] || continue
+        _age=$(( ($(date +%s) - $(stat -c %Y "$_f")) / 60 ))
+        status "$(basename "$_f")" "$(head -1 "$_f" | tr -d '[:cntrl:]') [${_age} min ago]"
+    done
+fi
 # SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: unset means
 # the compose file predates the knowledge mounts and the host refuses to start
 # it until the migration script has recreated it.
 case "${SANDBOX_KNOWLEDGE-unset}" in
-    1)     if [ -f "$HOME/knowledge/.sync-status" ]; then
-               _age=$(( ($(date +%s) - $(stat -c %Y "$HOME/knowledge/.sync-status")) / 60 ))
-               status "knowledge" "$(cat "$HOME/knowledge/.sync-status") [${_age} min ago]"
+    1)     if [ -f "${SANDBOX_STATUS_DIR:-/nonexistent}/knowledge" ]; then
                # Each open proposal branch: on the remote already, or waiting for the next host sync.
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' 2>/dev/null); do
                    if [ "$(git -C "$HOME/knowledge" rev-parse -q --verify "refs/remotes/origin/$_b" 2>/dev/null)" = "$(git -C "$HOME/knowledge" rev-parse "$_b" 2>/dev/null)" ]; then
@@ -1610,7 +1617,7 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                    fi
                done
                # A report ref is dropped here once the host has pushed it, so any left is pending.
-               _role=$(cut -d' ' -f1 "$HOME/knowledge/.git/ai-knowledge-role" 2>/dev/null)
+               _role=$(sed -n 's/^role=//p' "$SANDBOX_STATUS_DIR/knowledge" 2>/dev/null | head -1)
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname)' 'refs/reports/*' 2>/dev/null); do
                    if [ "$_role" = integrator ]; then status "  $_b" "open: close it with a refs/reports-closed tombstone"
                    else status "  $_b" "pending: reaches the remote on the next host sync"; fi
@@ -2305,6 +2312,7 @@ cat <<COMPOSE_ENV
       - "PYTHONPATH=${CONTAINER_HOME}"
       - "SANDBOX_WITH_DOCKER=\${SANDBOX_WITH_DOCKER}"
       - "SANDBOX_KNOWLEDGE=\${SANDBOX_KNOWLEDGE}"
+      - "SANDBOX_STATUS_DIR=${AI_SANDBOX_STATUS_MOUNT}"
       # Subagents kept alive through a review/fix loop pause for minutes at a
       # time; the 5m default lets their cache expire in every pause. The env
       # var wins over settings.json, so the seeded copy cannot undo it.
@@ -2356,6 +2364,12 @@ while IFS='|' read -r _key _path; do
     printf '      - "%s:%s/%s"\n' "$_key" "$CONTAINER_HOME" "$_path"
 done < <(ai_sandbox_build_caches)
 unset _key _path
+
+# C-STATUS: what the host reports about this sandbox, read-only, whether or not
+# knowledge is configured (the host writes it; the doctor reads it).
+cat <<COMPOSE_STATUS
+      - "${SANDBOX_DIR}/status:${AI_SANDBOX_STATUS_MOUNT}:ro"
+COMPOSE_STATUS
 
 if [ "$KNOWLEDGE" = "yes" ]; then
 cat <<COMPOSE_KNOWLEDGE
