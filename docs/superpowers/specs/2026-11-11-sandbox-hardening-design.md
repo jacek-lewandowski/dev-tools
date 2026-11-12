@@ -10,7 +10,9 @@ S-1 ("Inputs"), S-2 (C-MODULES) and S-3 (C-GIT), raised while planning phase 1,
 approved by the user on 2026-11-12 with the phase 1 plan ("Ja zajmę się uruchomieniem
 na hoście, natomiast ty zajmij się implementacją i planowaniem kolejnych faz.", read
 back to the user as approval of the plan and of the three changes); deferred entry E2
-added with them
+added with them. Change S-4 (I3e narrowed to the host sockets a sandbox is given, two
+residual risks, the phase 2 sentence on a remembered `--audio`), raised while planning
+phase 2, approved by the user on 2026-11-12 with the phase 2 plan, option (a) ("a")
 Author: Hania (planner 1), the spec's author for this task
 Tree: `96540a5` (`main`)
 Scope: `bin/ai/` (the toolchain), `tools/` as far as the host and the sandboxes load it,
@@ -136,9 +138,14 @@ phase establishes is in its block.
     Phase 1 for the knowledge clone, phase 9 for the rest.
   - **I3d** Nothing that decides a sandbox's identity, role, mounts or token scope is
     read from a place a sandbox can write. Phases 1 and 5.
-  - **I3e** By default a sandbox reaches no host daemon that acts on a client's
-    request. A sandbox the user opted into host audio is outside this invariant, and
-    the toolchain says so when the option is given. Phase 2.
+  - **I3e** By default the toolchain gives a sandbox no host daemon's socket but its
+    display's, so the host's sound server, a daemon that acts on a client's request,
+    is out of its reach. The display server of the chosen mode (the host's compositor
+    under `wayland`, a server the host starts for the sandbox under `xpra` and
+    `nested`) is outside this invariant: what it shares with the host is M2, phase 10,
+    and `--display=host`, which shares the host's own X server, is a mode the
+    toolchain names unsafe. A sandbox the user opted into host audio is outside this
+    invariant, and the toolchain says so when the option is given. Phase 2.
 - **I4 Smooth everyday work.** After every phase: entering a sandbox is still one
   command; an agent pushes and opens a pull request without the user doing anything
   per push; nothing the user does daily gains a step. A step the user must take once
@@ -979,8 +986,9 @@ skill forbids both).
 **Goal.** A sandbox created or re-created gets no host sound socket and no sound
 device unless the user asked for audio for that sandbox. A setting remembered from the
 time when on was the default (tree: `SANDBOX_WITH_AUDIO=1` is written for both cases)
-does not count as a request: a re-creation without an explicit `--audio` turns audio
-off and says so. `--audio` states what it shares, microphone included, and that I3e
+does not count as a request: a re-creation without an explicit `--audio` turns such a
+setting off and says so. A request made with `--audio` from this phase on is
+remembered like the other options of creation, until `--no-audio`. `--audio` states what it shares, microphone included, and that I3e
 does not hold for that sandbox.
 
 **Contract needed.** None. **Delivers.** Nothing a later phase plans against.
@@ -1391,6 +1399,13 @@ operator can reach, or a broken invariant.
   history no ruleset names (X2 records it).
 - A sandbox the user opted into host audio (phase 2) or into copied host logins
   (phase 7), and a project kept on the shared tree (D8).
+- The display server a sandbox talks to by default: until phase 10 what M2 names,
+  and after it whatever that server does on a client's request, which is the
+  server's own code and not this toolchain's.
+- A network service the host offers on the address by which every sandbox reaches
+  the host (`host.docker.internal`, given on purpose so that a sandbox can use the
+  host's services): no phase takes that address away, and what such a service does
+  on a client's request is its own code and not this toolchain's.
 - A host AI session opened in a sandboxed project loads what the sandbox wrote into
   the project's Claude state (U9).
 - A shared kernel. Under rootless Docker a break-out ends as the user, whose files
