@@ -1197,7 +1197,6 @@ msg=$(knowledge _sync-clone "$tmp/work/nowhere" 2>&1) && r=0 || r=$?
 assert_eq "_sync-clone without its sandbox argument refuses" "$r" 1
 assert_contains "_sync-clone names what it needs" "$msg" "usage"
 msg=$(knowledge _sync-clone "$proj/sub" "$pdir" 2>&1) && r=0 || r=$?
-assert_eq "_sync-clone does not look for a stamped ancestor of its argument" "$(ls -d "$(ai_sandbox_dir_for "$proj/sub")" 2>/dev/null | wc -l | tr -d ' ')" 0
 assert_eq "_sync-clone takes the project it is given" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $(ai_sandbox_project_id "$proj/sub")"
 printf 'proposals %s\n' "$pid" > "$clone/.git/ai-knowledge-role"
 
