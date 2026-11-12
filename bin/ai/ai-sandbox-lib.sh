@@ -75,7 +75,7 @@ ai_sandbox_parent_dir() {
     esac
 }
 
-# The nearest stamped ancestor of <dir>, else (second argument "git") the
+# The nearest stamped ancestor of <dir>, else (second argument "dotgit") the
 # nearest ancestor holding a .git entry, else <dir> with links resolved.
 # Today's stamps hold two path forms: git's resolved toplevel for a repository,
 # the path as given for anything else. So both chains of ancestors are walked,
@@ -84,7 +84,7 @@ ai_sandbox_parent_dir() {
 # for in the resolved chain, the form a repository's stamp has always had.
 # Return: 0 found a stamp or a .git, 3 found neither (printed the fallback),
 # 1 no such directory.
-ai_sandbox_root_scan() {   # <dir> [git]
+ai_sandbox_root_scan() {   # <dir> [dotgit]
     local a b fallback
     a=$(cd -- "$1" 2>/dev/null && pwd) || return 1
     b=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
@@ -92,7 +92,7 @@ ai_sandbox_root_scan() {   # <dir> [git]
     while [ -n "$a" ] || [ -n "$b" ]; do
         if [ -n "$a" ] && ai_sandbox_stamped "$a"; then printf '%s\n' "$a"; return 0; fi
         if [ -n "$b" ] && [ "$b" != "$a" ] && ai_sandbox_stamped "$b"; then printf '%s\n' "$b"; return 0; fi
-        if [ "${2:-}" = git ] && [ -n "$b" ] && [ -e "$b/.git" ]; then printf '%s\n' "$b"; return 0; fi
+        if [ "${2:-}" = dotgit ] && [ -n "$b" ] && [ -e "$b/.git" ]; then printf '%s\n' "$b"; return 0; fi
         a=$(ai_sandbox_parent_dir "$a"); b=$(ai_sandbox_parent_dir "$b")
     done
     printf '%s\n' "$fallback"; return 3
@@ -110,7 +110,7 @@ ai_sandbox_project_root() {   # [dir]
 # ancestor holding a .git entry (tested for existence), else <dir> itself.
 ai_sandbox_create_root() {   # [dir]
     local rc=0
-    ai_sandbox_root_scan "${1:-$PWD}" git || rc=$?
+    ai_sandbox_root_scan "${1:-$PWD}" dotgit || rc=$?
     [ "$rc" -ne 1 ]
 }
 
