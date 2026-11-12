@@ -1570,9 +1570,10 @@ snapshot() {   # <dir>: path, type, size, mode, mtime and content hash of everyt
 gw_before=$(snapshot "$gwc"); gw_targets=$(sha256sum "$tmp"/gw-targets/*)
 gw_remote_before=$(git -C "$remote" for-each-ref --format='%(refname) %(objectname)')
 other_ns=$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$integ")")
-# a recorder first on PATH: every git the host starts by name, with its working directory (the container stub's git
-# is started by git itself from its own directory, so the recorder does not see it)
+# a recorder first on PATH: every git the host starts by name, with its working directory. Git's own children (the
+# upload-pack of a fetch) are not seen by it, so the fetches of a clone are judged by their arguments below (M1)
 GWLOG="$tmp/gw-git.log"; : > "$GWLOG"; gwrec="$tmp/gw-rec"; mkdir -p "$gwrec"
+: > "$DOCKER_STUB_LOG"
 printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$PWD" "$*" >> "%s"\nexec %s "$@"\n' "$GWLOG" "$(command -v git)" > "$gwrec/git"; chmod +x "$gwrec/git"
 # the stub remote records every update of the run
 printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$1" "$2" "$3" >> "%s"\nexit 0\n' "$tmp/gw-updates.log" > "$remote/hooks/update"; chmod +x "$remote/hooks/update"
@@ -1613,6 +1614,31 @@ gw_other=$(awk -F'|' -v k="$gwc" -v p="$gwp" '
     END { print bad+0 }' "$GWLOG")
 assert_eq "O7: no host git process had the clone or the project as repository, -C or working directory" "$gw_other" 0
 assert_ne "(control: the recorder saw git processes)" "$(wc -l < "$GWLOG" | tr -d ' ')" 0
+# M1: every fetch the host starts from a clone (a URL <sandbox root>/<sandbox>/knowledge) names the confined program as
+# git's remote program, so no fetch of a clone can run git's own upload-pack on the host; and each of them ran a
+# container (the docker stub's log). One awk for the clone's fetches, used by the sync, init and create runs below.
+clone_fetches() {   # <git log> <sandbox root> <confined|unconfined>: how many recorded fetches of a clone are
+    awk -F'|' -v root="$2" -v want="$3" '
+        { n = split($2, a, " "); fetch = 0; url = 0
+          for (i = 1; i <= n; i++) {
+              if (a[i] == "fetch") fetch = 1
+              if (index(a[i], root "/") == 1 && substr(a[i], length(root) + 2) ~ /^[^\/]+\/knowledge$/) url = 1
+          }
+          if (!(fetch && url)) next
+          if ($2 ~ /--upload-pack=.*ai_sandbox_confined_git/) c++; else u++ }
+        END { print (want == "confined" ? c + 0 : u + 0) }' "$1"
+}
+gw_confined=$(clone_fetches "$GWLOG" "$AI_SANDBOX_ROOT" confined)
+assert_ne "M1 (control): the recorder saw fetches of a clone" "$gw_confined" 0
+assert_eq "M1: no fetch of a clone runs without the confined remote program" "$(clone_fetches "$GWLOG" "$AI_SANDBOX_ROOT" unconfined)" 0
+assert_eq "M1: each of those fetches started a container for upload-pack" "$(grep -c '^run .* upload-pack ' "$DOCKER_STUB_LOG")" "$gw_confined"
+# record_integrator reads the integrator's clone the same way (init --integrator while that clone is ahead)
+gw7_from=$(( $(wc -l < "$GWLOG") + 1 )); : > "$DOCKER_STUB_LOG"
+PATH="$gwrec:$PATH" HOME="$home7" AI_SANDBOX_ROOT="$home7/.ai-sandbox" knowledge init "file://$remote3" --integrator "$i7" >"$tmp/gw-init7.out" 2>&1 </dev/null
+assert_contains "M1 (control): init --integrator read the integrator's clone" "$(cat "$tmp/gw-init7.out")" "the record is skipped"
+assert_eq "M1: record_integrator's fetch of the clone is confined" "$(clone_fetches <(tail -n +"$gw7_from" "$GWLOG") "$home7/.ai-sandbox" confined)" 1
+assert_eq "M1: and none runs without the confined program" "$(clone_fetches <(tail -n +"$gw7_from" "$GWLOG") "$home7/.ai-sandbox" unconfined)" 0
+assert_eq "M1: it started a container for upload-pack" "$(grep -c '^run .* upload-pack ' "$DOCKER_STUB_LOG")" 1
 assert_eq "O8: nothing below <sandbox>/knowledge changed (path, type, size, mode, mtime, content)" "$(snapshot "$gwc")" "$gw_before"
 assert_eq "O8: no link planted where the base design wrote points at a changed target" "$(sha256sum "$tmp"/gw-targets/*)" "$gw_targets"
 assert_eq "O8: and the links are still links" "$(for l in .sync-status .git/ai-knowledge-role .git/hooks/pre-commit .git/info/exclude; do [ -L "$gwc/$l" ] && echo l; done | tr -d '\n')" "llll"
