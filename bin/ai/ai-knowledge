@@ -718,12 +718,14 @@ REPORT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
 # The hook is advisory (an agent can bypass it); the host's scope check below
 # is the enforcement. It fails at commit time, inside the sandbox, where the
 # agent sees the message, instead of at the next sync on the host.
+# Until the clone-side sync goes (T09) this text equals the one in
+# bin/ai/sandbox-knowledge-sync, which installs it in the sandbox; a test compares them.
 install_hook() {   # <clone>
     local hook="$1/.git/hooks/pre-commit"
     mkdir -p "$1/.git/hooks"
     cat > "$hook.new" <<'HOOK'
 #!/usr/bin/env bash
-# Installed by ai-knowledge on the host; refreshed on every sync. Advisory:
+# Installed by the knowledge sync; refreshed on every sync. Advisory:
 # the host refuses to push what this hook would have refused to commit.
 role=$(cut -d' ' -f1 "$(git rev-parse --git-dir)/ai-knowledge-role" 2>/dev/null)
 role=${role:-proposals}

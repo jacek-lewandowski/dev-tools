@@ -1492,6 +1492,13 @@ if [ -n "${TZ:-}" ]; then
     fi
 fi
 
+# --- Knowledge clone -------------------------------------------------------
+# SANDBOX_KNOWLEDGE=2: the host keeps the read-only origin and the status file; this
+# brings ~/knowledge up to date from them. Never fails the start, and never holds it long.
+if [ "${SANDBOX_KNOWLEDGE:-0}" = "2" ] && command -v sandbox-knowledge-sync >/dev/null 2>&1; then
+    timeout 60 sandbox-knowledge-sync || echo "sandbox: sandbox-knowledge-sync did not finish; sandbox-doctor shows the host's last status" >&2
+fi
+
 # --- agy grants ------------------------------------------------------------
 # Merge the sandbox's agy grants into its own agy settings; never fail the
 # start. read_url(*) is web access (agent-roles design D21). command(<name>)
@@ -1909,6 +1916,7 @@ cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
 MANAGED_EOF
 
 cp "$SCRIPT_DIR/ai-delegate" "$BUILD_DIR/ai-delegate"
+cp "$SCRIPT_DIR/sandbox-knowledge-sync" "$BUILD_DIR/sandbox-knowledge-sync"
 cp "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
 
 # --- Dockerfile ------------------------------------------------------------
@@ -2084,6 +2092,7 @@ COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
 COPY ai-delegate       /usr/local/bin/ai-delegate
+COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync
 COPY context-statusline /usr/local/bin/context-statusline
 COPY xdg-open         /usr/local/bin/xdg-open
 COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
@@ -2094,6 +2103,7 @@ RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
                 /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+                /usr/local/bin/sandbox-knowledge-sync \
                 /usr/local/bin/context-statusline \
     && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
@@ -2324,6 +2334,10 @@ cat <<COMPOSE_ENV
       # var wins over settings.json, so the seeded copy cannot undo it.
       - "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h"
 COMPOSE_ENV
+# Where sandbox-knowledge-sync finds the read-only origin (the in-image command's override).
+if [ "$KNOWLEDGE" = "yes" ]; then
+    printf '      - "SANDBOX_KNOWLEDGE_ORIGIN=%s"\n' "$AI_SANDBOX_ORIGIN_MOUNT"
+fi
 printf '%s' "$DISPLAY_ENV_LINES"
 
 # The 'idea' wrapper is baked into the shared image, so it learns the path here

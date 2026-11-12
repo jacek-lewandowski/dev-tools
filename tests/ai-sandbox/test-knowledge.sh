@@ -1332,6 +1332,180 @@ assert_contains "offline create: the origin is bound" "$(cat "$o10qdir/docker-co
 cp "$tmp/o10-config.keep" "$AI_KNOWLEDGE_CONFIG"
 rm -rf "$rec"
 
+# --- O11 (the in-sandbox command): sandbox-knowledge-sync in a fixture home, against a fixture origin and status
+# --- directory; it removes a ref inside only as the status file lists it, and exits 0 in every case
+o11="$tmp/o11"; mkdir -p "$o11/status"
+oo="$o11/origin.git"; git init -q --bare "$oo"; git -C "$oo" symbolic-ref HEAD refs/heads/main
+ow="$o11/work"; git init -q -b main "$ow"
+printf 'one\n' > "$ow/rules.md"; git -C "$ow" add rules.md; git -C "$ow" commit -qm "one"
+git -C "$ow" push -q "$oo" main
+ocommit() {   # <message>: a commit on the fixture work repository's main, pushed to the fixture origin; prints it
+    printf '%s\n' "$1" > "$ow/f-$(printf '%s' "$1" | tr -c 'a-z0-9' '_').md"; git -C "$ow" add -A; git -C "$ow" commit -qm "$1"
+    git -C "$ow" push -q "$oo" main; git -C "$ow" rev-parse HEAD
+}
+ostatus() {   # <name> <role> <project id> [status lines...]: the status file of the fixture sandbox <name>
+    local d="$o11/status/$1"; mkdir -p "$d"; { printf '2026-01-01T00:00:00 ok seen\nrole=%s\nproject-id=%s\n' "$2" "$3"; shift 3; [ $# -eq 0 ] || printf '%s\n' "$@"; } > "$d/knowledge"
+}
+osync() {   # <name>: run the command for the fixture sandbox <name>; its clone is $o11/<name>
+    SANDBOX_KNOWLEDGE_CLONE="$o11/$1" SANDBOX_STATUS_DIR="$o11/status/$1" SANDBOX_KNOWLEDGE_ORIGIN="$oo" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1
+}
+ogit() { local n=$1; shift; git -C "$o11/$n" "$@"; }
+today11=$(date +%F); pb1="proposal/$today11-ofirst-aaaa"; rp1="$today11-ofirst-bbbb"
+git -C "$ow" push -q "$oo" "main:refs/heads/$pb1"; git -C "$ow" push -q "$oo" "main:refs/reports/$rp1"
+
+# creates the clone on main when absent (also into an empty directory); role file and hook
+ostatus w1 proposals pid-w1; mkdir "$o11/w1e"; ostatus w1e proposals pid-w1e
+out=$(osync w1); r=$?
+assert_eq "the command exits 0 for a clone it creates" "$r" 0
+assert_eq "an absent clone is created on main" "$(ogit w1 branch --show-current)" main
+assert_eq "the new clone's main is the origin's main" "$(ogit w1 rev-parse main)" "$(git -C "$oo" rev-parse main)"
+assert_eq "the new clone fetches from the origin" "$(ogit w1 config --get remote.origin.url)" "$oo"
+assert_eq "the role file is <role> <project id>" "$(cat "$o11/w1/.git/ai-knowledge-role")" "proposals pid-w1"
+[ -x "$o11/w1/.git/hooks/pre-commit" ] && r=yes || r=no
+assert_eq "the command installs the hook" "$r" yes
+assert_contains "the command says what it did" "$out" "cloned the origin"
+osync w1e >/dev/null; assert_eq "an empty directory receives the clone" "$(ogit w1e branch --show-current)" main
+assert_eq "a proposals clone holds no other clone's proposal branch" "$(ogit w1 for-each-ref refs/heads/proposal | wc -l | tr -d ' ')" 0
+assert_eq "a proposals clone fetches no report" "$(ogit w1 for-each-ref refs/reports | wc -l | tr -d ' ')" 0
+assert_eq "the hook of the sync on the host equals the hook the command installs" "$(cat "$clone/.git/hooks/pre-commit")" "$(cat "$o11/w1/.git/hooks/pre-commit")"
+
+# a non-empty ~/knowledge that is no clone is left alone and said so; the command exits 0
+mkdir "$o11/w2"; echo mine > "$o11/w2/notes.txt"; ostatus w2 proposals pid-w2
+out=$(osync w2); r=$?
+assert_eq "a non-clone directory: exit 0" "$r" 0
+assert_eq "a non-clone directory is untouched" "$(ls -A "$o11/w2" | tr '\n' ' ')" "notes.txt "
+assert_contains "a non-clone directory is reported" "$out" "left alone"
+
+# the integrator fetches proposal branches and reports; its role file says so
+ostatus i1 integrator pid-i1; osync i1 >/dev/null
+assert_eq "the integrator's role file" "$(cat "$o11/i1/.git/ai-knowledge-role")" "integrator pid-i1"
+assert_eq "the integrator fetches the proposal branches" "$(ogit i1 rev-parse "refs/heads/$pb1")" "$(git -C "$oo" rev-parse "refs/heads/$pb1")"
+assert_eq "the integrator fetches the reports" "$(ogit i1 rev-parse "refs/reports/$rp1")" "$(git -C "$oo" rev-parse "refs/reports/$rp1")"
+
+# adopts a clone of the base design: the origin URL is replaced, local branches and unpushed commits stay, the old status file goes
+git init -q --bare "$o11/oldremote.git"; git -C "$ow" push -q "$o11/oldremote.git" main
+git clone -q "$o11/oldremote.git" "$o11/a1" 2>/dev/null; ostatus a1 proposals pid-a1
+git -C "$o11/a1" checkout -q -b "proposal/$today11-olocal-cccc"; echo local > "$o11/a1/local.md"; git -C "$o11/a1" add local.md
+git -C "$o11/a1" -c user.email=t@e -c user.name=t commit -q --no-verify -m "unpushed"
+ltip=$(git -C "$o11/a1" rev-parse HEAD); git -C "$o11/a1" checkout -q main; echo old > "$o11/a1/.sync-status"
+out=$(osync a1); r=$?
+assert_eq "adopting: exit 0" "$r" 0
+assert_eq "adopting: the origin URL is replaced" "$(ogit a1 config --get remote.origin.url)" "$oo"
+assert_eq "adopting: the unpushed commit and its branch stay" "$(ogit a1 rev-parse "refs/heads/proposal/$today11-olocal-cccc")" "$ltip"
+assert_no_file "adopting: the old status file is removed" "$o11/a1/.sync-status"
+assert_eq "adopting: the next fetch is from the origin" "$(ogit a1 rev-parse refs/remotes/origin/main)" "$(git -C "$oo" rev-parse main)"
+assert_contains "adopting is said" "$out" "now fetches from the host's origin"
+
+# fast-forwards main unless the tree is dirty or the integrator's main is ahead, and says which
+c2=$(ocommit "two")
+osync w1 >/dev/null
+assert_eq "main is fast-forwarded (checked out)" "$(ogit w1 rev-parse main)" "$c2"
+assert_file "the working tree follows a checked-out main" "$o11/w1/f-two.md"
+c3=$(ocommit "three")
+echo dirt > "$o11/w1/dirt.txt"; out=$(osync w1)
+assert_eq "a dirty tree: main stays" "$(ogit w1 rev-parse main)" "$c2"
+assert_contains "a dirty tree is reported" "$out" "uncommitted"
+rm -f "$o11/w1/dirt.txt"
+ogit w1 checkout -q -b "proposal/$today11-oother-dddd"; osync w1 >/dev/null
+assert_eq "main moves although another branch is checked out" "$(ogit w1 rev-parse main)" "$c3"
+assert_eq "and the checked-out branch is where it was" "$(ogit w1 branch --show-current)" "proposal/$today11-oother-dddd"
+ogit w1 checkout -q main
+echo local > "$o11/w1/mine.md"; ogit w1 add mine.md; ogit w1 -c user.email=t@e -c user.name=t commit -q --no-verify -m "local on main"
+mtip=$(ogit w1 rev-parse main); c4=$(ocommit "four"); out=$(osync w1)
+assert_eq "a main with local commits is not moved" "$(ogit w1 rev-parse main)" "$mtip"
+assert_contains "and it is reported" "$out" "local commits"
+ogit w1 reset -q --hard "$c3"
+osync i1 >/dev/null
+echo ahead > "$o11/i1/ahead.md"; ogit i1 add ahead.md; ogit i1 -c user.email=t@e -c user.name=t commit -q -m "integrator commit"
+itip=$(ogit i1 rev-parse main); c5=$(ocommit "five"); git -C "$ow" reset -q --hard "$c4"
+out=$(osync i1)
+assert_eq "the integrator's main may be ahead and stays" "$(ogit i1 rev-parse main)" "$itip"
+assert_contains "the integrator is told its main differs" "$out" "origin/main"
+
+# deletes a branch listed closed-proposal= only while its tip is the listed commit
+ogit w1 checkout -q main
+for b in k1 k2 k3 k4; do ogit w1 branch -q "proposal/$today11-$b-eeee" main; done
+ogit w1 checkout -q -b "proposal/$today11-k5-eeee" main; echo k5 > "$o11/w1/k5.md"; ogit w1 add k5.md
+ogit w1 -c user.email=t@e -c user.name=t commit -q --no-verify -m k5; ogit w1 checkout -q main
+t1=$(ogit w1 rev-parse "proposal/$today11-k1-eeee"); t5=$(ogit w1 rev-parse "proposal/$today11-k5-eeee")
+ogit w1 checkout -q "proposal/$today11-k4-eeee"
+ostatus w1 proposals pid-w1 "closed-proposal=proposal/$today11-k1-eeee $t1" "closed-proposal=proposal/$today11-k2-eeee $t5" \
+    "closed-proposal=proposal/$today11-k4-eeee $t1" "closed-proposal=main $(ogit w1 rev-parse main)" "closed-proposal=proposal/../x $t1"
+out=$(osync w1)
+has_b() { ogit w1 show-ref -q --verify "refs/heads/$1" && echo yes || echo no; }
+assert_eq "a listed branch at the listed commit is deleted" "$(has_b "proposal/$today11-k1-eeee")" no
+assert_eq "a listed branch whose tip is not the listed commit is kept" "$(has_b "proposal/$today11-k2-eeee")" yes
+assert_eq "a branch the status does not list is kept" "$(has_b "proposal/$today11-k3-eeee")" yes
+assert_eq "the checked-out closed branch is left and main checked out first" "$(has_b "proposal/$today11-k4-eeee")$(ogit w1 branch --show-current)" "nomain"
+assert_eq "main is never deleted by a listing" "$(has_b main)" yes
+assert_eq "a branch outside proposal/ or with a malformed name is not touched" "$(has_b "proposal/$today11-k5-eeee")" yes
+
+# a writer deletes a report listed pushed-report=; the integrator does not
+for n in r1 r2; do ogit w1 update-ref "refs/reports/$today11-$n-ffff" main; done
+ostatus w1 proposals pid-w1 "pushed-report=$today11-r1-ffff" "pushed-report=../heads/main" "closed-report=$today11-r2-ffff"
+osync w1 >/dev/null
+has_r() { ogit "$1" show-ref -q --verify "$2" && echo yes || echo no; }
+assert_eq "a listed pushed report is deleted for a writer" "$(has_r w1 "refs/reports/$today11-r1-ffff")" no
+assert_eq "an unlisted report is kept" "$(has_r w1 "refs/reports/$today11-r2-ffff")" yes
+assert_eq "a writer ignores closed-report=" "$(has_r w1 "refs/reports/$today11-r2-ffff")" yes
+assert_eq "an unsafe listed name deletes nothing" "$(has_b main)" yes
+ogit i1 update-ref "refs/reports/$today11-r3-ffff" main
+ostatus i1 integrator pid-i1 "pushed-report=$today11-r3-ffff"; osync i1 >/dev/null
+assert_eq "the integrator ignores pushed-report=" "$(has_r i1 "refs/reports/$today11-r3-ffff")" yes
+
+# the integrator deletes a report and its tombstone only while the status lists it closed-report=
+# (an origin without the report is no such signal)
+for n in s1 s2; do ogit i1 update-ref "refs/reports/$today11-$n-ffff" main; ogit i1 update-ref "refs/reports-closed/$today11-$n-ffff" main; done
+ostatus i1 integrator pid-i1; osync i1 >/dev/null
+assert_eq "a tombstoned report stays while the status does not list it (the origin lacks it)" "$(has_r i1 "refs/reports/$today11-s1-ffff")$(has_r i1 "refs/reports-closed/$today11-s1-ffff")" yesyes
+ostatus i1 integrator pid-i1 "closed-report=$today11-s1-ffff"; osync i1 >/dev/null
+assert_eq "a listed report and its tombstone are deleted" "$(has_r i1 "refs/reports/$today11-s1-ffff")$(has_r i1 "refs/reports-closed/$today11-s1-ffff")" nono
+assert_eq "an unlisted one is kept, both refs" "$(has_r i1 "refs/reports/$today11-s2-ffff")$(has_r i1 "refs/reports-closed/$today11-s2-ffff")" yesyes
+
+# exit 0 in every case: no status file, no origin, an origin that is no repository, an empty origin
+mkdir -p "$o11/status/n1"; out=$(osync n1); r=$?
+assert_eq "no status file: exit 0, the clone is made" "$r$(ogit n1 branch --show-current)" "0main"
+assert_eq "no status file: no role file is written" "$(ls "$o11/n1/.git/ai-knowledge-role" 2>/dev/null | wc -l | tr -d ' ')" 0
+out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n2" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/no-such-origin" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1); r=$?
+assert_eq "no origin: exit 0" "$r" 0
+assert_contains "no origin: said" "$out" "no knowledge origin"
+mkdir "$o11/not-a-repo"
+out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n3" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/not-a-repo" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1); r=$?
+assert_eq "an origin that is no repository: exit 0" "$r" 0
+assert_contains "an origin that is no repository: said" "$out" "cannot clone"
+git init -q --bare "$o11/empty.git"; git -C "$o11/empty.git" symbolic-ref HEAD refs/heads/main
+out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n4" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/empty.git" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1); r=$?
+assert_eq "an empty origin: exit 0, the clone follows main" "$r$(git -C "$o11/n4" symbolic-ref HEAD)" "0refs/heads/main"
+# hostile status content cannot make it delete outside the listed kinds
+ostatus n1 integrator pid-n1 "closed-report=../heads/main" "closed-report=" "closed-proposal=" "closed-proposal=proposal/x"; osync n1 >/dev/null
+assert_eq "malformed status lines delete nothing" "$(ogit n1 show-ref -q --verify refs/heads/main && echo yes)" yes
+
+# the generated entrypoint runs it when SANDBOX_KNOWLEDGE=2, not otherwise, and the start does not fail when it does
+ep="$AI_SANDBOX_ROOT/image/build/entrypoint.sh"; epstub="$o11/epstub"; mkdir -p "$epstub" "$o11/ep-etc" "$o11/ep-zi"
+printf '#!/bin/bash\necho ran >> "$STUB_SKS_LOG"\n[ -z "${STUB_SKS_FAIL:-}" ] || { echo boom >&2; exit 1; }\n' > "$epstub/sandbox-knowledge-sync"; chmod +x "$epstub/sandbox-knowledge-sync"
+printf '#!/bin/bash\necho "DBUS_SESSION_BUS_ADDRESS='"'"'unix:path=/nonexistent'"'"';"\n' > "$epstub/dbus-launch"; chmod +x "$epstub/dbus-launch"
+run_ep_sks() {   # <value of SANDBOX_KNOWLEDGE, or "unset"> [fail]: prints the entrypoint's exit status and the number of runs
+    : > "$o11/sks.log"
+    if [ "$1" = unset ]; then unset SANDBOX_KNOWLEDGE; else export SANDBOX_KNOWLEDGE=$1; fi
+    STUB_SKS_LOG="$o11/sks.log" STUB_SKS_FAIL="${2:-}" SANDBOX_RUNTIME_DIR="$o11/ep-run" SANDBOX_ETC_DIR="$o11/ep-etc" SANDBOX_ZONEINFO_DIR="$o11/ep-zi" \
+        CLAUDE_PLUGINS_LIST=/nonexistent PATH="$epstub:$PATH" TZ= bash "$ep" true >"$o11/ep.out" 2>&1; local rc=$?
+    printf '%s:%s' "$rc" "$(wc -l < "$o11/sks.log" | tr -d ' ')"
+}
+assert_eq "the entrypoint runs the command when SANDBOX_KNOWLEDGE=2" "$(run_ep_sks 2)" "0:1"
+assert_eq "not for SANDBOX_KNOWLEDGE=1" "$(run_ep_sks 1)" "0:0"
+assert_eq "not for SANDBOX_KNOWLEDGE=0" "$(run_ep_sks 0)" "0:0"
+assert_eq "not when SANDBOX_KNOWLEDGE is unset" "$(run_ep_sks unset)" "0:0"
+assert_eq "the start does not fail when the command does" "$(run_ep_sks 2 fail)" "0:1"
+assert_contains "and the failure is said" "$(cat "$o11/ep.out")" "sandbox-knowledge-sync did not finish"
+unset SANDBOX_KNOWLEDGE
+# the command is in the image, not on the host
+dfile=$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")
+assert_contains "the image copies the command" "$dfile" "COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync"
+assert_contains "and makes it executable" "$dfile" "/usr/local/bin/sandbox-knowledge-sync"
+assert_file "the build context holds the command" "$AI_SANDBOX_ROOT/image/build/sandbox-knowledge-sync"
+assert_eq "the command is not a host helper" "$(ai_sandbox_helpers | grep -c 'sandbox-knowledge-sync')" 0
+assert_contains "the compose file passes the origin's mount path on" "$(cat "$pdir/docker-compose.yml")" "SANDBOX_KNOWLEDGE_ORIGIN=/run/ai-sandbox/knowledge-origin.git"
+
 # --- O6 (C-STAMP): the project and the role come from the stamps and the host's
 # --- configuration, not from what a sandbox can write in the project or its clone
 mkdir -p "$proj/sub/deep" "$proj/plainsub"
