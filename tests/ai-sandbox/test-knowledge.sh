@@ -18,7 +18,10 @@ assert_contains "ai-knowledge is an installed helper" "$(ai_sandbox_helpers)" "a
 git config --global user.email t@example.com; git config --global user.name t
 git config --global init.defaultBranch main
 export AI_KNOWLEDGE_GIT_TIMEOUT=20
-knowledge() { bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
+# The sync reads a sandbox's clone in a container of the sandbox image; the stub docker has one
+# unless a case says otherwise (KNOWLEDGE_IMAGES=none).
+kimages="$(ai_sandbox_image_name base) $(ai_sandbox_image_name docker)"
+knowledge() { DOCKER_STUB_IMAGES="${KNOWLEDGE_IMAGES-$kimages}" bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
 # C-STATUS: the outcome of a sync is <sandbox dir>/status/knowledge, line 1 "<time> <word> <message>".
 status_file() { printf '%s/status/knowledge' "$(dirname "$1")"; }   # <clone>
 status_of() {   # <clone>: line 1 without its timestamp, as the sync's own text (ok/refused/offline carry their colon)
@@ -46,6 +49,15 @@ assert_status_shape() {   # <name> <clone> <word>: line 1 of the status file is 
     else _fail "$1" "line 1 of $(status_file "$2") is '$line', expected the shape with word '$3'"; fi
 }
 
+# The container's side of a sync, run by hand: the host runs it by docker exec only in a running
+# container whose stamp is current, and the cases below mostly have none. <project dir>
+sbsync() {
+    local d; d=$(ai_sandbox_dir_for "$1")
+    SANDBOX_STATUS_DIR="$d/status" SANDBOX_KNOWLEDGE_ORIGIN="$d/knowledge-origin.git" SANDBOX_KNOWLEDGE_CLONE="$d/knowledge" \
+        bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1
+}
+
+ks() { knowledge sync "$1" >/dev/null 2>&1; sbsync "$1" >/dev/null; }   # <project dir>: the host's sync, then the container's
 remote="$tmp/remote.git"; git init -q --bare "$remote"
 mkdir -p "$HOME/.gemini" "$HOME/.claude"
 printf '# Rules\n\n- be brief\n\n<!-- BEGIN dev-tools:ai-sandbox-environment -->\nsandbox block\n<!-- END dev-tools:ai-sandbox-environment -->\n' > "$HOME/.gemini/GEMINI.md"
@@ -102,20 +114,27 @@ assert_file "own skill copied into ~/.agents" "$HOME/.agents/skills/propose-rule
 assert_file "own skill copied into the shared store" "$AI_SANDBOX_ROOT/shared/agent-skills/skills/propose-rule/SKILL.md"
 assert_link "host claude skill symlink" "$HOME/.claude/skills/propose-rule" "../../.agents/skills/propose-rule"
 
-# --- sync creates a project sandbox clone on main, with role file and hook
+# --- sync leaves the clone to the sandbox: the host makes no clone, writes no role file and no hook into
+# --- it; the sandbox's own command makes the clone on main from the origin and writes both
 pid=$(ai_sandbox_project_id "$proj"); pdir=$(ai_sandbox_dir_for "$proj"); mkdir -p "$pdir"
 knowledge sync "$proj" >"$tmp/sync1.out" 2>&1 || cat "$tmp/sync1.out"
 clone="$pdir/knowledge"
-assert_eq "clone on main" "$(git -C "$clone" branch --show-current)" main
-assert_status "status ok" "$clone" "ok:"
+assert_no_file "the host made no clone" "$clone/.git"
+assert_status "status ok: no clone yet" "$clone" "ok:"
+assert_contains "the status says the sandbox makes the clone" "$(status_of "$clone")" "no clone yet"
 assert_status_shape "status file line 1 is the contract's shape (ok)" "$clone" ok
 assert_eq "status file carries role= and project-id= after line 1" "$(sed -n '2,$p' "$(status_file "$clone")" | tr '\n' ' ')" "role=proposals project-id=$pid "
 assert_no_file "no status file is written below the clone" "$clone/.sync-status"
 assert_file "the sandbox directory holds status/" "$pdir/status"
-assert_eq "role file names the role and project id" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
-assert_file "pre-commit hook installed" "$clone/.git/hooks/pre-commit"
+assert_eq "the host's sync left the sandbox's knowledge directory unwritten" "$(ls -A "$clone" 2>/dev/null | wc -l | tr -d ' ')" 0
+out=$(sbsync "$proj")
+assert_contains "the sandbox's command says it made the clone" "$out" "cloned the origin"
+assert_eq "clone on main" "$(git -C "$clone" branch --show-current)" main
+assert_eq "role file names the role and project id (written by the sandbox from the status file)" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
+assert_file "pre-commit hook installed (by the sandbox)" "$clone/.git/hooks/pre-commit"
 [ -x "$clone/.git/hooks/pre-commit" ] && r=yes || r=no
 assert_eq "hook is executable" "$r" yes
+assert_eq "ai-knowledge writes no role file and installs no hook (residues R3, R8)" "$(grep -c 'ai-knowledge-role\|install_hook\|hooks/pre-commit\|info/exclude' "$REPO_ROOT/bin/ai/ai-knowledge")" 0
 assert_file "mount target CLAUDE.md pre-created" "$pdir/.claude/CLAUDE.md"
 assert_file "mount target AGENTS.md pre-created" "$pdir/.codex/AGENTS.md"
 assert_file "mount target agents dir pre-created" "$pdir/.gemini/agents"
@@ -135,7 +154,7 @@ propose_in() {   # <clone> <slug> [rule text]; prints the branch name
     printf 'proposal/%s-%s-%s' "$today" "$slug" "$hex"
 }
 
-# --- an in-scope proposal is pushed; out of scope and malformed are refused; dirty is skipped
+# --- an in-scope proposal is pushed; out of scope and malformed are refused; dirty is no longer skipped
 b1=$(propose_in "$clone" test)
 knowledge sync "$proj" >/dev/null 2>&1
 assert_eq "proposal branch pushed" "$(git -C "$remote" rev-parse "$b1")" "$(git -C "$clone" rev-parse "$b1")"
@@ -155,11 +174,17 @@ assert_eq "refused branch not on the remote" "$r" no
 git -C "$remote" show-ref -q "refs/heads/proposal/tmp-half" && r=yes || r=no
 assert_eq "malformed branch not on the remote" "$r" no
 git -C "$clone" branch -q -D "proposal/$today-escape-abcd" "proposal/tmp-half"
+# a dirty clone is no longer skipped whole: the host sees refs only, so a committed proposal is pushed;
+# the fast-forward of main inside is the sandbox's to skip, and it says so there
+b_dirty=$(propose_in "$clone" dirty)
 echo wip > "$clone/proposals/wip.md"
 knowledge sync "$proj" >/dev/null 2>&1
-assert_status "dirty tree skipped" "$clone" "skipped:"
-assert_status_shape "status file line 1 is the contract's shape (warn)" "$clone" warn
+assert_eq "dirty clone: the committed proposal is pushed" "$(git -C "$remote" rev-parse "$b_dirty")" "$(git -C "$clone" rev-parse "$b_dirty")"
+assert_status "dirty clone: the host's status is ok" "$clone" "ok:"
+assert_status_shape "status file line 1 is the contract's shape (ok after a push)" "$clone" ok
+assert_file "dirty clone: the uncommitted file is untouched" "$clone/proposals/wip.md"
 rm "$clone/proposals/wip.md"
+git -C "$clone" branch -q -D "$b_dirty"; git -C "$remote" update-ref -d "refs/heads/$b_dirty"
 
 # --- the hook refuses commits on main in a proposing clone and out-of-scope paths on a proposal branch
 echo hacked >> "$clone/rules/global.md"
@@ -179,7 +204,7 @@ git -C "$clone" checkout -q main; git -C "$clone" branch -q -D "proposal/$today-
 
 # --- the integrator sees the branch, edits main, closes with an ours-merge; the branch dies everywhere
 idir=$(ai_sandbox_dir_for "$integ"); mkdir -p "$idir"
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$integ"
 iclone="$idir/knowledge"
 assert_eq "integrator clone on main" "$(git -C "$iclone" branch --show-current)" main
 assert_eq "integrator role file" "$(cut -d' ' -f1 "$iclone/.git/ai-knowledge-role")" integrator
@@ -193,6 +218,8 @@ git -C "$iclone" merge -q -s ours --no-ff -m "proposal: test integrated" "$b1"
 assert_eq "ours-merge leaves main's tree unchanged" "$(git -C "$iclone" ls-tree -r --name-only HEAD -- proposals/ | grep -vc README)" 0
 assert_eq "closed proposal no longer listed" "$(knowledge proposals --repo "$iclone")" ""
 knowledge sync "$integ" >/dev/null 2>&1
+assert_contains "the integrator's status lists the branch it closed, at its tip (closed-proposal=)" "$(cat "$(status_file "$iclone")")" "closed-proposal=$b1 $(git -C "$iclone" rev-parse "$b1")"
+sbsync "$integ" >/dev/null
 assert_eq "main pushed" "$(git -C "$remote" rev-parse main)" "$(git -C "$iclone" rev-parse main)"
 git -C "$remote" show-ref -q "refs/heads/$b1" && r=yes || r=no
 assert_eq "closed branch deleted on the remote" "$r" no
@@ -203,6 +230,9 @@ assert_status "integrator status ok" "$iclone" "ok:"
 
 # --- the proposer's next sync fast-forwards main and drops its closed branch without re-creating it
 knowledge sync "$proj" >/dev/null 2>&1
+assert_contains "the proposer's status lists the closed branch, at its tip (closed-proposal=)" "$(cat "$(status_file "$clone")")" "closed-proposal=$b1 $(git -C "$clone" rev-parse "$b1")"
+assert_eq "the host itself deleted nothing in the clone" "$(git -C "$clone" show-ref -q "refs/heads/$b1" && echo kept)" kept
+sbsync "$proj" >/dev/null
 assert_contains "main fast-forwarded in the clone" "$(cat "$clone/rules/global.md")" "- be kind"
 git -C "$clone" show-ref -q "refs/heads/$b1" && r=yes || r=no
 assert_eq "closed branch deleted locally" "$r" no
@@ -212,47 +242,47 @@ assert_contains "status counts the close" "$(status_of "$clone")" "closed 1"
 
 # --- an amendment pushed after the close reopens the proposal instead of being deleted
 b2=$(propose_in "$clone" amend)
-knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+ks "$proj"; ks "$integ"
 git -C "$iclone" merge -q -s ours --no-ff -m "proposal: amend rejected" "$b2"
 git -C "$clone" checkout -q "$b2"; echo more >> "$clone/proposals/$today-amend.md"
 git -C "$clone" commit -qam "amend more"; git -C "$clone" checkout -q main
-knowledge sync "$proj" >/dev/null 2>&1
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$proj"
+ks "$integ"
 assert_eq "amended branch survives the integrator's sync" "$(git -C "$remote" rev-parse "$b2")" "$(git -C "$clone" rev-parse "$b2")"
 assert_eq "amended proposal listed again" "$(knowledge proposals --repo "$iclone")" "$b2 proposals/$today-amend.md"
 git -C "$iclone" merge -q -s ours --no-ff -m "proposal: amend rejected again" "$b2"
-knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+ks "$integ"; ks "$proj"
 git -C "$remote" show-ref -q "refs/heads/$b2" && r=yes || r=no
 assert_eq "re-closed branch deleted" "$r" no
 
 # --- an amendment that lands between the integrator's fetch and its remote deletion is kept by the lease
 b_lease=$(propose_in "$clone" lease); tip0=$(git -C "$clone" rev-parse "$b_lease")
-knowledge sync "$proj" >/dev/null 2>&1; knowledge sync "$integ" >/dev/null 2>&1
+ks "$proj"; ks "$integ"
 git -C "$iclone" merge -q -s ours --no-ff -m "proposal: lease rejected" "$b_lease"
 mkdir -p "$tmp/lease"; ln -sfn "$REPO_ROOT/tests/ai-sandbox/stub/lease-timeout" "$tmp/lease/timeout"
-LEASE_STUB_MODE=amend LEASE_STUB_CLONE="$clone" PATH="$tmp/lease:$PATH" knowledge sync "$integ" >"$tmp/lease.out" 2>&1
+LEASE_STUB_MODE=amend LEASE_STUB_CLONE="$clone" LEASE_STUB_REMOTE="file://$remote" PATH="$tmp/lease:$PATH" knowledge sync "$integ" >"$tmp/lease.out" 2>&1
 assert_eq "amendment made during the integrator's sync" "$(git -C "$clone" rev-parse "$b_lease" | grep -vc "^$tip0\$")" 1
 assert_eq "leased deletion keeps the amended branch on the remote" "$(git -C "$remote" rev-parse -q --verify "refs/heads/$b_lease")" "$(git -C "$clone" rev-parse "$b_lease")"
 assert_status "rejected lease leaves the integrator status ok" "$iclone" "ok:"
 assert_eq "rejected lease is not reported as a failed deletion" "$(grep -c 'cannot delete' "$tmp/lease.out")" 0
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$integ"
 assert_eq "proposal amended under the lease listed again" "$(knowledge proposals --repo "$iclone")" "$b_lease proposals/$today-lease.md"
 git -C "$iclone" merge -q -s ours --no-ff -m "proposal: lease rejected again" "$b_lease"
-knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+ks "$integ"; ks "$proj"
 git -C "$remote" show-ref -q "refs/heads/$b_lease" && r=yes || r=no
 assert_eq "re-closed leased branch deleted" "$r" no
 
 # --- a clone parked on a proposal branch still gets main; a closed parked branch is left on main
 b3=$(propose_in "$clone" park); git -C "$clone" checkout -q "$b3"
 echo '- be brief' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "feat: brevity"
-knowledge sync "$integ" >/dev/null 2>&1
-knowledge sync "$proj" >/dev/null 2>&1
-knowledge sync "$integ" >/dev/null 2>&1   # the integrator fetches the parked branch
+ks "$integ"
+ks "$proj"
+ks "$integ"   # the integrator fetches the parked branch
 assert_eq "parked clone keeps its branch" "$(git -C "$clone" branch --show-current)" "$b3"
 assert_eq "parked clone's main follows origin" "$(git -C "$clone" rev-parse main)" "$(git -C "$remote" rev-parse main)"
 assert_status "parked clone status ok" "$clone" "ok:"
 git -C "$iclone" merge -q -s ours --no-ff -m "proposal: park rejected" "$b3"
-knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+ks "$integ"; ks "$proj"
 assert_eq "closed parked branch: clone moved to main" "$(git -C "$clone" branch --show-current)" main
 git -C "$clone" show-ref -q "refs/heads/$b3" && r=yes || r=no
 assert_eq "closed parked branch deleted" "$r" no
@@ -260,15 +290,15 @@ assert_eq "closed parked branch deleted" "$r" no
 # --- a local commit on main is diverged; proposal branches are still pushed
 git -C "$clone" commit -q --no-verify --allow-empty -m "local on main"
 b4=$(propose_in "$clone" diverge)
-knowledge sync "$proj" >/dev/null 2>&1
+ks "$proj"
 assert_status "diverged main reported" "$clone" "diverged:"
 assert_contains "diverged message moves the commits onto a proposal branch" "$(status_of "$clone")" "branch proposal/tmp-"
 assert_contains "diverged message resets only after that" "$(status_of "$clone")" "reset --hard origin/main"
 assert_eq "proposal pushed despite diverged main" "$(git -C "$remote" rev-parse "$b4")" "$(git -C "$clone" rev-parse "$b4")"
 git -C "$clone" reset -q --hard origin/main
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$integ"
 git -C "$iclone" merge -q -s ours --no-ff -m "proposal: diverge rejected" "$b4"
-knowledge sync "$integ" >/dev/null 2>&1; knowledge sync "$proj" >/dev/null 2>&1
+ks "$integ"; ks "$proj"
 assert_status "status ok after the reset" "$clone" "ok:"
 
 # --- offline is a status, not a failure, and the manual commands are printed
@@ -278,40 +308,44 @@ assert_eq "offline sync exits 0" "$rc" 0
 assert_status "offline status" "$clone" "offline:"
 assert_status_shape "status file line 1 is the contract's shape (offline)" "$clone" offline
 assert_contains "manual fetch of main printed" "$(cat "$tmp/offline.out")" "git -C $AI_KNOWLEDGE_ROOT/main fetch --prune origin"
-assert_contains "manual fetch of the clone printed" "$(cat "$tmp/offline.out")" "git -C $clone fetch --prune origin"
+assert_eq "no manual fetch of the clone is printed (the host does not fetch into it)" "$(grep -c "git -C $clone fetch" "$tmp/offline.out")" 0
 assert_contains "manual sync printed" "$(cat "$tmp/offline.out")" "ai-knowledge sync $proj"
 assert_eq "no push printed when nothing is pending" "$(grep -c 'git -C .* push ' "$tmp/offline.out")" 0
 b5=$(propose_in "$clone" offline)
 knowledge sync "$proj" >"$tmp/offline2.out" 2>&1
-assert_contains "pending push printed when offline" "$(cat "$tmp/offline2.out")" \
-    "git -C $clone push origin $b5:refs/heads/$b5"
+assert_contains "pending push printed when offline, from the host-owned repository" "$(cat "$tmp/offline2.out")" \
+    "git -C $AI_KNOWLEDGE_ROOT/main push origin refs/sandbox/$pid/heads/$b5:refs/heads/$b5"
+assert_eq "no push is printed against the sandbox's clone" "$(grep -c "git -C $clone push" "$tmp/offline2.out")" 0
 assert_contains "offline status names the pending push" "$(status_of "$clone")" "push"
 knowledge sync "$integ" >"$tmp/offline3.out" 2>&1
-assert_contains "integrator manual fetch printed" "$(cat "$tmp/offline3.out")" "git -C $iclone fetch origin"
+assert_eq "no manual fetch of proposals into the integrator's clone is printed" "$(grep -c "git -C $iclone fetch origin 'refs/heads" "$tmp/offline3.out")" 0
 mv "$remote.away" "$remote"
 knowledge sync "$proj" >/dev/null 2>&1
 assert_eq "pending proposal pushed once online" "$(git -C "$remote" rev-parse "$b5")" "$(git -C "$clone" rev-parse "$b5")"
 assert_status "status ok again once online" "$clone" "ok:"
 
-# --- a manually cloned repository is adopted; a clone on an old-style branch is skipped
+# --- a clone made by hand (the base design's) is read like any other and adopted by the sandbox's command;
+# --- the host neither clones nor moves anything when there is none
 manual="$tmp/work/manual"; mkdir -p "$manual"; git -C "$manual" init -q
 mdir=$(ai_sandbox_dir_for "$manual"); mkdir -p "$mdir"
 mv "$remote" "$remote.away"
 knowledge sync "$manual" >"$tmp/manual.out" 2>&1
-assert_contains "manual clone printed" "$(cat "$tmp/manual.out")" "git clone file://$remote $mdir/knowledge"
+assert_eq "no clone is printed as a manual command (the host makes none)" "$(grep -c 'git clone' "$tmp/manual.out")" 0
+assert_no_file "the host made no clone for a sandbox without one" "$mdir/knowledge/.git"
 mv "$remote.away" "$remote"
 git clone -q "file://$remote" "$mdir/knowledge"
 knowledge sync "$manual" >/dev/null 2>&1
 assert_eq "manual clone stays on main" "$(git -C "$mdir/knowledge" branch --show-current)" main
 assert_status "manual clone status ok" "$mdir/knowledge" "ok:"
-assert_file "manual clone got the hook" "$mdir/knowledge/.git/hooks/pre-commit"
+assert_no_file "the host installed no hook in a clone made by hand" "$mdir/knowledge/.git/hooks/pre-commit"
+assert_eq "the clone made by hand still points at the remote until the sandbox adopts it" "$(git -C "$mdir/knowledge" config --get remote.origin.url)" "file://$remote"
+sbsync "$manual" >/dev/null
+assert_eq "the sandbox's command adopts it: origin is the host's" "$(git -C "$mdir/knowledge" config --get remote.origin.url)" "$mdir/knowledge-origin.git"
+assert_file "the sandbox's command gave it the hook" "$mdir/knowledge/.git/hooks/pre-commit"
 git -C "$mdir/knowledge" checkout -q -b "proposals/old-id" main
 knowledge sync "$manual" >/dev/null 2>&1
-assert_status "old-style branch skipped" "$mdir/knowledge" "skipped:"
-assert_contains "old-style skip says how to leave the branch" "$(status_of "$mdir/knowledge")" "check out main"
+assert_status "an old-style local branch is not a proposal: the host's status stays ok" "$mdir/knowledge" "ok:"
 git -C "$mdir/knowledge" checkout -q main
-knowledge sync "$manual" >/dev/null 2>&1
-assert_status "old-style branch left: the sync is ok again" "$mdir/knowledge" "ok:"
 git -C "$mdir/knowledge" branch -q -D "proposals/old-id"
 
 # --- propose: a file becomes a well-formed branch from origin/main without touching the tree
@@ -428,9 +462,10 @@ printf 'services: {}\n' > "$idir/docker-compose.yml"
 knowledge sync --all >"$tmp/all1.out" 2>&1 || cat "$tmp/all1.out"
 assert_status "all: project clone ok" "$clone" "ok:"
 assert_status "all: integrator clone ok" "$iclone" "ok:"
-assert_status "all: third clone created and ok" "$tdir/knowledge" "ok:"
+assert_status "all: third sandbox ok, with no clone yet" "$tdir/knowledge" "ok:"
+assert_no_file "all: the host made no clone for the third sandbox" "$tdir/knowledge/.git"
 assert_eq "all: one render when main did not move" "$(grep -c 'rendered' "$tmp/all1.out")" 1
-assert_contains "all: table row for the third sandbox" "$(grep "$(basename "$tdir")" "$tmp/all1.out" | tail -1)" " ok main current"
+assert_contains "all: table row for the third sandbox" "$(grep "$(basename "$tdir")" "$tmp/all1.out" | tail -1)" " ok no clone yet"
 assert_contains "all: unstamped sandbox reported, not synced" "$(grep fab-c-agent "$tmp/all1.out" | tail -1)" "unstamped"
 assert_contains "all: unstamped row names create-ai-sandbox.sh" "$(grep fab-c-agent "$tmp/all1.out" | tail -1)" "create-ai-sandbox.sh"
 assert_contains "all: stale row names create-ai-sandbox.sh with the stamped project" "$(grep fab-b-agent "$tmp/all1.out" | tail -1)" "create-ai-sandbox.sh $tmp/work/fab-b"
@@ -452,7 +487,8 @@ echo '- be patient' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "
 AI_KNOWLEDGE_JOBS=1 knowledge sync --all >"$tmp/all2.out" 2>&1 || cat "$tmp/all2.out"
 assert_eq "all: two renders when the integrator advanced main" "$(grep -c 'rendered' "$tmp/all2.out")" 2
 assert_contains "all: render carries the new main" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "- be patient"
-assert_contains "all: project clone merged the new main" "$(cat "$clone/rules/global.md")" "- be patient"
+sbsync "$proj" >/dev/null
+assert_contains "all: project clone merged the new main (by the sandbox's command)" "$(cat "$clone/rules/global.md")" "- be patient"
 rm -rf "$tdir"
 # --- status without an argument lists every sandbox with its state
 all=$(knowledge status 2>&1)
@@ -585,7 +621,7 @@ export SSH_STUB_LOADED="$tmp/ssh-loaded" SSH_STUB_AGENT="$tmp/ssh-agent.sock" SS
 : > "$SSH_STUB_KEY"; : > "$SSH_STUB_LOG"; rm -f "$SSH_STUB_LOADED" "$SSH_STUB_AGENT"
 sshremote="ssh://stub$remote"
 sed -i "s|^REMOTE=.*|REMOTE=$sshremote|" "$AI_KNOWLEDGE_CONFIG"
-for r in "$AI_KNOWLEDGE_ROOT/main" "$clone" "$iclone"; do git -C "$r" remote set-url origin "$sshremote"; done
+git -C "$AI_KNOWLEDGE_ROOT/main" remote set-url origin "$sshremote"
 unset SSH_AUTH_SOCK
 knowledge sync "$proj" >"$tmp/ssh1.out" 2>&1 </dev/null || true
 assert_status "no agent, no terminal: offline" "$clone" "offline:"
@@ -602,21 +638,21 @@ assert_eq "the user's agent is not killed" "$(grep -c 'ssh-agent -k' "$SSH_STUB_
 assert_contains "user told the key went into their agent" "$(cat "$tmp/ssh2.out")" "one hour"
 unset SSH_AUTH_SOCK; rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
 if command -v script >/dev/null 2>&1; then
-    script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$proj'" /dev/null >"$tmp/ssh3.out" 2>&1 || true
+    script -qec "DOCKER_STUB_IMAGES='$kimages' bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$proj'" /dev/null >"$tmp/ssh3.out" 2>&1 || true
     assert_status "terminal: agent started, sync ok" "$clone" "ok:"
     assert_contains "terminal: agent started" "$(cat "$SSH_STUB_LOG")" "ssh-agent -s"
     assert_contains "terminal: agent killed at exit" "$(cat "$SSH_STUB_LOG")" "ssh-agent -k"
     assert_no_file "terminal: agent marker gone after the run" "$SSH_STUB_AGENT"
     rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
-    SSH_STUB_AGENT_FAIL=1 SSH_AGENT_PID=999999 script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$proj'" /dev/null >/dev/null 2>&1 || true
+    SSH_STUB_AGENT_FAIL=1 SSH_AGENT_PID=999999 script -qec "DOCKER_STUB_IMAGES='$kimages' bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$proj'" /dev/null >/dev/null 2>&1 || true
     assert_status "agent start failure: sync goes offline" "$clone" "offline:"
     assert_eq "agent start failure: nothing is killed" "$(grep -c 'ssh-agent -k' "$SSH_STUB_LOG")" 0
     rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
-    script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$tmp/nonexistent'" /dev/null >/dev/null 2>&1 || true
+    script -qec "DOCKER_STUB_IMAGES='$kimages' bash '$REPO_ROOT/bin/ai/ai-knowledge' sync '$tmp/nonexistent'" /dev/null >/dev/null 2>&1 || true
     assert_contains "die: agent had been started" "$(cat "$SSH_STUB_LOG")" "ssh-agent -s"
     assert_no_file "die: agent killed anyway" "$SSH_STUB_AGENT"
     rm -f "$SSH_STUB_LOADED"; : > "$SSH_STUB_LOG"
-    script -qec "bash '$REPO_ROOT/bin/ai/ai-knowledge' sync --all" /dev/null >/dev/null 2>&1 || true
+    script -qec "DOCKER_STUB_IMAGES='$kimages' bash '$REPO_ROOT/bin/ai/ai-knowledge' sync --all" /dev/null >/dev/null 2>&1 || true
     assert_status "all under a started agent: project ok" "$clone" "ok:"
     assert_status "all under a started agent: integrator ok" "$iclone" "ok:"
     assert_eq "all: agent killed once, by the parent only" "$(grep -c 'ssh-agent -k' "$SSH_STUB_LOG")" 1
@@ -625,7 +661,7 @@ else
 fi
 : > "$SSH_STUB_LOG"
 sed -i "s|^REMOTE=.*|REMOTE=file://$remote|" "$AI_KNOWLEDGE_CONFIG"
-for r in "$AI_KNOWLEDGE_ROOT/main" "$clone" "$iclone"; do git -C "$r" remote set-url origin "file://$remote"; done
+git -C "$AI_KNOWLEDGE_ROOT/main" remote set-url origin "file://$remote"
 knowledge sync "$proj" >/dev/null 2>&1 </dev/null || true
 assert_eq "a file remote never touches ssh, ssh-add or ssh-agent" "$(wc -l < "$SSH_STUB_LOG")" 0
 unset SSH_STUB_LOADED SSH_STUB_AGENT SSH_STUB_LOG SSH_STUB_KEY
@@ -661,16 +697,16 @@ assert_contains "empty branches counted" "$(status_of "$clone")" "empty 2"
 assert_eq "empty branches kept" "$(git -C "$clone" branch --list "proposal/$today-empty-aaaa" "proposal/$today-older-bbbb" | wc -l | tr -d ' ')" 2
 git -C "$remote" show-ref -q "refs/heads/proposal/$today-empty-aaaa" && r=yes || r=no
 assert_eq "empty branch not pushed" "$r" no
-git -C "$clone" push -q origin "proposal/$today-empty-aaaa:refs/heads/proposal/$today-empty-aaaa"
+git -C "$clone" push -q "file://$remote" "proposal/$today-empty-aaaa:refs/heads/proposal/$today-empty-aaaa"
 git -C "$iclone" branch -q "proposal/$today-iempty-cccc" main
 knowledge sync "$integ" >/dev/null 2>&1
 assert_status "integrator ok with empty branches around" "$iclone" "ok:"
 git -C "$remote" show-ref -q "refs/heads/proposal/$today-empty-aaaa" && r=yes || r=no
 assert_eq "integrator leaves an empty remote branch alone" "$r" yes
 assert_eq "integrator keeps its own empty branch" "$(git -C "$iclone" branch --list "proposal/$today-iempty-cccc" | wc -l | tr -d ' ')" 1
-git -C "$clone" push -q origin ":refs/heads/proposal/$today-empty-aaaa"
+git -C "$clone" push -q "file://$remote" ":refs/heads/proposal/$today-empty-aaaa"
 git -C "$clone" branch -q -D "proposal/$today-empty-aaaa" "proposal/$today-older-bbbb"
-git -C "$iclone" branch -q -D "proposal/$today-iempty-cccc" "proposal/$today-empty-aaaa"
+git -C "$iclone" branch -q -D "proposal/$today-iempty-cccc"
 
 # --- a failing render keeps the previous GLOBAL.md and still syncs the clone
 mkdir -p "$tmp/nopy"; printf '#!/bin/sh\necho "python3 stub: broken" >&2\nexit 1\n' > "$tmp/nopy/python3"; chmod +x "$tmp/nopy/python3"
@@ -698,6 +734,8 @@ assert_status "ok again with the real timeout" "$clone" "ok:"
 p7="$tmp/work/seven"; mkdir -p "$p7"; git -C "$p7" init -q
 d7="$home7/.ai-sandbox/$(ai_sandbox_project_id "$p7")-agent"; mkdir -p "$d7"
 HOME="$home7" AI_SANDBOX_ROOT="$home7/.ai-sandbox" knowledge sync "$p7" >"$tmp/seven.out" 2>&1 || cat "$tmp/seven.out"
+SANDBOX_STATUS_DIR="$d7/status" SANDBOX_KNOWLEDGE_ORIGIN="$d7/knowledge-origin.git" SANDBOX_KNOWLEDGE_CLONE="$d7/knowledge" \
+    bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" >"$tmp/seven-sks.out" 2>&1 || cat "$tmp/seven-sks.out"
 assert_eq "master-headed remote: clone on main" "$(git -C "$d7/knowledge" branch --show-current)" main
 assert_file "master-headed remote: rules present in the clone" "$d7/knowledge/rules/global.md"
 assert_status "master-headed remote: status ok" "$d7/knowledge" "ok:"
@@ -711,6 +749,10 @@ out=$(HOME="$home7" AI_SANDBOX_ROOT="$home7/.ai-sandbox" knowledge init "file://
 assert_contains "record skipped while the integrator clone is ahead" "$out" "the record is skipped"
 assert_contains "the skip names sync --all as the way forward" "$out" "Run: ai-knowledge sync --all"
 assert_eq "no integrator recorded while the clone is ahead" "$(git -C "$remote3" show main:README.md | grep -c 'ai-knowledge integrator:')" 0
+# the clone is read before it is compared: one that cannot be read (no sandbox image) holds the record back too
+out=$(KNOWLEDGE_IMAGES=none HOME="$home7" AI_SANDBOX_ROOT="$home7/.ai-sandbox" knowledge init "file://$remote3" --integrator "$i7" 2>&1 </dev/null) || true
+assert_contains "an unreadable integrator clone skips the record and says so" "$out" "could not be read; the record is skipped"
+assert_eq "and nothing is recorded" "$(git -C "$remote3" show main:README.md | grep -c 'ai-knowledge integrator:')" 0
 
 # --- the integrator's diverged main is repaired by a merge, never a reset
 side="$tmp/side"; git clone -q "file://$remote" "$side"
@@ -720,6 +762,7 @@ knowledge sync "$integ" >/dev/null 2>&1
 assert_status "integrator main diverged" "$iclone" "diverged:"
 assert_contains "integrator diverged message says merge" "$(status_of "$iclone")" "merge"
 assert_eq "integrator diverged message never says reset --hard" "$(status_of "$iclone" | grep -c 'reset --hard')" 0
+sbsync "$integ" >/dev/null   # the sandbox's origin now has the remote's new main, and its main is left alone
 git -C "$iclone" merge -q --no-edit origin/main
 knowledge sync "$integ" >/dev/null 2>&1
 assert_status "integrator ok after the merge" "$iclone" "ok:"
@@ -744,15 +787,18 @@ rm -f "$remote/hooks/pre-receive"
 knowledge sync "$integ" >/dev/null 2>&1
 assert_status "integrator ok once the push goes through" "$iclone" "ok:"
 
-# --- a knowledge path that is not a clone is moved aside, never removed
+# --- a knowledge path that is not a clone: the host moves nothing aside and writes nothing in it; the
+# --- sandbox's own command leaves it alone and says so; the host's status names the problem
 ng="$tmp/work/nongit"; mkdir -p "$ng"; git -C "$ng" init -q
 ngdir=$(ai_sandbox_dir_for "$ng"); mkdir -p "$ngdir/knowledge"; echo precious > "$ngdir/knowledge/notes.txt"
 knowledge sync "$ng" >"$tmp/nongit.out" 2>&1 || cat "$tmp/nongit.out"
-aside=$(ls -d "$ngdir"/knowledge.not-a-clone.* 2>/dev/null | head -1)
-assert_file "non-git knowledge dir moved aside" "$aside"
-assert_eq "moved-aside content intact" "$(cat "$aside/notes.txt" 2>/dev/null)" precious
-assert_status "clone created beside the moved dir" "$ngdir/knowledge" "ok:"
-assert_contains "status says the old directory was moved" "$(status_of "$ngdir/knowledge")" "not-a-clone"
+assert_eq "nothing is moved aside" "$(ls -d "$ngdir"/knowledge.not-a-clone.* 2>/dev/null | wc -l | tr -d ' ')" 0
+assert_eq "the directory is untouched" "$(ls -A "$ngdir/knowledge" | tr '\n' ' ')$(cat "$ngdir/knowledge/notes.txt")" "notes.txt precious"
+assert_status_shape "the host's status for it is a warning" "$ngdir/knowledge" warn
+assert_contains "and says it is not a clone" "$(status_of "$ngdir/knowledge")" "not a clone"
+out=$(sbsync "$ng")
+assert_contains "the sandbox's command leaves it alone and says so" "$out" "left alone"
+assert_eq "still untouched after the sandbox's command" "$(ls -A "$ngdir/knowledge" | tr '\n' ' ')" "notes.txt "
 home8="$tmp/home8"; mkdir -p "$home8/.gemini" "$home8/.ai-sandbox/knowledge/main"; echo stray > "$home8/.ai-sandbox/knowledge/main/stray.txt"
 HOME="$home8" AI_SANDBOX_ROOT="$home8/.ai-sandbox" knowledge init "file://$remote" >"$tmp/init8.out" 2>&1 </dev/null || cat "$tmp/init8.out"
 assert_file "init moves a non-git main aside" "$(ls -d "$home8"/.ai-sandbox/knowledge/main.not-a-clone.* 2>/dev/null | head -1)"
@@ -766,7 +812,7 @@ mv "$remote" "$remote.away"
 HOME="$home9" AI_SANDBOX_ROOT="$home9/.ai-sandbox" knowledge sync "$p9" >"$tmp/space.out" 2>&1
 mv "$remote.away" "$remote"
 assert_contains "fetch hint quotes the path with a space" "$(cat "$tmp/space.out")" "git -C $(printf '%q' "$home9/.ai-sandbox/knowledge/main") fetch --prune origin"
-assert_contains "clone hint quotes the path with a space" "$(cat "$tmp/space.out")" "git clone file://$remote $(printf '%q' "$d9/knowledge")"
+assert_eq "no clone command is printed for a sandbox without a clone" "$(grep -c 'git clone' "$tmp/space.out")" 0
 
 # --- two sync --all runs at once: locks keep every clone ok and no child fails
 knowledge sync --all >"$tmp/conc1.out" 2>&1 &
@@ -812,9 +858,15 @@ has_ref() {   # <repo> <ref>
 }
 rproj="$tmp/work/r"; mkdir -p "$rproj"; git -C "$rproj" init -q
 rdir=$(ai_sandbox_dir_for "$rproj"); mkdir -p "$rdir"
-knowledge sync "$rproj" >/dev/null 2>&1
+ks "$rproj"
 rclone="$rdir/knowledge"
-knowledge sync "$integ" >/dev/null 2>&1
+ks "$integ"
+# Reports are still published from the clone by the host's older code, which fetches from and pushes to the
+# clone's origin: until reports are mirrored like proposals, the three clones of this section have the remote
+# as their origin, as the base design left them, and the sandbox's command is not run in it (it would adopt them back).
+for c in "$clone" "$iclone" "$rclone"; do
+    git -C "$c" remote set-url origin "file://$remote"; git -C "$c" fetch -q origin; git -C "$c" merge -q --ff-only origin/main 2>/dev/null || true
+done
 assert_status "reports: integrator clone ok before the first report" "$iclone" "ok:"
 knowledge proposals --repo "$iclone" > "$tmp/proposals-before-reports.out" 2>&1
 
@@ -1092,7 +1144,9 @@ assert_eq "the integrator origin holds no ref but heads and reports" "$(orefs "$
 assert_eq "the integrator origin holds the reports this section gave the remote" "$(orefs "$orig_integ" refs/reports | grep -c -- '-o10-')" 2
 assert_eq "the host fetched the remote's reports into refs/origin-reports" \
     "$(orefs "$hostrepo" refs/origin-reports | sed 's#^refs/origin-reports/##')" "$(orefs "$remote" refs/reports | sed 's#^refs/reports/##')"
-assert_eq "a sync leaves a sandbox's namespace in the host repository as it was" "$(orefs "$hostrepo" refs/sandbox refs/pushed-reports | wc -l | tr -d ' ')" 2
+assert_eq "a sync leaves another sandbox's namespace and the pushed-report records in the host repository as they were" "$(orefs "$hostrepo" refs/sandbox/zz refs/pushed-reports | wc -l | tr -d ' ')" 2
+assert_eq "a sync mirrors the clones below refs/sandbox/<id>/{heads,reports,reports-closed} and nothing else" "$(orefs "$hostrepo" refs/sandbox | grep -v '^refs/sandbox/zz/' | grep -vc '^refs/sandbox/[^/]*/\(heads\|reports\|reports-closed\)/')" 0
+assert_eq "the mirror of the proposals sandbox holds its clone's heads" "$(orefs "$hostrepo" refs/sandbox/$pid/heads | sed 's#^refs/sandbox/[^/]*/heads/##' | cut -d' ' -f1 | grep -c '^main$')" 1
 # the remote drops a branch and a report; the host is offline once: the origin keeps the last fetch
 before_off=$(orefs "$orig_integ")
 git -C "$hostrepo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main   # an offline sync prunes nothing on the host
@@ -1104,10 +1158,10 @@ assert_eq "offline: the origin keeps the last fetch" "$(orefs "$orig_integ")" "$
 mv "$remote.away" "$remote"
 git -C "$remote" update-ref -d refs/heads/other-o10; git -C "$remote" update-ref -d refs/reports/2026-01-02-o10-bbbb
 git -C "$iclone" update-ref -d refs/reports/2026-01-02-o10-bbbb   # else the integrator's clone would push it back
-# a dirty clone is skipped whole by the clone-side sync; the origin is refreshed first all the same
+# a dirty clone does not stop the host's sync (it reads refs only); the origin is refreshed all the same
 echo dirt > "$clone/o10-dirt"
 knowledge sync "$proj" >"$tmp/o10-dirty.out" 2>&1 || cat "$tmp/o10-dirty.out"
-assert_status "dirty clone: skipped" "$clone" "skipped:"
+assert_status "dirty clone: not skipped by the host" "$clone" "ok:"
 assert_eq "dirty clone: the origin is refreshed (a deleted branch is pruned)" "$(orefs "$orig_proj" refs/heads)" "$(orefs "$remote" refs/heads)"
 rm -f "$clone/o10-dirt"
 knowledge sync "$integ" >"$tmp/o10-i2.out" 2>&1 || cat "$tmp/o10-i2.out"
@@ -1150,9 +1204,10 @@ ai_sandbox_writable_path "$o10dir/knowledge-origin.git" && r=writable || r=host-
 assert_eq "no sandbox can write the origin (the compose parser sees the bind as read-only)" "$r" host-only
 ai_sandbox_writable_path "$o10dir/knowledge" && r=writable || r=host-only
 assert_eq "the clone stays writable to its sandbox" "$r" writable
-# a sync that works finds the empty knowledge/ create made and clones into it
+# a sync that works leaves the empty knowledge/ create made to the sandbox: no clone, nothing moved aside, nothing written
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$o10p" >"$tmp/o10-create2.out" 2>&1 || cat "$tmp/o10-create2.out"
-assert_file "the sync cloned into the directory create made" "$o10dir/knowledge/.git"
+assert_no_file "the sync made no clone in the directory create made" "$o10dir/knowledge/.git"
+assert_eq "the directory create made is still empty" "$(ls -A "$o10dir/knowledge" | wc -l | tr -d ' ')" 0
 assert_eq "an empty knowledge/ is not moved aside" "$(ls -d "$o10dir"/knowledge.not-a-clone.* 2>/dev/null | wc -l | tr -d ' ')" 0
 assert_eq "the sync of a create fills the origin" "$(orefs "$o10dir/knowledge-origin.git" refs/heads)" "$(orefs "$remote" refs/heads)"
 # the same with a remote that cannot be reached: the directories are there all the same
@@ -1201,7 +1256,6 @@ assert_contains "the command says what it did" "$out" "cloned the origin"
 osync w1e >/dev/null; assert_eq "an empty directory receives the clone" "$(ogit w1e branch --show-current)" main
 assert_eq "a proposals clone holds no other clone's proposal branch" "$(ogit w1 for-each-ref refs/heads/proposal | wc -l | tr -d ' ')" 0
 assert_eq "a proposals clone fetches no report" "$(ogit w1 for-each-ref refs/reports | wc -l | tr -d ' ')" 0
-assert_eq "the hook of the sync on the host equals the hook the command installs" "$(cat "$clone/.git/hooks/pre-commit")" "$(cat "$o11/w1/.git/hooks/pre-commit")"
 
 # a non-empty ~/knowledge that is no clone is left alone and said so; the command exits 0
 mkdir "$o11/w2"; echo mine > "$o11/w2/notes.txt"; ostatus w2 proposals pid-w2
@@ -1341,6 +1395,197 @@ assert_file "the build context holds the command" "$AI_SANDBOX_ROOT/image/build/
 assert_eq "the command is not a host helper" "$(ai_sandbox_helpers | grep -c 'sandbox-knowledge-sync')" 0
 assert_contains "the compose file passes the origin's mount path on" "$(cat "$pdir/docker-compose.yml")" "SANDBOX_KNOWLEDGE_ORIGIN=/run/ai-sandbox/knowledge-origin.git"
 
+# --- O7, O8, O19 (the gateway): a clone prepared as in X1 that also carries what a sandbox can write in its
+# --- configuration and refs; the syncs leave no marker, publish only what is in scope against the host's own main,
+# --- write nothing below the clone, and change no ref of the host-owned repository outside the sandbox's namespace
+gwp="$tmp/work/gw"; mkdir -p "$gwp"; git -C "$gwp" init -q
+gwdir=$(ai_sandbox_dir_for "$gwp"); gwid=$(ai_sandbox_project_id "$gwp"); mkdir -p "$gwdir"
+printf 'services: {}\n' > "$gwdir/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$gwp" > "$gwdir/.env"
+ks "$gwp"
+gwc="$gwdir/knowledge"; gwm="$tmp/gw-markers"; mkdir -p "$gwm"
+assert_file "gateway: the clone exists (made by the sandbox's command)" "$gwc/.git"
+bgw=$(propose_in "$gwc" gateway)                                  # an in-scope proposal: the push must still go
+# a branch that is in scope only against a main the clone supplies: its parent carries a change to rules/
+git -C "$gwc" checkout -q -b gw-evil-base main
+echo '- planted by the clone' >> "$gwc/rules/global.md"; git -C "$gwc" commit -q --no-verify -am "planted rule"; gwevil=$(git -C "$gwc" rev-parse HEAD)
+git -C "$gwc" checkout -q -b "proposal/$today-gwevil-abcd"
+echo e > "$gwc/proposals/$today-gwevil.md"; git -C "$gwc" add -A; git -C "$gwc" commit -q --no-verify -m "evil proposal"
+git -C "$gwc" checkout -q main; git -C "$gwc" branch -q -D gw-evil-base
+git -C "$gwc" update-ref refs/remotes/origin/main "$gwevil"       # the clone's idea of the remote's main
+git -C "$gwc" update-ref refs/heads/main "$gwevil"                # a proposing clone's main, ahead with the planted rule
+for r in refs/tags/main refs/tags/origin/main refs/stash refs/notes/commits refs/odd/kind; do git -C "$gwc" update-ref "$r" "$gwevil"; done
+git -C "$gwc" update-ref refs/remotes/origin/proposal/gw-phantom "$gwevil"
+# settings and hooks a sandbox can write: every effect on the host is a file MARKER-* in $gwm
+mkdir -p "$tmp/gw-evilhooks"
+git -C "$gwc" config core.fsmonitor "touch '$gwm/MARKER-config' #"
+git -C "$gwc" config core.sshCommand "touch '$gwm/MARKER-ssh' #"
+git -C "$gwc" config uploadpack.packObjectsHook "sh -c 'touch $gwm/MARKER-packhook; exec \"\$@\"' --"
+git -C "$gwc" config core.hooksPath "$tmp/gw-evilhooks"
+git -C "$gwc" config core.worktree "$integ"
+git init -q --bare "$tmp/gw-trap.git"
+git -C "$gwc" config "url.file://$tmp/gw-trap.git.insteadOf" "file://$remote"
+git -C "$gwc" config remote.origin.pushurl "file://$tmp/gw-trap.git"
+for h in pre-push reference-transaction post-checkout post-merge post-update pre-auto-gc; do
+    printf '#!/bin/sh\ntouch "%s/MARKER-hook-%s"\n' "$gwm" "$h" > "$gwc/.git/hooks/$h"; chmod +x "$gwc/.git/hooks/$h"
+    cp "$gwc/.git/hooks/$h" "$tmp/gw-evilhooks/$h"
+done
+# links where the base design wrote below the clone, pointing at files outside it
+mkdir -p "$tmp/gw-targets"
+for n in sync-status role hook exclude; do echo "original $n" > "$tmp/gw-targets/$n"; done
+ln -s "$tmp/gw-targets/sync-status" "$gwc/.sync-status"
+ln -sf "$tmp/gw-targets/role" "$gwc/.git/ai-knowledge-role"
+rm -f "$gwc/.git/hooks/pre-commit"; ln -s "$tmp/gw-targets/hook" "$gwc/.git/hooks/pre-commit"
+rm -f "$gwc/.git/info/exclude"; ln -s "$tmp/gw-targets/exclude" "$gwc/.git/info/exclude"
+# the control: a host git started in the clone the base design's way runs the planted setting
+git -C "$gwc" status --porcelain >/dev/null 2>&1
+assert_file "gateway control: host git in the clone runs a planted setting (so the absence below proves something)" "$gwm/MARKER-config"
+rm -f "$gwm"/MARKER-*
+snapshot() {   # <dir>: path, type, size, mode, mtime and content hash of everything below it; links are not followed
+    ( cd "$1" && find . -printf '%p %y %s %m %T@\n' | LC_ALL=C sort; find . -type f -exec sha256sum {} + | LC_ALL=C sort )
+}
+gw_before=$(snapshot "$gwc"); gw_targets=$(sha256sum "$tmp"/gw-targets/*)
+gw_remote_before=$(git -C "$remote" for-each-ref --format='%(refname) %(objectname)')
+other_ns=$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$integ")")
+# a recorder first on PATH: every git the host starts by name, with its working directory (the container stub's git
+# is started by git itself from its own directory, so the recorder does not see it)
+GWLOG="$tmp/gw-git.log"; : > "$GWLOG"; gwrec="$tmp/gw-rec"; mkdir -p "$gwrec"
+printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$PWD" "$*" >> "%s"\nexec %s "$@"\n' "$GWLOG" "$(command -v git)" > "$gwrec/git"; chmod +x "$gwrec/git"
+# the stub remote records every update of the run
+printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$1" "$2" "$3" >> "%s"\nexit 0\n' "$tmp/gw-updates.log" > "$remote/hooks/update"; chmod +x "$remote/hooks/update"
+: > "$tmp/gw-updates.log"
+PATH="$gwrec:$PATH" knowledge sync "$gwp" >"$tmp/gw-sync.out" 2>&1; rc=$?
+assert_eq "gateway: sync <project> exits 0" "$rc" 0
+assert_eq "gateway: the namespace of another sandbox is as it was after sync <project> (N8)" "$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$integ")")" "$other_ns"
+PATH="$gwrec:$PATH" knowledge sync --all >"$tmp/gw-all.out" 2>&1; rc=$?
+assert_eq "gateway: sync --all exits 0" "$rc" 0
+PATH="$gwrec:$PATH" knowledge init "file://$remote" --integrator "$integ" >"$tmp/gw-init.out" 2>&1 </dev/null
+PATH="$gwrec:$PATH" knowledge status "$gwp" >/dev/null 2>&1; PATH="$gwrec:$PATH" knowledge status >/dev/null 2>&1
+PATH="$gwrec:$PATH" DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$gwp" >"$tmp/gw-create.out" 2>&1 || cat "$tmp/gw-create.out"
+rm -f "$remote/hooks/update"
+assert_eq "O7: no marker after sync <project>, sync --all, init, status and a create run" "$(ls "$gwm" | grep -c MARKER)" 0
+assert_eq "O7: the clone's url rewrite and push url reached nothing (the trap repository is empty)" "$(git -C "$tmp/gw-trap.git" for-each-ref | wc -l | tr -d ' ')" 0
+assert_eq "O7: the in-scope proposal reached the remote" "$(git -C "$remote" rev-parse "$bgw" 2>/dev/null)" "$(git -C "$gwc" rev-parse "$bgw")"
+assert_eq "O7: the proposal that is in scope only against the main the clone supplies is not on the remote" "$(git -C "$remote" show-ref -q "refs/heads/proposal/$today-gwevil-abcd" && echo yes || echo no)" no
+assert_contains "O7: it is refused by name" "$(status_of "$gwc")" "proposal/$today-gwevil-abcd changes rules/global.md"
+assert_eq "O7: nothing else reached the remote" "$(git -C "$remote" for-each-ref --format='%(refname) %(objectname)' | grep -vxF "refs/heads/$bgw $(git -C "$gwc" rev-parse "$bgw")")" "$gw_remote_before"
+assert_eq "O7: the remote's main is unchanged (a proposing clone's main does not reach it)" "$(git -C "$remote" rev-parse main)" "$(printf '%s\n' "$gw_remote_before" | sed -n 's/^refs\/heads\/main //p')"
+assert_ne "(the mirror holds the planted main, as data)" "$(git -C "$hostrepo" rev-parse -q --verify "refs/sandbox/$gwid/heads/main" 2>/dev/null)" ""
+assert_eq "O7: the stub remote saw one update, the in-scope proposal, and every update is a creation or a fast-forward" \
+    "$(awk -v ref="refs/heads/$bgw" '$1!=ref{bad++} END{print NR+0 " " bad+0}' "$tmp/gw-updates.log")" "1 0"
+while read -r ref old new; do
+    case $old in 0*) continue ;; esac
+    git -C "$remote" merge-base --is-ancestor "$old" "$new" 2>/dev/null && r=ff || r=forced
+    assert_eq "O7: the update of $ref is no forced update" "$r" ff
+done < "$tmp/gw-updates.log"
+# a path is inside the clone or the project when it is that directory or below it (the origin beside the clone is not)
+# Until the reports are read through the mirror too (the next task), the report part of the sync still reads the
+# clone's refs/reports with one host git; nothing else of the host may.
+gw_other=$(awk -F'|' -v k="$gwc" -v p="$gwp" '
+    function inside(d) { return d == k || d == p || index(d, k "/") == 1 || index(d, p "/") == 1 }
+    { n = split($2, a, " "); hit = inside($1)
+      for (i = 1; i < n; i++) if (a[i] == "-C" && inside(a[i+1])) hit = 1
+      if (hit && index($2, "refs/reports") == 0) bad++ }
+    END { print bad+0 }' "$GWLOG")
+assert_eq "O7: no host git process but the reports' own had the clone or the project as repository, -C or working directory" "$gw_other" 0
+assert_ne "(control: the recorder saw git processes)" "$(wc -l < "$GWLOG" | tr -d ' ')" 0
+assert_eq "O8: nothing below <sandbox>/knowledge changed (path, type, size, mode, mtime, content)" "$(snapshot "$gwc")" "$gw_before"
+assert_eq "O8: no link planted where the base design wrote points at a changed target" "$(sha256sum "$tmp"/gw-targets/*)" "$gw_targets"
+assert_eq "O8: and the links are still links" "$(for l in .sync-status .git/ai-knowledge-role .git/hooks/pre-commit .git/info/exclude; do [ -L "$gwc/$l" ] && echo l; done | tr -d '\n')" "llll"
+# O19: every ref outside the sandboxes' namespaces is one the host wrote from the remote, equal to the remote's
+host_outside=$(orefs "$hostrepo" | grep -v '^refs/sandbox/\|^refs/pushed-reports/')
+assert_eq "O19: the host-owned repository holds outside refs/sandbox and refs/pushed-reports only main, the proposals the host filed itself, origin/* and origin-reports/*" \
+    "$(printf '%s\n' "$host_outside" | grep -vc '^refs/heads/main \|^refs/heads/proposal/\|^refs/remotes/origin/\|^refs/origin-reports/')" 0
+assert_eq "O19: each of them equals the remote's after the sync" \
+    "$( { orefs "$hostrepo" refs/remotes/origin | grep -v '^refs/remotes/origin/HEAD ' | sed 's#^refs/remotes/origin/#H #'; orefs "$hostrepo" refs/origin-reports | sed 's#^refs/origin-reports/#R #'; } )" \
+    "$( { orefs "$remote" refs/heads | sed 's#^refs/heads/#H #'; orefs "$remote" refs/reports | sed 's#^refs/reports/#R #'; } )"
+assert_eq "O19: the host's main and its work tree equal the remote's main" "$(git -C "$hostrepo" rev-parse refs/heads/main)$(git -C "$hostrepo" status --porcelain)" "$(git -C "$remote" rev-parse main)"
+assert_eq "O19: and so does the render" "$(grep -c 'planted by the clone' "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" 0
+assert_eq "O19: the host's own refs outside the namespaces are those the first fetch of the remote left (none of the clone's tags arrived)" \
+    "$(git -C "$hostrepo" for-each-ref --format='%(refname)' refs/tags | grep -c '^refs/tags/\(main\|origin/main\)$')" 0
+# the negative case: the same fetch without the confinement lets the clone put refs outside the namespace
+git init -q --bare "$tmp/gw-neg.git"
+git -C "$tmp/gw-neg.git" fetch -q --prune "$gwc" '+refs/heads/*:refs/sandbox/gw/heads/*' >/dev/null 2>&1
+assert_ne "O19 negative control: without the confinement a tag of the clone lands outside the namespace" \
+    "$(git -C "$tmp/gw-neg.git" for-each-ref --format='%(refname)' | grep -vc '^refs/sandbox/gw/')" 0
+rm -rf "$tmp/gw-neg.git"
+
+# --- O12 (who runs it): after a sync the host runs the sandbox's command with docker exec, only in a running
+# --- container whose stamp is current, as its own user, with no terminal and standard input closed, under the limit
+exp="$tmp/work/ex"; mkdir -p "$exp"; git -C "$exp" init -q
+exdir=$(ai_sandbox_dir_for "$exp"); exname=$(basename "$exdir"); mkdir -p "$exdir"
+printf 'services: {}\n' > "$exdir/docker-compose.yml"
+exenv() { printf 'SANDBOX_KNOWLEDGE=%s\nSANDBOX_PROJECT_DIR=%s\n' "$1" "$exp" > "$exdir/.env"; }
+exenv 2
+execs() { grep -c "^exec $exname " "$DOCKER_STUB_LOG"; }
+: > "$DOCKER_STUB_LOG"
+DOCKER_STUB_RUNNING=false knowledge sync "$exp" >/dev/null 2>&1
+assert_eq "O12: a container that is not running gets no exec" "$(execs)" 0
+assert_no_file "O12: and so no clone is made by a sync alone" "$exdir/knowledge/.git"
+for st in 1 0 ""; do
+    exenv "$st"; : > "$DOCKER_STUB_LOG"
+    DOCKER_STUB_RUNNING=true knowledge sync "$exp" >/dev/null 2>&1
+    assert_eq "O12: a running container stamped '$st' gets no exec" "$(grep -c 'sandbox-knowledge-sync' "$DOCKER_STUB_LOG")" 0
+done
+exenv 2; : > "$DOCKER_STUB_LOG"
+out=$(DOCKER_STUB_RUNNING=true DOCKER_STUB_EXEC_OUT=$'said\033[31m red\rend' knowledge sync "$exp" 2>&1 </dev/null); rc=$?
+assert_eq "O12: the sync exits 0" "$rc" 0
+assert_eq "O12: a running container of a current stamp gets exactly one exec, of the command by its path, with no option" \
+    "$(grep '^exec ' "$DOCKER_STUB_LOG")" "exec $exname /usr/local/bin/sandbox-knowledge-sync"
+assert_eq "O12: with standard input closed" "$(grep '^exec-stdin=' "$DOCKER_STUB_LOG")" "exec-stdin=/dev/null"
+assert_file "O12: the command ran (the clone exists now)" "$exdir/knowledge/.git"
+assert_contains "O12: its output is printed" "$out" "said[31m redend"
+assert_eq "O12: with control characters removed" "$(printf '%s' "$out" | tr -d '\n' | LC_ALL=C grep -c "[[:cntrl:]]")" 0
+assert_status "O12: the host's own status is untouched by a good exec" "$exdir/knowledge" "ok:"
+# failing, and hanging until the limit: a warning, the sync still exits 0
+: > "$DOCKER_STUB_LOG"
+out=$(DOCKER_STUB_RUNNING=true DOCKER_STUB_EXEC_EXIT=3 knowledge sync "$exp" 2>&1); rc=$?
+assert_eq "O18: a failing exec: the sync exits 0" "$rc" 0
+assert_status_shape "O18: a failing exec makes the status a warning" "$exdir/knowledge" warn
+assert_contains "O18: and says what failed" "$(status_of "$exdir/knowledge")" "the sandbox's own sync failed (exit 3)"
+assert_eq "O18: the keys of the status survive the amendment" "$(sed -n '2,3p' "$(status_file "$exdir/knowledge")" | tr '\n' ' ')" "role=proposals project-id=$(ai_sandbox_project_id "$exp") "
+SECONDS=0
+out=$(AI_KNOWLEDGE_GIT_TIMEOUT=2 DOCKER_STUB_RUNNING=true DOCKER_STUB_EXEC_HANG=10 knowledge sync "$exp" 2>&1); rc=$?
+assert_eq "O18: an exec that reaches the time limit: the sync exits 0" "$rc" 0
+assert_eq "O18: and was cut short" "$([ "$SECONDS" -lt 9 ] && echo yes || echo no)" yes
+assert_contains "O18: the status says so" "$(status_of "$exdir/knowledge")" "timed out after 2s"
+# no sandbox image: nothing is fetched, the status says so, the start proceeds
+before=$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$exp")")
+: > "$DOCKER_STUB_LOG"
+out=$(KNOWLEDGE_IMAGES=none knowledge sync "$exp" 2>&1); rc=$?
+assert_eq "O18: no sandbox image: the sync exits 0" "$rc" 0
+assert_status_shape "O18: no sandbox image: the status is a warning" "$exdir/knowledge" warn
+assert_contains "O18: it names the missing image" "$(status_of "$exdir/knowledge")" "no sandbox image exists yet"
+assert_eq "O18: no container was started" "$(grep -c '^run ' "$DOCKER_STUB_LOG")" 0
+assert_eq "O18: nothing was fetched" "$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$exp")")" "$before"
+# the confined run reaching the limit
+slowd="$tmp/slowd"; mkdir -p "$slowd"
+printf '#!/bin/sh\ncase "$1" in run) exec sleep 10 ;; esac\nexec %s "$@"\n' "$(command -v docker)" > "$slowd/docker"; chmod +x "$slowd/docker"
+SECONDS=0
+out=$(PATH="$slowd:$PATH" AI_KNOWLEDGE_GIT_TIMEOUT=2 knowledge sync "$exp" 2>&1); rc=$?
+assert_eq "O18: a confined run that reaches the limit: the sync exits 0" "$rc" 0
+assert_eq "O18: and was cut short" "$([ "$SECONDS" -lt 9 ] && echo yes || echo no)" yes
+assert_contains "O18: the status says so" "$(status_of "$exdir/knowledge")" "timed out after 2s"
+# the lock busy (a flock that never gets it): the sync exits 0, nothing is fetched or pushed, the status is a warning
+busyd="$tmp/busyd"; mkdir -p "$busyd"; printf '#!/bin/sh\nexit 1\n' > "$busyd/flock"; chmod +x "$busyd/flock"
+before=$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$exp")")
+out=$(PATH="$busyd:$PATH" knowledge sync "$exp" 2>&1); rc=$?
+assert_eq "O18: lock busy: the sync exits 0" "$rc" 0
+assert_status_shape "O18: lock busy: the status is a warning" "$exdir/knowledge" warn
+assert_contains "O18: lock busy: it says so" "$(status_of "$exdir/knowledge")" "lock busy"
+assert_eq "O18: lock busy: the mirror is as it was" "$(orefs "$hostrepo" "refs/sandbox/$(ai_sandbox_project_id "$exp")")" "$before"
+# sync --all runs the command in each running current sandbox, and in no stale or unstamped one
+: > "$DOCKER_STUB_LOG"
+DOCKER_STUB_RUNNING=true knowledge sync --all >/dev/null 2>&1
+assert_eq "O12: sync --all execs in a running current sandbox" "$(execs)" 1
+assert_eq "O12: and in no sandbox stamped 1, 0 or unstamped" "$(grep -c '^exec fab-[bce]-agent' "$DOCKER_STUB_LOG")" 0
+# the exec shows what the command printed, nothing else; the container never gets git credentials or a shell
+assert_eq "O12: no exec asks for a terminal, root or a shell" "$(grep '^exec ' "$DOCKER_STUB_LOG" | grep -c ' -t\| -it\| -u \|--user\|--privileged\| bash\| sh ')" 0
+rm -rf "$exdir"
+
+# the gateway sandbox leaves the listing, and its mirror leaves the host-owned repository
+rm -rf "$gwdir" "$tmp/gw-markers" "$tmp/gw-targets"
+git -C "$hostrepo" for-each-ref --format='delete %(refname)' "refs/sandbox/$gwid" | git -C "$hostrepo" update-ref --stdin
+
 # --- O6 (C-STAMP): the project and the role come from the stamps and the host's
 # --- configuration, not from what a sandbox can write in the project or its clone
 mkdir -p "$proj/sub/deep" "$proj/plainsub"
@@ -1359,10 +1604,12 @@ printf 'integrator %s\n' "$pid" > "$clone/.git/ai-knowledge-role"
 echo '- planted' >> "$clone/rules/global.md"; git -C "$clone" commit -q --no-verify -am "planted on main"
 knowledge sync "$proj/sub/deep" >"$tmp/o6-sync.out" 2>&1 || cat "$tmp/o6-sync.out"
 assert_eq "tree inputs: sync from a subdirectory addresses the stamped sandbox" "$(grep -c 'no sandbox directory' "$tmp/o6-sync.out")" 0
-assert_eq "tree inputs: sync syncs as proposals" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
+assert_eq "tree inputs: sync syncs as proposals (the status file's role)" "$(sed -n 's/^role=//p' "$(status_file "$clone")")" proposals
 assert_eq "tree inputs: the clone's main does not reach the remote (sync)" "$(git -C "$remote" rev-parse main)" "$pmain"
 knowledge sync --all >"$tmp/o6-all.out" 2>&1 || cat "$tmp/o6-all.out"
-assert_eq "tree inputs: sync --all syncs the stamped sandbox as proposals" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
+assert_eq "tree inputs: sync --all syncs the stamped sandbox as proposals" "$(sed -n 's/^role=//p' "$(status_file "$clone")")" proposals
+sbsync "$proj" >/dev/null
+assert_eq "tree inputs: the sandbox's command writes the role it is told, not the one the clone names" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
 assert_eq "tree inputs: the clone's main does not reach the remote (sync --all)" "$(git -C "$remote" rev-parse main)" "$pmain"
 git -C "$clone" reset -q --hard "$cmain"
 n=$(ls "$AI_SANDBOX_ROOT" | grep -c -- '-agent$')
@@ -1376,8 +1623,7 @@ msg=$(knowledge _sync-clone "$tmp/work/nowhere" 2>&1) && r=0 || r=$?
 assert_eq "_sync-clone without its sandbox argument refuses" "$r" 1
 assert_contains "_sync-clone names what it needs" "$msg" "usage"
 msg=$(knowledge _sync-clone "$proj/sub" "$pdir" 2>&1) && r=0 || r=$?
-assert_eq "_sync-clone takes the project it is given" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $(ai_sandbox_project_id "$proj/sub")"
-printf 'proposals %s\n' "$pid" > "$clone/.git/ai-knowledge-role"
+assert_eq "_sync-clone takes the project it is given" "$(sed -n 's/^project-id=//p' "$(status_file "$clone")")" "$(ai_sandbox_project_id "$proj/sub")"
 
 # --- O21: init --integrator records what the lookup returns once the sandbox exists
 orepo="$tmp/work/orepo"; mkdir -p "$orepo"; git -C "$orepo" init -q

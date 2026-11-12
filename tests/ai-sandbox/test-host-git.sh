@@ -135,9 +135,10 @@ tree=$(sg_reports "$REPO_ROOT/bin/ai" | while IFS= read -r r; do
     case " $NAMED_EXCEPTIONS " in *" bin/ai/${r%:*} "*) continue ;; esac
     echo "$r"
 done)
-# Until the sync stops starting git on the clone (the gateway tasks), these reports are the sync's own; the count
-# is exact, so removing one without lowering it fails here, and those tasks set it to 0 and delete the allowance.
-PENDING_AI_KNOWLEDGE=42
+# Until the reports are read through the mirror like the proposals (the last gateway task), these reports are the
+# report part of the sync's own; the count is exact, so removing one without lowering it fails here, and that task
+# sets it to 0 and deletes the allowance.
+PENDING_AI_KNOWLEDGE=10
 assert_eq "no report outside the two bodies, the named exceptions and the sync's pending clone starts" \
     "$(printf '%s\n' "$tree" | command grep -vc '^ai-knowledge:\|^$')" 0
 assert_eq "the sync's pending clone starts are exactly the allowance" \
