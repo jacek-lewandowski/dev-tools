@@ -191,6 +191,11 @@ assert_eq "--no-audio: recorded as off" "$(sed -n 's/^SANDBOX_WITH_AUDIO=//p' "$
 shown
 shares_none "a bare run after --no-audio"
 
+# With no display the sound devices stay out even when asked for: only the socket is shared.
+HOST_SND_DIR="$snd" audio --audio
+assert_contains "--audio with no display still mounts the socket" "$(cat "$dir/docker-compose.yml")" 'sandbox-pulse'
+assert_eq "--audio with no display mounts no sound device and sets no rule" "$(grep -cE '/dev/snd|c 116:' "$dir/docker-compose.yml")" '0'
+
 rm -rf "$x11_dir" 2>/dev/null
 
 rm -rf "$tmp"
