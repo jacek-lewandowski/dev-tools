@@ -15,6 +15,26 @@ after round 2, in `plan-fixes-r2.md` there. Findings are named
 by key only and inputs only by their class (the author's answer to Q4, and S-1); no step
 here reproduces one.
 
+## Amendments after implementation (2026-11-12)
+
+Applied by Bartek (planner 2) after T12 and before the phase review, from the lead's
+queue (numbered as there), so that the review reads what was agreed. Evidence files are
+those of the branch, in the evidence directory. No goal, invariant or contract of the
+spec changes, and no obligation is added; obligations change only where an item says.
+
+| Item | What changed in this plan | Rests on |
+|---|---|---|
+| 1 | Contract line of `ai_sandbox_create_root`: its fallback is the directory with links resolved, as `ai_sandbox_project_root`'s. O5: the ids equal today's except for an unstamped plain directory first reached through a link, which is stamped by its resolved path. | `T02-stamp-lookup.md`, "Deviation from the plan" |
+| 2, 9 | Decided: O13 stands as written and T08's entry is amended. T08 kept the old-style-branch skip with a new message; T09 removed it and its half of the line-272 case (the host reads refs only; a branch outside `proposal/*` is no proposal to it). | `T08-remove-migration.md`, "Deviations from the plan"; `T09-gateway-proposals.md`, "Deviations from the plan" 1 |
+| 3 | T06's entry: the hook is copied into `sandbox-knowledge-sync`; T09's entry: T09 deletes `install_hook` and the role-file write in `ai-knowledge` (R3, R8). | `T06-in-sandbox-sync.md`, "Deviations from the plan" |
+| 4 | Impact-set row "Image tag": the corrected search S22, three lines, `bin/ai/ai-sandbox-extensions` added; the search is kept as a build check in `test-identity.sh`. | `T01-host-git.md`, "S22" |
+| 5 | "First gate" and T12's entry: T12 runs after T09 and T10. | `T12-documents.md` (base `b8671e5`, T10's tip) |
+| 6 | O3 and the entries of T09, T10, T11: until T10 the tree case holds an exact allowance for `ai-knowledge`'s clone starts (`PENDING_AI_KNOWLEDGE`: 42 at T11, 10 after T09); T10 removes it and completes O3. | `T11-host-git-rule.md`, "Deviations from the plan"; `T09-gateway-proposals.md`, "Residue"; `T10-gateway-reports.md`, "O3" |
+| 7 | New section "If phase 1 lands on `main` second" (phase 2's procedure, steps 1 to 5, and the re-run of phase 2's evidence section); RP1 takes its range from `merge-base main <tip>` and shows a merge commit's resolution (`--cc`). | phase 2 plan, "Base and branches"; probe "RP1 range after a merge" in this plan's evidence file |
+| 8 | "First gate", T09 and T10: written before X1's answer, in B1a's form (the user's decision); "What the plan becomes" applies once X1 is in; RP1 also waits for X1's verdict in `x1.md`. | `T09-gateway-proposals.md` and `T10-gateway-reports.md`, "X1's verdict is pending" |
+| 9 | T09's and T10's entries: they land only together (T09 alone leaves the report part pushing to the read-only origin). | `T09-gateway-proposals.md`, "Deviations from the plan" 2 |
+| 10 | O7 names the case of an integrator's clone whose `main` is strictly behind the host's `refs/remotes/origin/main` (not pushed); a `fix:` commit of T09's code with its regression case closes it. | `T12-documents.md`, "Deviations and findings" 1; `F01-integrator-main-behind.md` |
+
 ## Read this first (for the reviewer)
 
 - **Spec change: none needed by this plan.** It follows S-1 (the author's proposed
@@ -118,7 +138,8 @@ Nothing else is open.
 ## Where the work happens, and when the host runs it
 
 - Area: the ai-sandbox toolchain (`bin/ai/`, `tests/ai-sandbox/`, the documents of
-  T12). One implementer, slot 1 (Zuzia), all twelve tasks in order, in one worktree
+  T12). One implementer, slot 1 (Zuzia), all twelve tasks in the order "First gate"
+  states (T01 to T08, T11, T09, T10, T12; item 5), in one worktree
   `.worktrees/2026-11-11-sandbox-hardening-p1` on branch
   `2026-11-11-sandbox-hardening-p1`, created from the commit that carries this plan.
   The lead adds `.worktrees/` to `.git/info/exclude`. One tree, one suite run at a time
@@ -130,14 +151,20 @@ Nothing else is open.
 - **Read point RP0**: the user reads this plan, batch B1 and the fixture file it
   names before running B1. B1 runs a copy of the fixture only if its SHA-256 equals
   the one written in B1, so what runs is what was read.
-- **Read point RP1**: after the phase review accepts the tree, the gate passes and A3's
+- **Read point RP1**: after the phase review accepts the tree, the gate passes, X1's
+  verdict is in `x1.md` with the plan corrected as "What the plan becomes" says
+  (item 8), and A3's
   recheck has passed on every host (B1b; the lead's verdict in `a3.md`), and before
-  the lead merges the branch into the main checkout. The lead gives the user two
-  commit ids, `<base>` (the commit carrying this plan) and `<tip>` (the commit the gate ran on). The user reads, at the host,
-  first every changed path, then the host-executed files task commit by task commit:
-  `git -C ~/dev/public/dev-tools --no-pager diff --no-ext-diff --no-textconv --stat <base> <tip>`
+  the lead merges the branch into the main checkout. The lead gives the user `<tip>`
+  (the commit the gate ran on). The user reads, at the host,
+  first every changed path, then the host-executed files task commit by task commit,
+  with the resolution of any merge commit (item 7):
+  `B=$(git -C ~/dev/public/dev-tools merge-base main <tip>); git -C ~/dev/public/dev-tools --no-pager diff --no-ext-diff --no-textconv --stat $B <tip>`
   and
-  `git -C ~/dev/public/dev-tools --no-pager log --reverse -p --no-ext-diff --no-textconv <base>..<tip> -- bin/ai`.
+  `git -C ~/dev/public/dev-tools --no-pager log --reverse -p --cc --no-ext-diff --no-textconv $B..<tip> -- bin/ai`.
+  The merge base is the commit on `main` the branch started from (the commit carrying
+  this plan) or last merged, so the range holds phase 1's change only, in either order
+  of landing. RP1 is taken again on every tip the gate runs on.
   Until phase 4 nothing binds the working tree the host runs to what was read: the main
   checkout is writable from the dev-tools sandbox (H3, open until phase 4). From the
   merge on, the next `ai-sandbox` start, `create-ai-sandbox.sh` run or
@@ -146,11 +173,32 @@ Nothing else is open.
   first). No host step of this phase runs before RP1 except B1; batch B2 follows RP1.
 - Each task below names the files the host executes once it has landed.
 
+## If phase 1 lands on `main` second (item 7)
+
+Phase 2 runs in parallel on its own branch from `dd0146a` (the user's request,
+2026-11-12; phase 2's plan, "Base and branches"). If phase 1 lands first, nothing here
+applies to phase 1. If phase 2 has landed first, phase 1's branch follows phase 2's
+second-landing procedure, as that plan numbers it:
+
+1. take `main` in with a merge commit (no rebase: the evidence cites commit ids) and
+   resolve any conflict;
+2. run `bash tests/ai-sandbox/run-tests.sh`;
+3. re-run phase 2's evidence section "Re-run when the other branch lands on `main`"
+   (`docs/superpowers/evidence/2026-11-11-sandbox-hardening-p2/2026-11-11-sandbox-hardening-p2-plan.md`),
+   its items read in this direction (`<p1 tip>` is phase 1's commit before the merge);
+4. if the merge comes before phase 1's review, the review and the gate cover the merged
+   tree; if after, the merge commit's delta gets a review of its own and the gate runs
+   again on the new tip;
+5. RP1 is taken again on every tip the gate runs on, with its `merge-base` range.
+
 ## First gate: batch B1 for the user (X1, then A3 and the migration)
 
-T01 to T08, T11 and T12 do not depend on X1 and start at once; T09 and T10 wait for
-X1's answer. T08 lands on the branch at once, but RP1 waits until A3's recheck has
-passed on every host. X2, X3 and X4 are not in this batch: the spec lists their
+T01 to T08 and T11 do not depend on X1 and start at once. T09 and T10 were written
+before X1's answer (the user's decision, 2026-11-12, item 8), on the assumption that
+B1a passes in full: the transport is the body of `ai_sandbox_confined_fetch` alone, and
+"What the plan becomes" below still applies once X1 is in; RP1 waits for that verdict.
+T12 runs after T09 and T10, whose behaviour it documents (item 5). T08 lands on the
+branch at once, but RP1 waits until A3's recheck has passed on every host. X2, X3 and X4 are not in this batch: the spec lists their
 attempts and pass lines but gives no commands (they need a GitHub App, a Bitbucket
 repository and the engines set up), so they wait for the plans of phases 5 and 8.
 
@@ -326,6 +374,7 @@ ai_sandbox_project_root [dir]   # nearest stamped ancestor, else dir itself with
                                 # links resolved; 1: no dir
 ai_sandbox_create_root [dir]    # create-ai-sandbox.sh only: the nearer of the stamped
                                 # ancestor and the ancestor holding .git, else dir
+                                # itself with links resolved (item 1)
 ```
 
 C-KNOW and C-STATUS data, as phase 9 will find them (the sandbox id is the project id,
@@ -413,7 +462,10 @@ key cited by several. Evidence: one file per task, `t<NN>-<slug>.md`, one entry 
   exempt forms and a heredoc body give 0; an extensionless file is scanned; every
   file under `bin/ai` whose name ends `.sh` or whose first line names bash or sh is parsed by the rule or is a named exception
   (a new file that is neither fails the case); each named exception is absent from
-  `ai_sandbox_helpers`; `bin/ai` gives no report outside the two bodies; a missing
+  `ai_sandbox_helpers`; `bin/ai` gives no report outside the two bodies (item 6: until
+  T10 this case holds an exact allowance for `ai-knowledge`'s clone starts,
+  `PENDING_AI_KNOWLEDGE` in `test-host-git.sh`, 42 at T11 and 10 after T09; T10 removes
+  the allowance, so at the phase's end the case is as written); a missing
   `ast-grep` fails the file instead of skipping it. On the base the rule gives 123
   reports, 106 of them starts (evidence, "Structural search").
 - **O4 C-STAMP lookup.** `ai_sandbox_project_root` starts no git process (a recording
@@ -430,7 +482,10 @@ key cited by several. Evidence: one file per task, `t<NN>-<slug>.md`, one entry 
   `ai_sandbox_create_root`: from a subdirectory of a repository without a sandbox, the
   repository; for a repository below a sandboxed parent, the repository; from a
   subdirectory of a sandboxed plain directory, that directory; a plain directory,
-  itself; the ids of the repository and plain-directory cases equal today's. `.env`'s
+  itself; the ids of the repository and plain-directory cases equal today's, except
+  that an unstamped plain directory reached through a link resolves to its resolved
+  path, as `ai_sandbox_project_root`'s fallback does (item 1; a stamp of either form
+  written today is still found through the link, O4). `.env`'s
   `HOST_GIT_NAME` and `HOST_GIT_EMAIL` come from the global git configuration also
   when the project's own sets other values; no git process runs in the project.
   Check: `bash tests/ai-sandbox/test-create-identity.sh` `0 failed`.
@@ -447,7 +502,8 @@ key cited by several. Evidence: one file per task, `t<NN>-<slug>.md`, one entry 
   in-scope proposals and reports on the configured remote and nothing anywhere else;
   refuse a proposal that is in scope only against a `main` the clone supplies; push the
   integrator's `main` only as a descendant of the host's own
-  `refs/remotes/origin/main`; push nothing as a forced update (the stub remote records
+  `refs/remotes/origin/main` (cases include a clone whose `main` is strictly behind
+  the host's, after the remote's `main` moved: it is not pushed, item 10); push nothing as a forced update (the stub remote records
   every update of the run, and none is forced); delete remote refs only as today
   (leased). A recording `git` first on `PATH` shows no host git process whose
   repository, `-C` or working directory lies in `<sandbox>/knowledge` or the project
@@ -651,7 +707,7 @@ enumeration; it was checked on a known case and its silent failure mode is recor
 | Knowledge stamp functions | static | S3 | 29 | lib 5, ai-knowledge 3, `ai-sandbox` 1, `ai-sandbox-restart` 1 (T07); migrate-knowledge 1 (T08); test-knowledge.sh 18 (T07, T08) |
 | `sync_clone` and its helpers (`tip_state`, `ff_main`, `install_hook`, `set_status`, `move_aside` of the clone, `record_integrator`'s clone check, `sync_project_clone`, `cmd_sync_clone`) | static, one file | S19 | 32 | all in `ai-knowledge` (T04, T09, T10); `move_aside` of the host checkout in `init` stays. Residue R7, R8 |
 | `git_net` | static | S13 | 20 | ai-knowledge only: becomes a call of `ai_sandbox_host_git` under `AI_SANDBOX_GIT_TIMEOUT` (T01); its clone uses go (T09, T10) |
-| Image tag | duplicated | S22 | 2 | create:529, 530: one definition `ai_sandbox_image_name` (T01, T03) |
+| Image tag | duplicated | S22, corrected (item 4; the exact command and its known case are in the T01 evidence, "S22") | 3 | create:529, 530 and `ai-sandbox-extensions`:37 (the plan's first S22 named create's variables and missed the third): one definition `ai_sandbox_image_name` (T01, T03). The corrected search, with its known case, is a build check in `test-identity.sh` (T01 evidence, "S22"); expected on the result: no line |
 | `.sync-status` | strings | S5 | 27 | create 1602-1604 doctor (T04); ai-knowledge 15, 30, 618, 696, 730-731, 1067, 1091, 1098 (T04, T09); test-knowledge.sh (T04, T09); knowledge-integrate skill:26 (T12); shared-knowledge.md:248 (T12). Residue R2 |
 | `.git/ai-knowledge-role` | strings, outside | S6, S12 | 9; 2 | written by ai-knowledge:732 and read by its hook:649 (move into `sandbox-knowledge-sync`, T06, T09); read by the doctor create:1614 (T04); read outside by the knowledge repository's `skills/propose-rule/SKILL.md:38` and `proposals/README.md:13`, and their seed copies: old shape kept (T06), register row (T12). Residue R3 |
 | `SANDBOX_KNOWLEDGE` values | strings, stored data | S7 | 23 | create:2218 writer, doctor:1598-1623, compose:2306, lib:85 (T07); tests (T07, T08); shared-knowledge.md:105 (T12); every existing sandbox's `.env` (`1`): refused until re-created, B2. Residue R5 |
@@ -708,8 +764,9 @@ runs" lists what the host executes from this task once RP1 has landed it.
   holds exactly the contract's refs. Discharges O10; O19 (with T09, T10). Host runs:
   `ai-knowledge`, `create-ai-sandbox.sh`.
 - **T06 in-sandbox-sync.** `bin/ai/sandbox-knowledge-sync` (not a host helper), copied
-  into the image like `ai-delegate`, with the role file, the hook moved from
-  `ai-knowledge`, the `reads-outside` marker, and test-only overrides for its three
+  into the image like `ai-delegate`, with the role file, the hook copied from
+  `ai-knowledge` (item 3: the host's sync still wrote both into the clone until T09,
+  which deletes them there), the `reads-outside` marker, and test-only overrides for its three
   paths; the entrypoint runs it. It removes refs inside only as the status file lists
   them (`closed-proposal=`, `pushed-report=`, `closed-report=`). Discharges O11; O12
   and O17 (with T09); O18 (with T09, T10); O16 (with T12). Host
@@ -721,9 +778,12 @@ runs" lists what the host executes from this task once RP1 has landed it.
 - **T08 remove-migration.** Delete `ai-sandbox-migrate-knowledge`, its cases and every
   reference in code and tests (documents in T12). It lands on the branch at once; RP1
   waits until A3's recheck has passed on every host (B1b, `a3.md`). Discharges O15, O13
-  (with T09, T10). Host runs: the lib, `ai-knowledge` (messages only); the host can no
+  (with T09, T10). Host runs: the lib, `ai-knowledge` (messages only: its
+  old-style-branch skip and that half of the line-272 case stay, with the script's name
+  gone from the message, until T09 removes them, items 2 and 9); the host can no
   longer run the script.
-- **T09 gateway-proposals.** Depends on X1. Adds `ai_sandbox_confined_fetch` to the
+- **T09 gateway-proposals.** Depends on X1; written before X1's answer in B1a's form
+  (item 8). Lands on `main` only together with T10 (item 9). Adds `ai_sandbox_confined_fetch` to the
   lib (the contract; there rather than in `ai-knowledge` so that phases 4 and 6 call
   it, the spec's author's suggestion), which makes every fetch from a sandbox: through
   C-GIT in exactly B1a's form (or the bundle form X1 chose); `ai-knowledge` calls it to
@@ -738,10 +798,14 @@ runs" lists what the host executes from this task once RP1 has landed it.
   to the configured remote without forcing, deletes closed remote branches as today,
   writes `closed-proposal=`, runs the in-sandbox command in a running current container
   as O12 says, and no longer clones, writes a role file, a hook or an exclude line, or
-  moves anything in the clone; `record_integrator` fetches before it compares. The stub
-  answers `docker exec` with the in-sandbox command. Discharges O7, O8, O9, O13, O18
+  moves anything in the clone (`install_hook` and the role-file write are deleted,
+  item 3), nor skips a clone on an old-style branch (items 2, 9); `record_integrator` fetches before it compares. The stub
+  answers `docker exec` with the in-sandbox command; `PENDING_AI_KNOWLEDGE` follows the
+  starts left for T10 (item 6). A later `fix:` commit keeps the integrator's `main` from
+  being pushed when it is behind the host's (item 10). Discharges O3, O7, O8, O9, O13, O18
   and O19 (with T10); completes O6, O12, O14, O17. Host runs: `ai-knowledge`, the lib.
-- **T10 gateway-reports.** Depends on X1 and T09. Reports from `refs/sandbox/<id>/`:
+- **T10 gateway-reports.** Depends on X1 and T09; written before X1's answer, as T09
+  (item 8), and lands only together with it (item 9). Reports from `refs/sandbox/<id>/`:
   a writer's pushed once per commit, with the host's record in
   `refs/pushed-reports/<id>/` (F4), listed as `pushed-report=` while the sandbox holds
   that commit, the record dropped once the mirror no longer holds the report; the
@@ -749,13 +813,15 @@ runs" lists what the host executes from this task once RP1 has landed it.
   `closed-report=` written for each tombstone in the mirror whose report this sync's
   completed fetch of the remote's reports, made after those deletions, no longer
   finds (N1; O18 lists the report in the sync that deletes it); the integrator's
-  origin carrying the remote's reports. Discharges O20; completes O7, O8, O9, O13,
-  O18, O19.
+  origin carrying the remote's reports. Removes `PENDING_AI_KNOWLEDGE` from
+  `test-host-git.sh` (item 6). Discharges O20 and O7; completes O3, O8, O9, O13,
+  O18, O19. O7 is completed by `F01-integrator-main-behind.md`, the evidence of the `fix:` commit of item 10.
   Host runs: `ai-knowledge`.
 - **T11 host-git-rule.** The ast-grep configuration and rule of O3 under
   `tests/ai-sandbox/sg/`, and `tests/ai-sandbox/test-host-git.sh`; `ast-grep` becomes
-  a declared dependency of the suite. Discharges O3; completes O22. Host runs: nothing.
-- **T12 documents.** `PROJECT_MAP.md` with the register row, its `reads-outside:`
+  a declared dependency of the suite. Discharges O3 (with T09, T10: its tree case holds
+  the exact allowance `PENDING_AI_KNOWLEDGE=42`, item 6); completes O22. Host runs: nothing.
+- **T12 documents.** Runs after T09 and T10 (item 5). `PROJECT_MAP.md` with the register row, its `reads-outside:`
   search and the `ai-delegate` row, `docs/shared-knowledge.md`, the knowledge-integrate
   skill, the usage text and comments of `create-ai-sandbox.sh`, the header of
   `ai-knowledge`. Completes O16. Host runs: text only in `create-ai-sandbox.sh` and

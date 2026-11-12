@@ -827,3 +827,16 @@ $ command grep -rnaF 'FETCH_HEAD' bin/ai
 
 Known case: a three-line scratch file with `merge --ff-only FETCH_HEAD`,
 `rev-parse FETCH_HEAD` and `fetch origin main` gave lines 1 and 2.
+
+## Amendments after implementation (2026-11-12, Bartek)
+
+### Probe: RP1 range after a merge (item 7)
+
+A scratch repository (git 2.34.1): a base commit on `main`; branch `p1` changes line 1
+of a file; `main` changes the same line; `p1` merges `main` with a conflict, resolved by
+hand, and commits. Then `B=$(git merge-base main p1)` is `main`'s tip, and
+`git --no-pager log --reverse -p --no-ext-diff --no-textconv $B..p1 -- f` lists `p1`'s
+commit with its diff and the merge commit with no diff; the same with `--cc` adds the
+merge's combined diff (`- a1`, ` -a2`, `++a12`), the hand resolution. `main`'s own
+commit is in neither listing. Hence RP1's range from `merge-base main <tip>` and its
+`--cc`.
