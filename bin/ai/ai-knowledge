@@ -1000,9 +1000,11 @@ sync_clone() {
             net_failed "$rc" "$out"
             HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin '+refs/reports/*:refs/origin-reports/*')")
         fi
-        # The origin carries the remote's reports as this sync left them.
-        refresh_origin "$sb" "$role" || STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }the knowledge origin could not be refreshed"
     fi
+
+    # The origin carries the host's refs as this sync left them, pushes and deletions included: the
+    # sandbox's command that follows reads it, and so does the doctor's pushed or pending.
+    refresh_origin "$sb" "$role" || STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }the knowledge origin could not be refreshed"
 
     if [ -n "$refused" ]; then
         set_status "refused: not pushed:$refused; fix or delete those branches"

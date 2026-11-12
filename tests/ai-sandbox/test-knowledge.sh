@@ -1253,6 +1253,18 @@ assert_eq "the host fetched the remote's reports into refs/origin-reports" \
 assert_eq "a sync leaves another sandbox's namespace and the pushed-report records in the host repository as they were" "$(orefs "$hostrepo" refs/sandbox/zz refs/pushed-reports | wc -l | tr -d ' ')" 2
 assert_eq "a sync mirrors the clones below refs/sandbox/<id>/{heads,reports,reports-closed} and nothing else" "$(orefs "$hostrepo" refs/sandbox | grep -v '^refs/sandbox/zz/' | grep -vc '^refs/sandbox/[^/]*/\(heads\|reports\|reports-closed\)/')" 0
 assert_eq "the mirror of the proposals sandbox holds its clone's heads" "$(orefs "$hostrepo" refs/sandbox/$pid/heads | sed 's#^refs/sandbox/[^/]*/heads/##' | cut -d' ' -f1 | grep -c '^main$')" 1
+# a sync that pushes: the origin is refreshed after the push, so it already holds the branch the sync just made
+# (the sandbox's command that follows reads the origin) and the doctor shows it pushed, not pending
+b_o10=$(propose_in "$clone" o10push)
+knowledge sync "$proj" >"$tmp/o10-push.out" 2>&1 || cat "$tmp/o10-push.out"
+assert_eq "O10: the sync pushed the proposal" "$(git -C "$remote" rev-parse "$b_o10" 2>/dev/null)" "$(git -C "$clone" rev-parse "$b_o10")"
+assert_eq "O10: after a sync that pushes, the origin's heads equal the host's remote-tracking refs" \
+    "$(orefs "$orig_proj" refs/heads | sed 's#^refs/heads/##')" \
+    "$(orefs "$hostrepo" refs/remotes/origin | grep -v '^refs/remotes/origin/HEAD ' | sed 's#^refs/remotes/origin/##')"
+assert_eq "O10: and the origin holds the pushed branch at its tip" "$(git -C "$orig_proj" rev-parse "refs/heads/$b_o10" 2>/dev/null)" "$(git -C "$clone" rev-parse "$b_o10")"
+sbsync "$proj" >/dev/null
+assert_eq "O10: after the sandbox's command the clone's origin/<branch> is the pushed tip" "$(git -C "$clone" rev-parse "refs/remotes/origin/$b_o10" 2>/dev/null)" "$(git -C "$clone" rev-parse "$b_o10")"
+knowledge sync "$integ" >/dev/null 2>&1   # the integrator's origin follows the host's refs again before the offline case
 # the remote drops a branch and a report; the host is offline once: the origin keeps the last fetch
 before_off=$(orefs "$orig_integ")
 git -C "$hostrepo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main   # an offline sync prunes nothing on the host
