@@ -160,3 +160,27 @@ Checks after the last edit (tree at `d547566`):
   `test-devices.sh` 100; exit 1. Total 1300 run (1284 plus the 16 new cases), 2 failed.
 - `shellcheck -S warning`: create 2 findings (as on the base), `test-devices.sh` none.
 - `/tmp/.X11-unix` holds no leftover directory.
+
+## N1 (the `--audio` warning is one block)
+
+Commit `fd0ca85` (`fix: the audio warning prints as one block`). Test first: case `the --audio
+warning is one block` (counts the `^!!` lines of an `--audio` run with a socket, display
+`none`) failed with `expected '1', got '3'`; the message is now built in one variable and
+`warn` is called once, content unchanged. `bash tests/ai-sandbox/test-devices.sh`: `101 run,
+0 failed`. shellcheck: create 2 findings (as on the base), `test-devices.sh` none.
+
+## Gate (plan's G), tree at `fd0ca85`
+
+Run once on this tree from the worktree root, each full suite under
+`flock <scratchpad>/suite.lock`, in the order the plan states.
+
+- `bash tests/ai-sandbox/run-tests.sh`: exit 1. Per-file summaries: 32, 151, 56, 13, 69
+  (`test-delegate.sh`: `69 run, 2 failed`, cases 54 `writer prompt has no-tools line` and 59
+  `second-reviewer prompt has no-commands line`, the D15 cases), 101 (`test-devices.sh`: `101
+  run, 0 failed`), 5, 23, 20, 19, 17, 14, 473, 32, 30, 33, 65, 27, 39, 82; 20 files, 1301 cases,
+  `0 failed` in every file but `test-delegate.sh`, whose only failures are the two D15 cases. As the
+  plan's G expects.
+- `bash tests/ai-sync/test-sync.sh`: `37 run, 0 failed`, exit 0.
+- `bash tests/git-hooks/test-hooks.sh`: `19 run, 0 failed`, exit 0 (gitleaks present).
+- `python3 -m unittest tools.context_statusline.test_statusline`: `Ran 30 tests ... OK`, exit 0.
+- `/tmp/.X11-unix` holds no leftover directory after the runs.
