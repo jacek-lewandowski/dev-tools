@@ -808,13 +808,15 @@ else
     [ -S "$PULSE_SOCKET_HOST" ] && audio_shared="sound socket"
     [ "$AUDIO_DEVICES" = "yes" ] && audio_shared="${audio_shared:+$audio_shared and }sound devices"
     if [ -n "$audio_shared" ]; then
-        warn "Audio is shared (--audio): the sandbox gets the host's ${audio_shared}, microphone included."
+        audio_warning="Audio is shared (--audio): the sandbox gets the host's ${audio_shared}, microphone included."
         if [ -S "$PULSE_SOCKET_HOST" ]; then
-            warn "   A program in the sandbox can make the host's sound server, which runs as you,
+            audio_warning="${audio_warning}
+   A program in the sandbox can make the host's sound server, which runs as you,
    act on its requests, so this sandbox is outside the promise that a
    sandbox is given no host daemon's socket but its display's."
         fi
-        warn "   Pass --no-audio to drop it."
+        warn "${audio_warning}
+   Pass --no-audio to drop it."
     fi
     if [ -S "$PULSE_SOCKET_HOST" ]; then
         add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
