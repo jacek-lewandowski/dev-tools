@@ -209,6 +209,17 @@ cmd_init() {
         esac
     done
     [ -n "$remote" ] || die "usage: ai-knowledge init <remote-url> [--integrator DIR]"
+    # The record is the stamp's project when the sandbox exists and the
+    # directory itself otherwise; say which, because only the sandbox created
+    # for exactly that directory (create-ai-sandbox.sh DIR) then takes the role.
+    if [ -n "$integrator" ]; then
+        if ai_sandbox_stamped "$integrator"; then
+            log "integrator: $integrator (sandbox $(basename "$(ai_sandbox_dir_for "$integrator")"))"
+        else
+            log "integrator: $integrator; no sandbox exists yet for that directory."
+            log "  The sandbox create-ai-sandbox.sh creates for exactly that directory takes the role."
+        fi
+    fi
     command -v git   >/dev/null 2>&1 || die "git is required"
     command -v rsync >/dev/null 2>&1 || die "rsync is required"
 
@@ -974,13 +985,14 @@ sync_project_clone() {   # <project dir> <sandbox dir>
     lock_drop
 }
 
-# Undocumented child of 'sync --all': one clone, no render, own hints.
-cmd_sync_clone() {   # <project dir> [sandbox dir]
+# Undocumented child of 'sync --all': one clone, no render, own hints. The
+# parent names the project (the stamp's) and the sandbox; nothing is resolved here.
+cmd_sync_clone() {   # <project dir> <sandbox dir>
     load_config
-    local project sb
-    project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
-    sb=${2:-$(ai_sandbox_dir_for "$project")}
+    [ $# -eq 2 ] || die "usage: ai-knowledge _sync-clone <project dir> <sandbox dir>"
+    local project=$1 sb=$2
     [ -d "$sb" ] || die "no sandbox directory $sb"
+    (cd -- "$project") 2>/dev/null || die "not a directory: $project"
     sync_project_clone "$project" "$sb"
     print_hints "$project"
 }

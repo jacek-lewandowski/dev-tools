@@ -1162,6 +1162,63 @@ assert_eq "cycle: remote main has no reports/ history" "$(git -C "$remote" log -
 assert_eq "cycle: integrator main has no reports/ history" "$(git -C "$iclone" log --full-history --oneline main -- reports/ | wc -l | tr -d ' ')" 0
 assert_eq "cycle: host main checkout holds no report ref" "$(git -C "$AI_KNOWLEDGE_ROOT/main" for-each-ref refs/reports | wc -l | tr -d ' ')" 0
 
+# --- O6 (C-STAMP): the project and the role come from the stamps and the host's
+# --- configuration, not from what a sandbox can write in the project or its clone
+mkdir -p "$proj/sub/deep" "$proj/plainsub"
+git -C "$proj/sub" init -q                                  # a nested repository the sandbox made
+git config -f "$proj/.git/config" core.worktree "$integ"    # the project's own config names another project
+assert_eq "tree inputs: the project is still the stamped one" "$(cd "$proj/sub/deep" && PATH="$PATH" bash -c '. "$1"; ai_sandbox_project_root' _ "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")" "$proj"
+out=$(cd "$proj/sub/deep" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1)
+assert_contains "tree inputs: print-context from a subdirectory names the stamped sandbox" "$out" "dir=$pdir"
+out=$(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1)
+assert_contains "tree inputs: print-context in the project names the stamped sandbox" "$out" "dir=$pdir"
+assert_contains "tree inputs: status names the stamped project" "$(knowledge status "$proj" 2>&1)" "project:     $proj"
+assert_contains "tree inputs: status from a subdirectory names the stamped clone" "$(knowledge status "$proj/sub/deep" 2>&1)" "clone:       $pdir/knowledge"
+# what the sandbox can write in its clone: a role file naming the other role, a commit on main
+pmain=$(git -C "$remote" rev-parse main); cmain=$(git -C "$clone" rev-parse main)
+printf 'integrator %s\n' "$pid" > "$clone/.git/ai-knowledge-role"
+echo '- planted' >> "$clone/rules/global.md"; git -C "$clone" commit -q --no-verify -am "planted on main"
+knowledge sync "$proj/sub/deep" >"$tmp/o6-sync.out" 2>&1 || cat "$tmp/o6-sync.out"
+assert_eq "tree inputs: sync from a subdirectory addresses the stamped sandbox" "$(grep -c 'no sandbox directory' "$tmp/o6-sync.out")" 0
+assert_eq "tree inputs: sync syncs as proposals" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
+assert_eq "tree inputs: the clone's main does not reach the remote (sync)" "$(git -C "$remote" rev-parse main)" "$pmain"
+knowledge sync --all >"$tmp/o6-all.out" 2>&1 || cat "$tmp/o6-all.out"
+assert_eq "tree inputs: sync --all syncs the stamped sandbox as proposals" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $pid"
+assert_eq "tree inputs: the clone's main does not reach the remote (sync --all)" "$(git -C "$remote" rev-parse main)" "$pmain"
+git -C "$clone" reset -q --hard "$cmain"
+n=$(ls "$AI_SANDBOX_ROOT" | grep -c -- '-agent$')
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj/plainsub" >"$tmp/o6-create.out" 2>&1 || cat "$tmp/o6-create.out"
+assert_eq "tree inputs: create from a subdirectory addresses the stamped sandbox" "$(head -1 "$pdir/project-path")" "$proj"
+assert_eq "tree inputs: create made no other sandbox" "$(ls "$AI_SANDBOX_ROOT" | grep -c -- '-agent$')" "$n"
+# _sync-clone resolves nothing: the project and the sandbox are what its parent names
+rm -rf "$proj/sub/.git" "$proj/plainsub"; git config -f "$proj/.git/config" --unset core.worktree
+mkdir -p "$tmp/work/nowhere"
+msg=$(knowledge _sync-clone "$tmp/work/nowhere" 2>&1) && r=0 || r=$?
+assert_eq "_sync-clone without its sandbox argument refuses" "$r" 1
+assert_contains "_sync-clone names what it needs" "$msg" "usage"
+msg=$(knowledge _sync-clone "$proj/sub" "$pdir" 2>&1) && r=0 || r=$?
+assert_eq "_sync-clone does not look for a stamped ancestor of its argument" "$(ls -d "$(ai_sandbox_dir_for "$proj/sub")" 2>/dev/null | wc -l | tr -d ' ')" 0
+assert_eq "_sync-clone takes the project it is given" "$(cat "$clone/.git/ai-knowledge-role")" "proposals $(ai_sandbox_project_id "$proj/sub")"
+printf 'proposals %s\n' "$pid" > "$clone/.git/ai-knowledge-role"
+
+# --- O21: init --integrator records what the lookup returns once the sandbox exists
+orepo="$tmp/work/orepo"; mkdir -p "$orepo"; git -C "$orepo" init -q
+ln -s "$tmp/work" "$tmp/olink"
+out=$(knowledge init "file://$remote" --integrator "$tmp/olink/orepo" 2>&1) || echo "$out"
+assert_contains "init records the resolved directory" "$(cat "$AI_KNOWLEDGE_CONFIG")" "INTEGRATOR=$orepo"
+assert_contains "init, before its sandbox exists, names the directory" "$out" "$orepo"
+assert_contains "init, before its sandbox exists, says none exists yet" "$out" "no sandbox exists yet"
+assert_contains "init says the sandbox create-ai-sandbox.sh creates for exactly that directory takes the role" "$out" "creates for exactly that directory takes the role"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$tmp/olink/orepo" >"$tmp/o21-create.out" 2>&1 || cat "$tmp/o21-create.out"
+assert_eq "the record is the value the lookup returns once create has run" \
+    "$(sed -n 's/^INTEGRATOR=//p' "$AI_KNOWLEDGE_CONFIG")" "$(ai_sandbox_project_root "$tmp/olink/orepo")"
+assert_file "create made the sandbox the record names" "$(ai_sandbox_dir_for "$orepo")/project-path"
+out=$(knowledge init "file://$remote" --integrator "$tmp/olink/orepo/" 2>&1) || echo "$out"
+assert_contains "init names the sandbox once it exists" "$out" "$(basename "$(ai_sandbox_dir_for "$orepo")")"
+assert_eq "init no longer says none exists" "$(printf '%s\n' "$out" | grep -c 'no sandbox exists yet')" 0
+out=$(knowledge init "file://$remote" --integrator "$orepo" 2>&1) || echo "$out"
+assert_contains "init without a link names the same sandbox" "$out" "$(basename "$(ai_sandbox_dir_for "$orepo")")"
+
 # --- without config nothing changes
 rm "$AI_KNOWLEDGE_CONFIG"
 other="$tmp/work/q"; mkdir -p "$other"
