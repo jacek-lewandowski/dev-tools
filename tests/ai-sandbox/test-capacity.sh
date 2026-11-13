@@ -9,7 +9,7 @@ set -uo pipefail
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 proj="$tmp/work/p"; mkdir -p "$proj"
 touch "$HOME/.bashrc"
-bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory=6 "$proj" >"$tmp/out" 2>&1 || true
 name="$(ai_sandbox_project_id "$proj")-agent"
 helper="$AI_SANDBOX_ROOT/bin"
 config="$AI_SANDBOX_ROOT/config"

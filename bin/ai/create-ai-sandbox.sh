@@ -50,7 +50,7 @@ readonly -a CLAUDE_PLUGINS=(
 
 # Resource limits for the container. Docker imposes none by default, so a
 # runaway build or an Electron leak can take the whole host down with it.
-#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 6,
+#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 2,
 #                     remembered per sandbox (SANDBOX_MEMORY_GB in .env).
 #                     MEMORY_LIMIT is the same number in Docker's notation.
 #   MEMORY_SWAP_LIMIT RAM+swap ceiling. Equal to MEMORY_LIMIT means the
@@ -63,7 +63,7 @@ readonly -a CLAUDE_PLUGINS=(
 #                     under the limit stops one large shm allocation from
 #                     OOM-killing the sandbox by itself.
 #   CPU_LIMIT         Derived: half as many cores as GB of RAM, rounded up and
-#                     never fewer than one, so a sandbox of 6 GB sees three.
+#                     never fewer than one, so the default 2 GB sandbox sees one and 6 GB sees three.
 #                     Applied as a cpuset rather than a CPU quota,
 #                     because a quota is invisible to nproc, make -j, cargo,
 #                     Node and every other tool that sizes its parallelism by
@@ -95,7 +95,7 @@ readonly SHM_SIZE='1gb'
 # Options
 # ---------------------------------------------------------------------------
 
-DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
+DISPLAY_MODE="none"     # auto | wayland | nested | host | none; none unless one is remembered or passed
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
@@ -103,7 +103,7 @@ WITH_AUDIO="no"         # host sound socket and devices, microphone included; of
 WITH_AUDIO_EXPLICIT="no"
 AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
 AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
-MEMORY_GB=""            # --memory=GB; the remembered size, else 6, when empty
+MEMORY_GB=""            # --memory=GB; the remembered size, else 2, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
@@ -120,7 +120,7 @@ else the directory itself. Sandboxes are keyed on the project's full path, so tw
 projects whose directories share a name do not collide.
 
 Options:
-  --display=MODE   How GUI apps reach a screen. Default: auto. Remembered.
+  --display=MODE   How GUI apps reach a screen. Default: none. Remembered.
                      wayland  Mount only the host Wayland socket. The container
                               runs its own Xwayland for X11-only apps. Wayland's
                               client isolation means sandboxed apps cannot read
@@ -161,7 +161,7 @@ Options:
                    Remembered until --no-audio.
   --no-audio       Drop a remembered --audio: the host's sound stays out of the
                    sandbox.
-  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 6.
+  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 2 (one CPU core).
                    Remembered. The sandbox gets half as many CPU cores as GB,
                    rounded up (see Resources below).
   --rebuild        Force a no-cache rebuild of the image. That image is
@@ -253,7 +253,7 @@ directory and are discarded on every start; nothing is ever written back to
 the host. 'sandbox-doctor' reports each mount; 'ai-sandbox-gc' reclaims
 leftovers from a reset it could not delete outright.
 
-Resources: the container is capped at --memory GB of RAM (default 6) with no
+Resources: the container is capped at --memory GB of RAM (default 2, one CPU core) with no
 swap, and /dev/shm at 1 GB, which counts against that cap; a changed size
 applies from the next start. CPUs follow the memory: half as many cores as GB,
 rounded up and never more than the host has, pinned as a cpuset so that
@@ -538,7 +538,7 @@ fi
 # hand-edited size the lib rejects (it warns, like the start scripts do). See
 # the comment on the resource limits at the top of this script.
 if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
-    MEMORY_GB=6
+    MEMORY_GB=2
     if [ -f "$ENV_FILE" ]; then
         STORED_MEMORY=$(ai_sandbox_env_value "$SANDBOX_DIR" SANDBOX_MEMORY_GB)
         MEMORY_GB=$(ai_sandbox_memory_gb "$SANDBOX_DIR")
