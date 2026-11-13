@@ -124,7 +124,7 @@ out=$(DOCKER_STUB_PS=$'aaa-agent\nbbb-agent\nccc-agent' \
 assert_ne       "create refuses to start over the budget"  "$rc" 0
 assert_contains "create's refusal names the running ones"  "$out" 'Running: aaa-agent (6 GB), bbb-agent (6 GB), ccc-agent (6 GB)'
 TESTS_RUN=$((TESTS_RUN + 1))
-case "$(stub_docker_log)" in
+case "$(stub_docker_log | grep -v '^buildx ')" in
     *build*|*' up -d'*) _fail "a refused create neither builds nor starts" "$(stub_docker_log)" ;;
     *)                  _pass "a refused create neither builds nor starts" ;;
 esac

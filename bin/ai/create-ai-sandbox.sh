@@ -345,6 +345,7 @@ require docker "Install Docker Engine and ensure your user can run it."
 require rsync
 require python3
 docker compose version >/dev/null 2>&1 || die "'docker compose' (v2 plugin) is required."
+docker buildx version >/dev/null 2>&1 || die "'docker buildx' (BuildKit) is required: the image build uses cache mounts. Install the docker-buildx-plugin package."
 log "ok"
 
 # ---------------------------------------------------------------------------
@@ -505,7 +506,7 @@ log "tools     $HOST_TOOLS_DIR"
 step "Selecting display mode"
 
 # A display mode chosen once stays chosen. Without this, re-running the script
-# bare would silently fall back to 'auto' and undo a deliberate --display=host.
+# bare would silently fall back to 'none' and undo a deliberate --display=host.
 # A Docker choice made once stays chosen. Without this, re-running the script
 # bare silently regenerates the sandbox without the daemon: the Dockerfile loses
 # it, security_opt disappears from the compose file, SANDBOX_WITH_DOCKER flips to
@@ -534,8 +535,9 @@ fi
 # ---------------------------------------------------------------------------
 
 # The size chosen once stays chosen, like the options above; a sandbox created
-# before the key existed, or a fresh one, gets the default, and so does a
-# hand-edited size the lib rejects (it warns, like the start scripts do). See
+# before the key existed, or one whose hand-edited size the lib rejects (it
+# warns, like the start scripts do), gets the lib's 6 GB from
+# ai_sandbox_memory_gb; only a sandbox with no .env gets the default 2 GB. See
 # the comment on the resource limits at the top of this script.
 if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
     MEMORY_GB=2
@@ -1985,17 +1987,6 @@ ENV DEBIAN_FRONTEND=noninteractive \\
     PLAYWRIGHT_HTML_REPORT=none \\
     LANG=C.UTF-8
 
-ARG NODE_MAJOR=${NODE_MAJOR}
-ARG ANTIGRAVITY_CLI_VERSION=${ANTIGRAVITY_CLI_VERSION}
-ARG ANTIGRAVITY_HUB_VERSION=${ANTIGRAVITY_HUB_VERSION}
-ARG ANTIGRAVITY_IDE_VERSION=${ANTIGRAVITY_IDE_VERSION}
-ARG COMBY_VERSION=${COMBY_VERSION}
-ARG EARTHLY_VERSION=${EARTHLY_VERSION}
-ARG GITLEAKS_VERSION=${GITLEAKS_VERSION}
-ARG GITLEAKS_LINUX_X64_SHA256=${GITLEAKS_LINUX_X64_SHA256}
-ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
-ARG UV_VERSION=${UV_VERSION}
-ARG HEADROOM_VERSION=${HEADROOM_VERSION}
 DOCKERFILE_HEAD
 
 cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
@@ -2004,18 +1995,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl wget gnupg ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Python and its packages sit before the big apt layer, so bumping Chrome,
-# Antigravity or that list does not rebuild them. The uv cache mount keeps
-# downloaded wheels between builds.
+# Python and its packages sit before the big apt layer, and every version ARG
+# is declared right before the RUN that uses it (a changed ARG invalidates the
+# cache from its first use), so bumping Chrome, Antigravity or the big apt list
+# does not rebuild them. The uv cache mount keeps downloaded wheels between builds.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
+ARG UV_VERSION=@UV_VERSION@
 RUN pip3 install --no-cache-dir uv==${UV_VERSION}
 
+ARG HEADROOM_VERSION=@HEADROOM_VERSION@
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_LINK_MODE=copy uv pip install --system "headroom-ai[sandbox]==${HEADROOM_VERSION}"
 
+ARG NODE_MAJOR=@NODE_MAJOR@
 # Third-party repositories.
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings /usr/share/keyrings; \
@@ -2060,6 +2055,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && dbus-uuidgen > /etc/machine-id
 
+ARG GOOGLE_CHROME_VERSION=@GOOGLE_CHROME_VERSION@
 # Google Chrome, in its own layer so the rest of the image caches independently.
 RUN set -eux; \
     wget -q -O /tmp/chrome.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${GOOGLE_CHROME_VERSION}_amd64.deb"; \
@@ -2085,12 +2081,15 @@ RUN set -eux; \
 
 # The release binary is dynamically linked: without libev4 (and libpcre3,
 # libsqlite3-0, all installed above) it dies with a loader error on first use.
+ARG COMBY_VERSION=@COMBY_VERSION@
 RUN set -eux; \
     wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
     chmod +x /usr/local/bin/comby; \
     comby -version
 
 # Static binary; the git hooks in .githooks/ refuse to run without it.
+ARG GITLEAKS_VERSION=@GITLEAKS_VERSION@
+ARG GITLEAKS_LINUX_X64_SHA256=@GITLEAKS_LINUX_X64_SHA256@
 RUN set -eux; \
     wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
     echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
@@ -2098,6 +2097,7 @@ RUN set -eux; \
     rm /tmp/gitleaks.tar.gz; \
     gitleaks version
 
+ARG ANTIGRAVITY_CLI_VERSION=@ANTIGRAVITY_CLI_VERSION@
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
     tar -xzf /tmp/cli.tar.gz -C /tmp; \
@@ -2105,11 +2105,13 @@ RUN set -eux; \
     chmod +x /usr/local/bin/agy; \
     rm -f /tmp/cli.tar.gz
 
+ARG ANTIGRAVITY_HUB_VERSION=@ANTIGRAVITY_HUB_VERSION@
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-hub/${ANTIGRAVITY_HUB_VERSION}/linux-x64/Antigravity.tar.gz" -O /tmp/hub.tar.gz; \
     tar -xzf /tmp/hub.tar.gz -C /usr/local/; \
     rm -f /tmp/hub.tar.gz
 
+ARG ANTIGRAVITY_IDE_VERSION=@ANTIGRAVITY_IDE_VERSION@
 RUN set -eux; \
     wget -q "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/${ANTIGRAVITY_IDE_VERSION}/linux-x64/Antigravity%20IDE.tar.gz" -O /tmp/ide.tar.gz; \
     tar -xzf /tmp/ide.tar.gz -C /usr/local/; \
@@ -2209,6 +2211,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     systemctl disable docker.service containerd.service 2>/dev/null || true
 
+ARG EARTHLY_VERSION=@EARTHLY_VERSION@
 RUN wget -q "https://github.com/earthly/earthly/releases/download/${EARTHLY_VERSION}/earthly-linux-amd64" \
         -O /usr/local/bin/earthly \
     && chmod +x /usr/local/bin/earthly
@@ -2252,6 +2255,15 @@ WORKDIR ${USER_HOME}
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["tail", "-f", "/dev/null"]
 DOCKERFILE_TAIL
+
+# Fill the @NAME@ placeholders of the ARG lines above (the generated Dockerfile
+# is written through quoted heredocs, so the shell cannot expand them there).
+for _arg in NODE_MAJOR ANTIGRAVITY_CLI_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION \
+        COMBY_VERSION EARTHLY_VERSION GITLEAKS_VERSION GITLEAKS_LINUX_X64_SHA256 \
+        GOOGLE_CHROME_VERSION UV_VERSION HEADROOM_VERSION; do
+    sed -i "s|@${_arg}@|${!_arg}|g" "$BUILD_DIR/Dockerfile"
+done
+unset _arg
 
 log "Dockerfile and helper scripts written to $BUILD_DIR"
 

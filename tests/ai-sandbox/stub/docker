@@ -7,6 +7,7 @@ printf '%s\n' "$*" >> "${DOCKER_STUB_LOG:-/dev/null}"
 STOPPED_FILE="${DOCKER_STUB_LOG:-/dev/null}.stopped"
 case "$1 $2" in
     "compose version") exit 0 ;;
+    "buildx version") [ -z "${DOCKER_STUB_NO_BUILDX:-}" ] || exit 1; exit 0 ;;
 esac
 case "$1" in
     image)

@@ -24,6 +24,7 @@ assert_contains "net-tools is installed"                 "$df" 'net-tools'
 assert_contains "comby's shared libraries are installed" "$df" 'libev4 libpcre3 libsqlite3-0'
 assert_contains "comby is smoke-tested at build time"    "$df" 'comby -version'
 assert_contains "uv is pinned"                           "$df" 'ARG UV_VERSION=0.13.8'
+assert_contains "headroom is pinned"                     "$df" 'ARG HEADROOM_VERSION=0.42.0'
 assert_contains "python packages install with uv"        "$df" 'uv pip install --system'
 assert_contains "uv has a BuildKit cache mount"          "$df" '--mount=type=cache,target=/root/.cache/uv'
 assert_contains "headroom installs with the sandbox extra" "$df" 'headroom-ai[sandbox]==${HEADROOM_VERSION}'
@@ -36,6 +37,19 @@ assert_eq "python packages follow the python apt layer, before the big one" "$([
 big_start=$(printf '%s\n' "$df" | head -n "$big_apt" | grep -n '^RUN apt-get update' | tail -1 | cut -d: -f1)
 assert_eq "big apt layer no longer lists python"         "$(printf '%s\n' "$df" | sed -n "${big_start},${big_apt}p;/dbus-uuidgen/q" | grep -c python3)" 0
 assert_eq "python apt layer sits outside the big apt layer" "$([ "$py_apt" -lt "$big_start" ] && echo yes)" yes
+# Each version ARG sits right before its RUN: the Python ARGs after the python apt layer,
+# the Chrome and Antigravity ones after the Python install, so their bumps leave it cached.
+arg_line() { printf '%s\n' "$df" | grep -n "^ARG $1=" | head -1 | cut -d: -f1; }
+assert_eq "UV_VERSION is declared after the python apt layer" "$([ "$(arg_line UV_VERSION)" -gt "$py_apt" ] && echo yes)" yes
+for later in GOOGLE_CHROME_VERSION ANTIGRAVITY_CLI_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION COMBY_VERSION GITLEAKS_VERSION; do
+    l=$(arg_line "$later")
+    assert_eq "$later is declared after the python install" "$([ -n "$l" ] && [ "$l" -gt "$uv_run" ] && echo yes)" yes
+done
+assert_eq "no unfilled ARG placeholder is left"          "$(printf '%s\n' "$df" | grep -c '@[A-Z_0-9]*@')" 0
+# Without buildx the build cannot use cache mounts: fail before doing anything.
+DOCKER_STUB_NO_BUILDX=1 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-start "$proj" >"$tmp/out.nobx" 2>&1; nobx_rc=$?
+assert_ne       "create refuses without docker buildx"   "$nobx_rc" 0
+assert_contains "and names buildx"                       "$(cat "$tmp/out.nobx")" "'docker buildx' (BuildKit) is required"
 for gone in torch lancedb fastembed pypdf tqdm 'headroom-ai\[all\]' semantic-docs semantic_docs; do
     assert_eq "the image no longer mentions $gone" "$(printf '%s\n' "$df" | grep -c -E "$gone")" 0
 done
