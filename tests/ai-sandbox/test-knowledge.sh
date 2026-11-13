@@ -107,6 +107,14 @@ assert_same_bytes "gemini copy is the claude copy minus the model line" "$tmp/pr
 assert_contains "a body line starting with model: stays in the gemini copy" "$(cat "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md")" "model: a body line stays"
 assert_eq "model key not in the antigravity copy" "$(grep -c '^model: haiku' "$AI_KNOWLEDGE_RENDER/antigravity/rules/probe.md")" 0
 assert_eq "model key not in the codex copy" "$(grep -c '^model: haiku' "$AI_KNOWLEDGE_RENDER/codex/agents/probe.toml")" 0
+# `effort:` is Claude-only too: Claude copy keeps it, Gemini copy drops it
+printf -- '---\nname: probe\ndescription: probe role\neffort: high\n---\neffort: a body line stays\nbody\n' > "$AI_KNOWLEDGE_ROOT/main/roles/probe.md"
+knowledge render >"$tmp/render-effort.out" 2>&1 || cat "$tmp/render-effort.out"
+assert_contains "effort key kept in the claude copy" "$(cat "$AI_KNOWLEDGE_RENDER/claude/agents/probe.md")" "effort: high"
+assert_eq "effort key absent from the front matter of the gemini copy" "$(awk 'NR==1{next} /^---$/{exit} /^effort:/{n++} END{print n+0}' "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md")" 0
+grep -v -x 'effort: high' "$AI_KNOWLEDGE_RENDER/claude/agents/probe.md" > "$tmp/probe.expected"
+assert_same_bytes "gemini copy is the claude copy minus the effort line" "$tmp/probe.expected" "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md"
+assert_contains "a body line starting with effort: stays in the gemini copy" "$(cat "$AI_KNOWLEDGE_RENDER/gemini/agents/probe.md")" "effort: a body line stays"
 rm -f "$AI_KNOWLEDGE_ROOT/main/roles/probe.md"
 knowledge render >/dev/null 2>&1
 assert_link "host claude agent symlink" "$HOME/.claude/agents/planner.md" "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md"
