@@ -92,7 +92,7 @@ readonly SHM_SIZE='1gb'
 # Options
 # ---------------------------------------------------------------------------
 
-DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
+DISPLAY_MODE="none"     # auto | wayland | nested | host | none
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
@@ -100,7 +100,7 @@ WITH_AUDIO="no"         # host sound socket and devices, microphone included; of
 WITH_AUDIO_EXPLICIT="no"
 AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
 AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
-MEMORY_GB=""            # --memory=GB; the remembered size, else 6, when empty
+MEMORY_GB="2"            # --memory=GB; the remembered size, else 6, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
