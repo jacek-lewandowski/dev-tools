@@ -28,6 +28,9 @@ readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
 readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
 readonly GITLEAKS_VERSION='8.30.1'
+# uv installs the Python packages; headroom's own 'sandbox' extra has no torch, nvidia or lancedb.
+readonly UV_VERSION='0.13.8'
+readonly HEADROOM_VERSION='0.42.0'
 # From the release's gitleaks_${GITLEAKS_VERSION}_checksums.txt; bump with the version.
 readonly GITLEAKS_LINUX_X64_SHA256='551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
@@ -47,7 +50,7 @@ readonly -a CLAUDE_PLUGINS=(
 
 # Resource limits for the container. Docker imposes none by default, so a
 # runaway build or an Electron leak can take the whole host down with it.
-#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 6,
+#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 2,
 #                     remembered per sandbox (SANDBOX_MEMORY_GB in .env).
 #                     MEMORY_LIMIT is the same number in Docker's notation.
 #   MEMORY_SWAP_LIMIT RAM+swap ceiling. Equal to MEMORY_LIMIT means the
@@ -60,7 +63,7 @@ readonly -a CLAUDE_PLUGINS=(
 #                     under the limit stops one large shm allocation from
 #                     OOM-killing the sandbox by itself.
 #   CPU_LIMIT         Derived: half as many cores as GB of RAM, rounded up and
-#                     never fewer than one, so a sandbox of 6 GB sees three.
+#                     never fewer than one, so the default 2 GB sandbox sees one and 6 GB sees three.
 #                     Applied as a cpuset rather than a CPU quota,
 #                     because a quota is invisible to nproc, make -j, cargo,
 #                     Node and every other tool that sizes its parallelism by
@@ -92,7 +95,7 @@ readonly SHM_SIZE='1gb'
 # Options
 # ---------------------------------------------------------------------------
 
-DISPLAY_MODE="none"     # auto | wayland | nested | host | none
+DISPLAY_MODE="none"     # auto | wayland | nested | host | none; none unless one is remembered or passed
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
@@ -100,7 +103,7 @@ WITH_AUDIO="no"         # host sound socket and devices, microphone included; of
 WITH_AUDIO_EXPLICIT="no"
 AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
 AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
-MEMORY_GB="2"            # --memory=GB; the remembered size, else 6, when empty
+MEMORY_GB=""            # --memory=GB; the remembered size, else 2, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
@@ -117,7 +120,7 @@ else the directory itself. Sandboxes are keyed on the project's full path, so tw
 projects whose directories share a name do not collide.
 
 Options:
-  --display=MODE   How GUI apps reach a screen. Default: auto. Remembered.
+  --display=MODE   How GUI apps reach a screen. Default: none. Remembered.
                      wayland  Mount only the host Wayland socket. The container
                               runs its own Xwayland for X11-only apps. Wayland's
                               client isolation means sandboxed apps cannot read
@@ -158,7 +161,7 @@ Options:
                    Remembered until --no-audio.
   --no-audio       Drop a remembered --audio: the host's sound stays out of the
                    sandbox.
-  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 6.
+  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 2 (one CPU core).
                    Remembered. The sandbox gets half as many CPU cores as GB,
                    rounded up (see Resources below).
   --rebuild        Force a no-cache rebuild of the image. That image is
@@ -250,7 +253,7 @@ directory and are discarded on every start; nothing is ever written back to
 the host. 'sandbox-doctor' reports each mount; 'ai-sandbox-gc' reclaims
 leftovers from a reset it could not delete outright.
 
-Resources: the container is capped at --memory GB of RAM (default 6) with no
+Resources: the container is capped at --memory GB of RAM (default 2, one CPU core) with no
 swap, and /dev/shm at 1 GB, which counts against that cap; a changed size
 applies from the next start. CPUs follow the memory: half as many cores as GB,
 rounded up and never more than the host has, pinned as a cpuset so that
@@ -342,6 +345,7 @@ require docker "Install Docker Engine and ensure your user can run it."
 require rsync
 require python3
 docker compose version >/dev/null 2>&1 || die "'docker compose' (v2 plugin) is required."
+docker buildx version >/dev/null 2>&1 || die "'docker buildx' (BuildKit) is required: the image build uses cache mounts. Install the docker-buildx-plugin package."
 log "ok"
 
 # ---------------------------------------------------------------------------
@@ -502,7 +506,7 @@ log "tools     $HOST_TOOLS_DIR"
 step "Selecting display mode"
 
 # A display mode chosen once stays chosen. Without this, re-running the script
-# bare would silently fall back to 'auto' and undo a deliberate --display=host.
+# bare would silently fall back to 'none' and undo a deliberate --display=host.
 # A Docker choice made once stays chosen. Without this, re-running the script
 # bare silently regenerates the sandbox without the daemon: the Dockerfile loses
 # it, security_opt disappears from the compose file, SANDBOX_WITH_DOCKER flips to
@@ -531,11 +535,12 @@ fi
 # ---------------------------------------------------------------------------
 
 # The size chosen once stays chosen, like the options above; a sandbox created
-# before the key existed, or a fresh one, gets the default, and so does a
-# hand-edited size the lib rejects (it warns, like the start scripts do). See
+# before the key existed, or one whose hand-edited size the lib rejects (it
+# warns, like the start scripts do), gets the lib's 6 GB from
+# ai_sandbox_memory_gb; only a sandbox with no .env gets the default 2 GB. See
 # the comment on the resource limits at the top of this script.
 if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
-    MEMORY_GB=6
+    MEMORY_GB=2
     if [ -f "$ENV_FILE" ]; then
         STORED_MEMORY=$(ai_sandbox_env_value "$SANDBOX_DIR" SANDBOX_MEMORY_GB)
         MEMORY_GB=$(ai_sandbox_memory_gb "$SANDBOX_DIR")
@@ -1028,7 +1033,6 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   (\`headroom wrap <tool>\`, \`headroom proxy --port 8787\`, \`headroom doctor\`, \`headroom mcp\`),
   or \`from headroom import compress\`. Use it to shrink large JSON payloads, logs or
   command output before they land in context.
-- \`semantic-docs\` -- local vector search over docs, notes, PDFs and daily tasks.
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
 - \`sox\`/\`ffmpeg\` -- audio and video conversion.
@@ -1983,15 +1987,6 @@ ENV DEBIAN_FRONTEND=noninteractive \\
     PLAYWRIGHT_HTML_REPORT=none \\
     LANG=C.UTF-8
 
-ARG NODE_MAJOR=${NODE_MAJOR}
-ARG ANTIGRAVITY_CLI_VERSION=${ANTIGRAVITY_CLI_VERSION}
-ARG ANTIGRAVITY_HUB_VERSION=${ANTIGRAVITY_HUB_VERSION}
-ARG ANTIGRAVITY_IDE_VERSION=${ANTIGRAVITY_IDE_VERSION}
-ARG COMBY_VERSION=${COMBY_VERSION}
-ARG EARTHLY_VERSION=${EARTHLY_VERSION}
-ARG GITLEAKS_VERSION=${GITLEAKS_VERSION}
-ARG GITLEAKS_LINUX_X64_SHA256=${GITLEAKS_LINUX_X64_SHA256}
-ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
 DOCKERFILE_HEAD
 
 cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
@@ -2000,6 +1995,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl wget gnupg ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# Python and its packages sit before the big apt layer, and every version ARG
+# is declared right before the RUN that uses it (a changed ARG invalidates the
+# cache from its first use), so bumping Chrome, Antigravity or the big apt list
+# does not rebuild them. The uv cache mount keeps downloaded wheels between builds.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UV_VERSION=@UV_VERSION@
+RUN pip3 install --no-cache-dir uv==${UV_VERSION}
+
+ARG HEADROOM_VERSION=@HEADROOM_VERSION@
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy uv pip install --system "headroom-ai[sandbox]==${HEADROOM_VERSION}"
+
+ARG NODE_MAJOR=@NODE_MAJOR@
 # Third-party repositories.
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings /usr/share/keyrings; \
@@ -2032,7 +2043,6 @@ RUN set -eux; \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git sudo less vim-tiny nano ca-certificates \
-        python3 python3-pip python3-venv \
         socat usbutils net-tools \
         libwayland-client0 libwayland-egl1 libwayland-cursor0 xwayland \
         openbox xterm x11-utils \
@@ -2045,14 +2055,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && dbus-uuidgen > /etc/machine-id
 
+ARG GOOGLE_CHROME_VERSION=@GOOGLE_CHROME_VERSION@
 # Google Chrome, in its own layer so the rest of the image caches independently.
 RUN set -eux; \
     wget -q -O /tmp/chrome.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${GOOGLE_CHROME_VERSION}_amd64.deb"; \
     apt-get update; \
     apt-get install -y --no-install-recommends /tmp/chrome.deb; \
     rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
-
-RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm "headroom-ai[all]"
 
 RUN npm install -g --force \
         @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
@@ -2072,12 +2081,15 @@ RUN set -eux; \
 
 # The release binary is dynamically linked: without libev4 (and libpcre3,
 # libsqlite3-0, all installed above) it dies with a loader error on first use.
+ARG COMBY_VERSION=@COMBY_VERSION@
 RUN set -eux; \
     wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
     chmod +x /usr/local/bin/comby; \
     comby -version
 
 # Static binary; the git hooks in .githooks/ refuse to run without it.
+ARG GITLEAKS_VERSION=@GITLEAKS_VERSION@
+ARG GITLEAKS_LINUX_X64_SHA256=@GITLEAKS_LINUX_X64_SHA256@
 RUN set -eux; \
     wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
     echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
@@ -2085,6 +2097,7 @@ RUN set -eux; \
     rm /tmp/gitleaks.tar.gz; \
     gitleaks version
 
+ARG ANTIGRAVITY_CLI_VERSION=@ANTIGRAVITY_CLI_VERSION@
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
     tar -xzf /tmp/cli.tar.gz -C /tmp; \
@@ -2092,11 +2105,13 @@ RUN set -eux; \
     chmod +x /usr/local/bin/agy; \
     rm -f /tmp/cli.tar.gz
 
+ARG ANTIGRAVITY_HUB_VERSION=@ANTIGRAVITY_HUB_VERSION@
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-hub/${ANTIGRAVITY_HUB_VERSION}/linux-x64/Antigravity.tar.gz" -O /tmp/hub.tar.gz; \
     tar -xzf /tmp/hub.tar.gz -C /usr/local/; \
     rm -f /tmp/hub.tar.gz
 
+ARG ANTIGRAVITY_IDE_VERSION=@ANTIGRAVITY_IDE_VERSION@
 RUN set -eux; \
     wget -q "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/${ANTIGRAVITY_IDE_VERSION}/linux-x64/Antigravity%20IDE.tar.gz" -O /tmp/ide.tar.gz; \
     tar -xzf /tmp/ide.tar.gz -C /usr/local/; \
@@ -2119,9 +2134,8 @@ RUN set -eux; \
 
 # Thin wrappers for the dev-tools Python utilities mounted at ~/tools.
 RUN set -eux; \
-    printf '#!/bin/bash\nexec python3 -m tools.semantic_docs.cli "$@"\n' > /usr/local/bin/semantic-docs; \
     printf '#!/bin/bash\nexec python3 -m tools.agent_log_trimmer "$@"\n' > /usr/local/bin/agent-log-trimmer; \
-    chmod +x /usr/local/bin/semantic-docs /usr/local/bin/agent-log-trimmer
+    chmod +x /usr/local/bin/agent-log-trimmer
 
 # Allow the agent to work with PDFs through ImageMagick.
 RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' \
@@ -2197,6 +2211,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     systemctl disable docker.service containerd.service 2>/dev/null || true
 
+ARG EARTHLY_VERSION=@EARTHLY_VERSION@
 RUN wget -q "https://github.com/earthly/earthly/releases/download/${EARTHLY_VERSION}/earthly-linux-amd64" \
         -O /usr/local/bin/earthly \
     && chmod +x /usr/local/bin/earthly
@@ -2240,6 +2255,15 @@ WORKDIR ${USER_HOME}
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["tail", "-f", "/dev/null"]
 DOCKERFILE_TAIL
+
+# Fill the @NAME@ placeholders of the ARG lines above (the generated Dockerfile
+# is written through quoted heredocs, so the shell cannot expand them there).
+for _arg in NODE_MAJOR ANTIGRAVITY_CLI_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION \
+        COMBY_VERSION EARTHLY_VERSION GITLEAKS_VERSION GITLEAKS_LINUX_X64_SHA256 \
+        GOOGLE_CHROME_VERSION UV_VERSION HEADROOM_VERSION; do
+    sed -i "s|@${_arg}@|${!_arg}|g" "$BUILD_DIR/Dockerfile"
+done
+unset _arg
 
 log "Dockerfile and helper scripts written to $BUILD_DIR"
 
@@ -2895,7 +2919,7 @@ if [ "$need_build" = "yes" ]; then
     log "building $IMAGE_NAME -- one image, shared by every project"
     docker_build_flags=()
     [ "$FORCE_REBUILD" = "yes" ] && docker_build_flags+=(--no-cache)
-    docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \
+    DOCKER_BUILDKIT=1 docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \
         --build-arg "USER_ID=$HOST_UID" \
         --build-arg "GROUP_ID=$HOST_GID" \
         --build-arg "USER_NAME=$HOST_USER" \
