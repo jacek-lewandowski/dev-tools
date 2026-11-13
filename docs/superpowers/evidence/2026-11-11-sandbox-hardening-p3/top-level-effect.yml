@@ -1,0 +1,33 @@
+id: top-level-effect
+language: bash
+rule:
+  any:
+    - kind: command
+    - kind: redirected_statement
+    - kind: pipeline
+    - kind: list
+    - kind: for_statement
+    - kind: c_style_for_statement
+    - kind: while_statement
+    - kind: if_statement
+    - kind: case_statement
+    - kind: variable_assignment
+    - kind: compound_statement
+    - kind: subshell
+    - kind: negated_command
+    - kind: test_command
+    - kind: unset_command
+    - all:
+        - kind: declaration_command
+        - any:
+            - regex: '^(export|local)\b'
+            - has:
+                kind: command_substitution
+                stopBy: end
+            - has:
+                kind: process_substitution
+                stopBy: end
+  inside:
+    kind: program
+severity: error
+message: a statement that runs when the file is sourced

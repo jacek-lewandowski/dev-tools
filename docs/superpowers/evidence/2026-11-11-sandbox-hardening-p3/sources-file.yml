@@ -1,0 +1,9 @@
+id: sources-file
+language: bash
+rule:
+  kind: command
+  has:
+    field: name
+    regex: '^(\.|source)$'
+severity: error
+message: sources a file
