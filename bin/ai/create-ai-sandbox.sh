@@ -207,10 +207,14 @@ Shared knowledge (optional): after 'ai-knowledge init <private-git-url>
 --integrator <dev-tools dir>' the global rules and roles come from that
 repository instead, rendered read-only into every sandbox as GEMINI.md,
 CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
-gets its own clone at ~/knowledge with main checked out; the 'propose-rule'
+gets its own clone at ~/knowledge with main checked out, made and kept current
+inside the sandbox from a read-only origin the host maintains; the 'propose-rule'
 skill commits one file on a proposal/<date>-<slug>-<hex> branch, and the host
-pushes it on the next sandbox start or 'ai-knowledge sync --all'. A
-'process-report' report travels the same way as a ref refs/reports/<name>.
+pushes it on the next sandbox start or 'ai-knowledge sync --all', reading the clone
+without running git in it. A 'process-report' report travels the same way as a ref
+refs/reports/<name>. A sandbox created before this setup (its SANDBOX_KNOWLEDGE
+stamp is not the one knowledge needs, 2) is refused at start until it is
+re-created: run this script for its project again.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
@@ -2404,8 +2408,10 @@ cat <<COMPOSE_KNOWLEDGE
       - "${SHARED_DIR}/knowledge/gemini/agents:${CONTAINER_HOME}/.gemini/agents:ro"
       - "${SHARED_DIR}/knowledge/codex/agents:${CONTAINER_HOME}/.codex/agents:ro"
       # This sandbox's own clone of the knowledge repository, read-write, on its
-      # proposals branch (main for the integrator). It holds no credentials, so
-      # it can commit but never fetch or push: the host does that on every start.
+      # proposals branch (main for the integrator). It holds no credentials: it
+      # fetches only from the read-only origin below (sandbox-knowledge-sync) and
+      # never pushes; the host reads it through a confined container and does all
+      # network git.
       - "${SANDBOX_DIR}/knowledge:${CONTAINER_HOME}/knowledge"
       # The origin that clone fetches from: bare, written by the host only.
       - "$(ai_sandbox_origin_dir "$SANDBOX_DIR"):${AI_SANDBOX_ORIGIN_MOUNT}:ro"

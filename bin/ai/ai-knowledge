@@ -8,15 +8,23 @@
 # proposal/<date>-<slug>-<hex> per proposal. The integrator sandbox's clone
 # carries every open proposal branch and closes them with an ours-merge.
 # A process report is a ref in refs/reports/<name>, outside main and refs/heads:
-# every clone pushes its own, only the integrator fetches and closes them.
+# every clone's is pushed once, only the integrator receives and closes them.
 #
-# No sandbox has git credentials, so every fetch, merge and push happens here,
-# before a sandbox starts. A sync never fails a start: whatever goes wrong is
-# written to <sandbox dir>/status/knowledge, which sandbox-doctor shows.
+# No sandbox has git credentials, so every fetch, merge and push happens here.
+# The host never runs git in a sandbox's clone, which the sandbox can write: it
+# reads the clone's branches and reports through ai_sandbox_confined_fetch into
+# refs/sandbox/<id>/ of its own repository (~/.ai-sandbox/knowledge/main), decides
+# there against its own refs/remotes/origin/main, and publishes from there. The clone
+# itself is made and updated by sandbox-knowledge-sync, inside the sandbox, from the
+# read-only bare origin this script refreshes (<sandbox dir>/knowledge-origin.git),
+# and removes a ref only as the status file lists it. A sync never fails a start:
+# whatever goes wrong is written to <sandbox dir>/status/knowledge, which
+# sandbox-doctor shows. After a sync a running sandbox of the current stamp
+# is made to run its command (docker exec).
 #
 #   ai-knowledge init <remote-url> [--integrator DIR]  configure; seed an empty remote; render
-#   ai-knowledge sync [PROJECT_DIR]                     main + render, then this project's clone
-#   ai-knowledge sync --all                             main + render, then every sandbox's clone
+#   ai-knowledge sync [PROJECT_DIR]                     main + render, then publish this project's clone
+#   ai-knowledge sync --all                             main + render, then every current sandbox's clone
 #                                                       in parallel (AI_KNOWLEDGE_JOBS, default 4)
 #   ai-knowledge render                                 render main into the shared store
 #   ai-knowledge status [PROJECT_DIR]                   config and the last sync status
