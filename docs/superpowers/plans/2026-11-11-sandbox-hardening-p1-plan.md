@@ -364,7 +364,7 @@ ai_sandbox_confined_fetch <repository> <prefix> <root> <subdirectory> <ref patte
 #   <repository> outside <prefix> changes
 #   <prefix>: a full ref name below refs/, outside refs/heads/ and refs/tags/, that
 #   holds only refs this function fetched from that one tree (knowledge: refs/sandbox/<id>)
-#   exit: as ai_sandbox_host_git (3 for a sandbox-writable <repository>); 125, 124 as above
+#   exit: as ai_sandbox_host_git (3 for a sandbox-writable <repository>); 125, 124 as above; 2, before any fetch starts, for arguments outside this contract (a usage error)
 ai_sandbox_writable_path <path>
 #   0 when <path>, links resolved, lies inside a bind source that a sandbox's compose
 #   file mounts without :ro, or inside a project directory a stamp names; 1 otherwise

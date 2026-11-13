@@ -12,7 +12,10 @@ na hoście, natomiast ty zajmij się implementacją i planowaniem kolejnych faz.
 back to the user as approval of the plan and of the three changes); deferred entry E2
 added with them. Change S-4 (I3e narrowed to the host sockets a sandbox is given, two
 residual risks, the phase 2 sentence on a remembered `--audio`), raised while planning
-phase 2, approved by the user on 2026-11-12 with the phase 2 plan, option (a) ("a")
+phase 2, approved by the user on 2026-11-12 with the phase 2 plan, option (a) ("a").
+Change S-5 (C-GIT: `ai_sandbox_confined_fetch` exits 2 for arguments outside its
+contract), raised after phase 1's implementation, approved by the user on 2026-11-12
+("a")
 Author: Hania (planner 1), the spec's author for this task
 Tree: `96540a5` (`main`)
 Scope: `bin/ai/` (the toolchain), `tools/` as far as the host and the sandboxes load it,
@@ -410,7 +413,8 @@ here are fixed; everything else is the phase plan's.
   the served repository chose can stand for one of the host's refs. In a repository
   the user works in (phase 6) this binds the toolchain's calls, not what the user
   types: a short name the user gives for one of their own refs never resolves below
-  the prefix.
+  the prefix. Such a fetch is made by `ai_sandbox_confined_fetch`; its exit status is
+  2, before any fetch starts, for arguments outside this contract (a usage error).
 - A host-owned repository is one outside every sandbox mount whose configuration only
   the host writes. All validation, comparison and pushing happens there, through a
   second function, `ai_sandbox_host_git`.
