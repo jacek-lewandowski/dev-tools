@@ -23,6 +23,24 @@ assert_contains "nano is installed"                      "$df" 'nano'
 assert_contains "net-tools is installed"                 "$df" 'net-tools'
 assert_contains "comby's shared libraries are installed" "$df" 'libev4 libpcre3 libsqlite3-0'
 assert_contains "comby is smoke-tested at build time"    "$df" 'comby -version'
+assert_contains "uv is pinned"                           "$df" 'ARG UV_VERSION=0.13.8'
+assert_contains "python packages install with uv"        "$df" 'uv pip install --system'
+assert_contains "uv has a BuildKit cache mount"          "$df" '--mount=type=cache,target=/root/.cache/uv'
+assert_contains "headroom installs with the sandbox extra" "$df" 'headroom-ai[sandbox]==${HEADROOM_VERSION}'
+assert_contains "the image build runs under BuildKit"    "$(cat "$REPO_ROOT/bin/ai/create-ai-sandbox.sh")" 'DOCKER_BUILDKIT=1 docker build'
+py_apt=$(printf '%s\n' "$df" | grep -n 'python3 python3-pip python3-venv' | head -1 | cut -d: -f1)
+big_apt=$(printf '%s\n' "$df" | grep -n 'claude-desktop antigravity' | head -1 | cut -d: -f1)
+uv_run=$(printf '%s\n' "$df" | grep -n 'uv pip install --system' | head -1 | cut -d: -f1)
+assert_eq "python apt layer is its own, before the big apt layer" "$([ -n "$py_apt" ] && [ "$py_apt" -lt "$big_apt" ] && echo yes)" yes
+assert_eq "python packages follow the python apt layer, before the big one" "$([ -n "$uv_run" ] && [ "$uv_run" -gt "$py_apt" ] && [ "$uv_run" -lt "$big_apt" ] && echo yes)" yes
+big_start=$(printf '%s\n' "$df" | head -n "$big_apt" | grep -n '^RUN apt-get update' | tail -1 | cut -d: -f1)
+assert_eq "big apt layer no longer lists python"         "$(printf '%s\n' "$df" | sed -n "${big_start},${big_apt}p;/dbus-uuidgen/q" | grep -c python3)" 0
+assert_eq "python apt layer sits outside the big apt layer" "$([ "$py_apt" -lt "$big_start" ] && echo yes)" yes
+for gone in torch lancedb fastembed pypdf tqdm 'headroom-ai\[all\]' semantic-docs semantic_docs; do
+    assert_eq "the image no longer mentions $gone" "$(printf '%s\n' "$df" | grep -c -E "$gone")" 0
+done
+assert_contains "the agent-log-trimmer wrapper stays"    "$df" 'tools.agent_log_trimmer'
+assert_contains "headroom is still smoke-tested"         "$df" "python3 -c 'import headroom'"
 assert_contains "gitleaks is downloaded at the pinned release" "$df" 'releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz'
 assert_contains "the pinned gitleaks version is passed to the build" "$df" 'ARG GITLEAKS_VERSION=8.30.1'
 assert_contains "the gitleaks tarball is verified against the pinned sha256" "$df" 'sha256sum -c -'
@@ -128,6 +146,7 @@ assert_contains "and says why"                 "$none_out" 'not available'
 brain=$(cat "$HOME/.gemini/GEMINI.md")
 assert_contains "notes forbid apt-installing a JDK" "$brain" 'never apt-get install a JDK'
 assert_contains "notes mention comby and ast-grep"  "$brain" '`comby`'
+assert_eq "notes no longer mention semantic-docs" "$(printf '%s' "$brain" | grep -c 'semantic-docs')" 0
 assert_contains "notes mention pnpm via corepack"   "$brain" 'corepack'
 assert_contains "notes mention agy"                 "$brain" '`agy`'
 assert_contains "notes mention codex"               "$brain" '`codex`'

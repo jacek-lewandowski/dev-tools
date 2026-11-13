@@ -28,6 +28,9 @@ readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
 readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
 readonly GITLEAKS_VERSION='8.30.1'
+# uv installs the Python packages; headroom's own 'sandbox' extra has no torch, nvidia or lancedb.
+readonly UV_VERSION='0.13.8'
+readonly HEADROOM_VERSION='0.42.0'
 # From the release's gitleaks_${GITLEAKS_VERSION}_checksums.txt; bump with the version.
 readonly GITLEAKS_LINUX_X64_SHA256='551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
@@ -1028,7 +1031,6 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   (\`headroom wrap <tool>\`, \`headroom proxy --port 8787\`, \`headroom doctor\`, \`headroom mcp\`),
   or \`from headroom import compress\`. Use it to shrink large JSON payloads, logs or
   command output before they land in context.
-- \`semantic-docs\` -- local vector search over docs, notes, PDFs and daily tasks.
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
 - \`sox\`/\`ffmpeg\` -- audio and video conversion.
@@ -1992,6 +1994,8 @@ ARG EARTHLY_VERSION=${EARTHLY_VERSION}
 ARG GITLEAKS_VERSION=${GITLEAKS_VERSION}
 ARG GITLEAKS_LINUX_X64_SHA256=${GITLEAKS_LINUX_X64_SHA256}
 ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
+ARG UV_VERSION=${UV_VERSION}
+ARG HEADROOM_VERSION=${HEADROOM_VERSION}
 DOCKERFILE_HEAD
 
 cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
@@ -1999,6 +2003,18 @@ cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl wget gnupg ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Python and its packages sit before the big apt layer, so bumping Chrome,
+# Antigravity or that list does not rebuild them. The uv cache mount keeps
+# downloaded wheels between builds.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir uv==${UV_VERSION}
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy uv pip install --system "headroom-ai[sandbox]==${HEADROOM_VERSION}"
 
 # Third-party repositories.
 RUN set -eux; \
@@ -2032,7 +2048,6 @@ RUN set -eux; \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git sudo less vim-tiny nano ca-certificates \
-        python3 python3-pip python3-venv \
         socat usbutils net-tools \
         libwayland-client0 libwayland-egl1 libwayland-cursor0 xwayland \
         openbox xterm x11-utils \
@@ -2051,8 +2066,6 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends /tmp/chrome.deb; \
     rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
-
-RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm "headroom-ai[all]"
 
 RUN npm install -g --force \
         @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
@@ -2119,9 +2132,8 @@ RUN set -eux; \
 
 # Thin wrappers for the dev-tools Python utilities mounted at ~/tools.
 RUN set -eux; \
-    printf '#!/bin/bash\nexec python3 -m tools.semantic_docs.cli "$@"\n' > /usr/local/bin/semantic-docs; \
     printf '#!/bin/bash\nexec python3 -m tools.agent_log_trimmer "$@"\n' > /usr/local/bin/agent-log-trimmer; \
-    chmod +x /usr/local/bin/semantic-docs /usr/local/bin/agent-log-trimmer
+    chmod +x /usr/local/bin/agent-log-trimmer
 
 # Allow the agent to work with PDFs through ImageMagick.
 RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' \
@@ -2895,7 +2907,7 @@ if [ "$need_build" = "yes" ]; then
     log "building $IMAGE_NAME -- one image, shared by every project"
     docker_build_flags=()
     [ "$FORCE_REBUILD" = "yes" ] && docker_build_flags+=(--no-cache)
-    docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \
+    DOCKER_BUILDKIT=1 docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \
         --build-arg "USER_ID=$HOST_UID" \
         --build-arg "GROUP_ID=$HOST_GID" \
         --build-arg "USER_NAME=$HOST_USER" \
