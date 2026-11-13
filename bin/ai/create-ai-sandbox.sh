@@ -81,6 +81,10 @@ readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
 # Where the host keeps /etc/timezone and /etc/localtime, read to give the
 # sandbox the host's timezone. Overridable so the tests can stand in a fake.
 readonly HOST_ETC_DIR="${HOST_ETC_DIR:-/etc}"
+# Where the host keeps its sound devices, tested for and mounted (at /dev/snd in
+# the sandbox) only for a sandbox created with --audio. Overridable so the
+# tests can stand in a fake.
+readonly HOST_SND_DIR="${HOST_SND_DIR:-/dev/snd}"
 
 readonly SHM_SIZE='1gb'
 
@@ -92,8 +96,10 @@ DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
-WITH_AUDIO="yes"        # host sound socket and devices, microphone included
+WITH_AUDIO="no"         # host sound socket and devices, microphone included; off unless asked for
 WITH_AUDIO_EXPLICIT="no"
+AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
+AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
 MEMORY_GB=""            # --memory=GB; the remembered size, else 6, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
@@ -141,11 +147,17 @@ Options:
                    keeps its own image store inside the container, costing disk
                    per sandbox.
   --no-docker      Undo a remembered --with-docker.
-  --audio          Share the host's PulseAudio/PipeWire socket and ALSA devices
-                   with the sandbox. On by default; note that the socket carries
-                   capture as well as playback, so anything in the sandbox can
-                   record from your microphone. Remembered.
-  --no-audio       Keep the host's sound out of the sandbox. Remembered.
+  --audio          Share the host's sound socket and sound devices with the
+                   sandbox, microphone included. Off by default. The socket
+                   carries capture as well as playback, so anything in the
+                   sandbox can record from your microphone, and a program in
+                   the sandbox can make the host's sound server, which runs as
+                   you, act on its requests: a sandbox with --audio is outside
+                   the promise that a sandbox is
+                   given no host daemon's socket but its display's.
+                   Remembered until --no-audio.
+  --no-audio       Drop a remembered --audio: the host's sound stays out of the
+                   sandbox.
   --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 6.
                    Remembered. The sandbox gets half as many CPU cores as GB,
                    rounded up (see Resources below).
@@ -504,9 +516,13 @@ if [ "$WITH_DOCKER_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
 fi
 if [ "$WITH_AUDIO_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_AUDIO=$(sed -n 's/^SANDBOX_WITH_AUDIO=//p' "$ENV_FILE" | tail -n 1)
+    # 2 is a request (--audio, remembered). 1 is the old shape: every run
+    # before audio became opt-in wrote it, for the old default and for --audio
+    # alike, so it is no request. 0 and anything else read as off.
     case "$STORED_AUDIO" in
-        1) WITH_AUDIO="yes"; log "keeping host audio (pass --no-audio to drop it)" ;;
-        0) WITH_AUDIO="no";  log "keeping host audio off (pass --audio to share it)" ;;
+        2) WITH_AUDIO="yes" ;;
+        1) AUDIO_OLD_VALUE="yes" ;;
+        0) AUDIO_STORED_OFF="yes" ;;
     esac
 fi
 
@@ -777,18 +793,46 @@ fi
 # Audio
 # ---------------------------------------------------------------------------
 
-# On by default, --no-audio turns it off. The socket carries capture as well
-# as playback, and neither PulseAudio nor PipeWire's compatibility socket can
-# restrict one client to playback, so sharing it is sharing the microphone.
+# Off unless --audio asks for it, and then remembered until --no-audio. The
+# socket carries capture as well as playback, and neither PulseAudio nor
+# PipeWire's compatibility socket can restrict one client to playback, so
+# sharing it is sharing the microphone, and the host's sound server, which runs
+# as the user, acts on requests from the sandbox.
 PULSE_SOCKET_HOST="${XDG_RUNTIME_DIR:-/run/user/$HOST_UID}/pulse/native"
+if [ "$AUDIO_OLD_VALUE" = "yes" ] && [ "$WITH_AUDIO" != "yes" ]; then
+    warn "Audio: the host's sound was shared with this sandbox because that used to be the default. It is now off. Pass --audio to share it again."
+fi
+# The sound devices are mounted only with a display (the device section below
+# reads AUDIO_DEVICES), so the warning names only what this run shares.
+AUDIO_DEVICES="no"
+[ "$WITH_AUDIO" = "yes" ] && [ -d "$HOST_SND_DIR" ] && [ "$DISPLAY_MODE" != "none" ] && AUDIO_DEVICES="yes"
 if [ "$WITH_AUDIO" != "yes" ]; then
-    log "Audio: not shared (--no-audio; pass --audio to share the host's sound, microphone included)."
-elif [ -S "$PULSE_SOCKET_HOST" ]; then
-    add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
-    add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
-    log "Audio: PulseAudio/PipeWire socket shared, microphone included (pass --no-audio to drop it)."
+    if [ "$WITH_AUDIO_EXPLICIT" = "yes" ] || [ "$AUDIO_STORED_OFF" = "yes" ]; then
+        log "Audio: not shared; pass --audio to share the host's sound, microphone included."
+    else
+        log "Audio: not shared by default; pass --audio to share the host's sound, microphone included."
+    fi
 else
-    warn "Audio is on, but there is no PulseAudio/PipeWire socket at $PULSE_SOCKET_HOST (pass --no-audio to silence this)."
+    audio_shared=""
+    [ -S "$PULSE_SOCKET_HOST" ] && audio_shared="sound socket"
+    [ "$AUDIO_DEVICES" = "yes" ] && audio_shared="${audio_shared:+$audio_shared and }sound devices"
+    if [ -n "$audio_shared" ]; then
+        audio_warning="Audio is shared (--audio): the sandbox gets the host's ${audio_shared}, microphone included."
+        if [ -S "$PULSE_SOCKET_HOST" ]; then
+            audio_warning="${audio_warning}
+   A program in the sandbox can make the host's sound server, which runs as you,
+   act on its requests, so this sandbox is outside the promise that a
+   sandbox is given no host daemon's socket but its display's."
+        fi
+        warn "${audio_warning}
+   Pass --no-audio to drop it."
+    fi
+    if [ -S "$PULSE_SOCKET_HOST" ]; then
+        add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
+        add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
+    else
+        warn "Audio is on, but there is no sound socket at $PULSE_SOCKET_HOST (pass --no-audio to silence this)."
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -889,8 +933,8 @@ shopt -u nullglob
 add_cgroup 'c 188:* rwm'    # ttyUSB
 add_cgroup 'c 166:* rwm'    # ttyACM
 
-if [ "$WITH_AUDIO" = "yes" ] && [ -d /dev/snd ] && [ "$DISPLAY_MODE" != "none" ]; then
-    add_vol '"/dev/snd:/dev/snd"'
+if [ "$AUDIO_DEVICES" = "yes" ]; then
+    add_vol "\"${HOST_SND_DIR}:/dev/snd\""
     add_cgroup 'c 116:* rwm'
     log "audio: /dev/snd (ALSA)"
 fi
@@ -2241,7 +2285,9 @@ managed = {
     "HOST_GIT_NAME": os.environ.get("HOST_GIT_NAME", ""),
     "HOST_GIT_EMAIL": os.environ.get("HOST_GIT_EMAIL", ""),
     "SANDBOX_WITH_DOCKER": "1" if os.environ.get("WITH_DOCKER") == "yes" else "0",
-    "SANDBOX_WITH_AUDIO": "1" if os.environ.get("WITH_AUDIO") == "yes" else "0",
+    # 2 is a request for host audio; 1 is the old shape (read as no request,
+    # never written) and 0 is off.
+    "SANDBOX_WITH_AUDIO": "2" if os.environ.get("WITH_AUDIO") == "yes" else "0",
     # The knowledge stamp: the start scripts refuse a sandbox whose stamp does
     # not match the host's configuration (value and rule: ai-sandbox-lib.sh),
     # and its project dir is what the re-create command names.
