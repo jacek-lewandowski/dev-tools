@@ -143,7 +143,7 @@ assert_contains "notes say how to run it in the background" "$brain" 'or run it 
 assert_contains "notes name the conversation id line" "$brain" '`ai-delegate: conversation_id=<id>`'
 assert_contains "notes say how round 2 resumes"     "$brain" '`--conversation <id>` to continue round 1'
 assert_contains "ai-delegate is installed in the image" "$df" 'COPY ai-delegate       /usr/local/bin/ai-delegate'
-assert_file     "ai-delegate is a host helper"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
+assert_no_file  "ai-delegate is not a host helper (it runs in the image only)"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
 assert_contains "notes mention net-tools"           "$brain" '`net-tools`'
 
 # --- entrypoint merges read_url(*) into the sandbox's own agy settings -----

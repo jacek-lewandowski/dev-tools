@@ -19,6 +19,13 @@ AI_SANDBOX_CONFIG="$AI_SANDBOX_ROOT/config"     # defined once, in the lib
 AI_KNOWLEDGE_ROOT="$AI_SANDBOX_ROOT/knowledge"
 AI_KNOWLEDGE_CONFIG="$AI_KNOWLEDGE_ROOT/config"
 AI_KNOWLEDGE_RENDER="$AI_SANDBOX_ROOT/shared/knowledge"
+# C-STATUS: where a sandbox sees <sandbox dir>/status, read-only. Defined once here;
+# the compose file binds it and passes it on as SANDBOX_STATUS_DIR.
+AI_SANDBOX_STATUS_MOUNT=/run/ai-sandbox/status
+# C-KNOW: the bare origin <sandbox dir>/knowledge-origin.git, written by the host only
+# and bound read-only at this path; the in-sandbox clone fetches from it. Defined once
+# here; create binds it, ai-knowledge refreshes it.
+AI_SANDBOX_ORIGIN_MOUNT=/run/ai-sandbox/knowledge-origin.git
 ai_knowledge_configured() { [ -f "$AI_KNOWLEDGE_CONFIG" ]; }
 
 # Lowercase, replace every non-alphanumeric with '-', collapse runs, trim both
@@ -46,18 +53,79 @@ ai_sandbox_claude_project_key() {
     printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
 }
 
-# The git toplevel when there is one, so running from a subdirectory is safe.
-ai_sandbox_project_root() {
-    local dir=${1:-$PWD}
-    (
-        cd "$dir" 2>/dev/null || exit 1
-        local top
-        if top=$(git rev-parse --show-toplevel 2>/dev/null); then
-            printf '%s\n' "$top"
-        else
-            pwd
-        fi
-    )
+# C-STAMP. The project a directory belongs to is read from the stamps under
+# AI_SANDBOX_ROOT, never from the tree: a sandbox can write the tree (a nested
+# repository, a setting in the project's git configuration that names another
+# directory), and no git process runs here.
+# Whether <dir> is a project the host stamped: the sandbox directory filed
+# under its id holds a project-path whose first line is <dir>.
+ai_sandbox_stamped() {   # <dir>
+    local f line=""
+    f="$(ai_sandbox_dir_for "$1")/project-path"
+    [ -f "$f" ] || return 1
+    IFS= read -r line < "$f" || [ -n "$line" ]
+    [ "$line" = "$1" ]
+}
+
+# The parent of an absolute path; nothing for "/".
+ai_sandbox_parent_dir() {
+    case $1 in
+        /|"") ;;
+        */*)  local p=${1%/*}; printf '%s' "${p:-/}" ;;
+    esac
+}
+
+# The nearest stamped ancestor of <dir>, else (second argument "dotgit") the
+# nearest ancestor holding a .git entry, else <dir> with links resolved.
+# Today's stamps hold two path forms: git's resolved toplevel for a repository,
+# the path as given for anything else. So both chains of ancestors are walked,
+# the path as given and the resolved one, nearest first, the given form first
+# on a tie; a stamp is found whichever form it holds. A .git entry is looked
+# for in the resolved chain, the form a repository's stamp has always had.
+# Return: 0 found a stamp or a .git, 3 found neither (printed the fallback),
+# 1 no such directory.
+ai_sandbox_root_scan() {   # <dir> [dotgit]
+    local a b fallback
+    a=$(cd -- "$1" 2>/dev/null && pwd) || return 1
+    b=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    fallback=$b
+    while [ -n "$a" ] || [ -n "$b" ]; do
+        if [ -n "$a" ] && ai_sandbox_stamped "$a"; then printf '%s\n' "$a"; return 0; fi
+        if [ -n "$b" ] && [ "$b" != "$a" ] && ai_sandbox_stamped "$b"; then printf '%s\n' "$b"; return 0; fi
+        if [ "${2:-}" = dotgit ] && [ -n "$b" ] && [ -e "$b/.git" ]; then printf '%s\n' "$b"; return 0; fi
+        a=$(ai_sandbox_parent_dir "$a"); b=$(ai_sandbox_parent_dir "$b")
+    done
+    printf '%s\n' "$fallback"; return 3
+}
+
+# The project of <dir> for every command but create: the nearest stamped
+# ancestor, else <dir> itself with links resolved. 1: no such directory.
+ai_sandbox_project_root() {   # [dir]
+    local rc=0
+    ai_sandbox_root_scan "${1:-$PWD}" || rc=$?
+    [ "$rc" -ne 1 ]
+}
+
+# create-ai-sandbox.sh only: the nearer of the stamped ancestor and the
+# ancestor holding a .git entry (tested for existence), else <dir> itself.
+ai_sandbox_create_root() {   # [dir]
+    local rc=0
+    ai_sandbox_root_scan "${1:-$PWD}" dotgit || rc=$?
+    [ "$rc" -ne 1 ]
+}
+
+# The origin's path in a sandbox directory, and its creation: empty and bare, HEAD on
+# main, made by the host before any start (a missing bind source would be created
+# root-owned by Docker). Nothing is fetched here; ai-knowledge fills it.
+ai_sandbox_origin_dir() {   # <sandbox dir>
+    printf '%s/knowledge-origin.git' "$1"
+}
+ai_sandbox_make_origin() {   # <sandbox dir>
+    local o
+    o=$(ai_sandbox_origin_dir "$1")
+    mkdir -p -- "$o" || return 1
+    [ -f "$o/HEAD" ] && return 0
+    ai_sandbox_host_git "$o" init -q --bare >/dev/null && ai_sandbox_host_git "$o" symbolic-ref HEAD refs/heads/main
 }
 
 ai_sandbox_dir_for() {
@@ -79,34 +147,44 @@ ai_sandbox_list() {
     done
 }
 
-# The knowledge stamp create-ai-sandbox.sh writes: 1 when the compose file
-# carries the knowledge mounts, 0 when it carries the live GEMINI.md mount,
-# nothing for a sandbox created before stamps existed.
+# The knowledge stamp create-ai-sandbox.sh writes: AI_SANDBOX_KNOWLEDGE_STAMP
+# when the sandbox runs the in-sandbox knowledge sync (knowledge configured),
+# 0 when it carries the live GEMINI.md mount, nothing for a sandbox created
+# before stamps existed. Stamp 1 (the host-written clone) is no longer current:
+# such a sandbox has to be re-created. The generated entrypoint and doctor
+# compare the same value as a literal; a test keeps the three equal.
+AI_SANDBOX_KNOWLEDGE_STAMP=2
 ai_sandbox_knowledge_stamp() { ai_sandbox_env_value "$1" SANDBOX_KNOWLEDGE; }
 
 # current | stale | unstamped: whether the sandbox's compose file matches the
 # host's knowledge configuration. A stale sandbox with knowledge configured
-# mounts the live GEMINI.md, which now resolves to the render, read-write.
+# mounts the live GEMINI.md, which now resolves to the render, read-write, or
+# predates the in-sandbox sync.
 ai_sandbox_knowledge_state() {
     local stamp want=0
     stamp=$(ai_sandbox_knowledge_stamp "$1")
-    ai_knowledge_configured && want=1
+    ai_knowledge_configured && want=$AI_SANDBOX_KNOWLEDGE_STAMP
     if [ -z "$stamp" ]; then echo unstamped
     elif [ "$stamp" = "$want" ]; then echo current
     else echo stale
     fi
 }
 
-# The start path only checks; it never rewrites a sandbox. The repair is a
-# plain create-ai-sandbox.sh run for this sandbox; the disposable migration
-# script from the dev-tools checkout is the shortcut for every sandbox at once.
-ai_sandbox_require_current() {   # <sandbox dir>
-    local state dev_tools="" project
-    state=$(ai_sandbox_knowledge_state "$1")
-    [ "$state" = current ] && return 0
-    [ -f "$AI_SANDBOX_CONFIG" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_CONFIG" | head -1)
+# The one repair, told with the project dir: the stamped one, else the path
+# file of a sandbox from before stamps.
+ai_sandbox_recreate_command() {   # <sandbox dir>
+    local project
     project=$(ai_sandbox_env_value "$1" SANDBOX_PROJECT_DIR)
     if [ -z "$project" ] && [ -f "$1/project-path" ]; then project=$(head -1 "$1/project-path"); fi
+    echo "create-ai-sandbox.sh ${project:-<project dir>}"
+}
+
+# The start path only checks; it never rewrites a sandbox. The repair is a
+# plain create-ai-sandbox.sh run for this sandbox.
+ai_sandbox_require_current() {   # <sandbox dir>
+    local state
+    state=$(ai_sandbox_knowledge_state "$1")
+    [ "$state" = current ] && return 0
     {
         if [ "$state" = stale ]; then
             echo "Sandbox $(basename "$1") is stale: its compose file disagrees with the host's knowledge configuration."
@@ -114,11 +192,22 @@ ai_sandbox_require_current() {   # <sandbox dir>
             echo "Sandbox $(basename "$1") is unstamped: it was created before the knowledge stamp existed."
         fi
         echo "It cannot be started until it has been recreated. Run on the host:"
-        echo "    create-ai-sandbox.sh ${project:-<project dir>}"
-        echo "To recreate every stale or unstamped sandbox at once instead:"
-        echo "    ${dev_tools:-<dev-tools checkout>}/bin/ai/ai-sandbox-migrate-knowledge"
+        echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
     return 1
+}
+
+# A running sandbox is entered whatever its stamp; this is what the host says
+# about one that is not current (nothing is executed in it).
+ai_sandbox_say_recreate() {   # <sandbox dir>
+    local state
+    state=$(ai_sandbox_knowledge_state "$1")
+    [ "$state" = current ] && return 0
+    {
+        echo "Sandbox $(basename "$1") is running and $state: it keeps working, but it predates the host's current knowledge setup and the host runs nothing in it."
+        echo "It must be re-created (this restarts it). Run on the host when it suits you:"
+        echo "    $(ai_sandbox_recreate_command "$1")"
+    } >&2
 }
 # Resolve the sandbox for the current directory. Sets AI_SANDBOX_DIR,
 # AI_SANDBOX_NAME and AI_SANDBOX_PROJECT, or returns 1 with a message.
@@ -199,7 +288,9 @@ SHARED
 
 # Every helper installed into $AI_SANDBOX_ROOT/bin. create-ai-sandbox.sh
 # installs from this list and ai-sandbox-migrate refreshes from it, so a helper
-# added here is picked up by both without either being edited.
+# added here is picked up by both without either being edited. Programs that
+# run only inside the image (ai-delegate) are deliberately not listed: the host
+# has no use for them and a host copy is one more file to keep current.
 ai_sandbox_helpers() {
     cat <<'HELPERS'
 ai-sandbox-lib.sh
@@ -213,8 +304,178 @@ ai-sandbox-account
 ai-sandbox-gc
 ai-knowledge
 ai-sandbox-extensions
-ai-delegate
 HELPERS
+}
+
+# The image tag of one variant. The uid suffix keeps two host users sharing one
+# Docker daemon from fighting over a single tag, since the image bakes in USER_ID.
+ai_sandbox_image_name() {   # <base|docker>
+    printf 'ai-sandbox:%s-u%s' "$1" "$(id -u)"
+}
+
+# C-GIT, host side. Whether PATH, a bind source a sandbox's compose file mounts
+# read-write, or a project directory a stamp names holds the path (links
+# resolved): then a sandbox can write the repository's configuration and refs.
+# 0 when it does, 1 when it does not. A path that cannot be resolved counts as
+# writable: the caller refuses, which is the safe side.
+ai_sandbox_writable_path() {   # <path>
+    local real d line f src
+    local -a srcs=() resolved=()
+    real=$(readlink -m -- "$1" 2>/dev/null) && [ -n "$real" ] || return 0
+    for d in "$AI_SANDBOX_ROOT"/*-agent; do
+        [ -d "$d" ] || continue
+        # the project directories the stamps name
+        if [ -f "$d/project-path" ] && IFS= read -r line < "$d/project-path" && [ -n "$line" ]; then srcs+=("$line"); fi
+        line=$(ai_sandbox_env_value "$d" SANDBOX_PROJECT_DIR)
+        [ -z "$line" ] || srcs+=("$line")
+        # the bind sources of the compose file that carry no :ro; only quoted
+        # list items under the service's volumes: key, as create-ai-sandbox.sh
+        # writes them (src:dst or src:dst:options; named volumes do not start
+        # with a slash and a relative source is relative to the compose file)
+        [ -f "$d/docker-compose.yml" ] || continue
+        while IFS= read -r src; do
+            case $src in /*) srcs+=("$src") ;; ./*|../*) srcs+=("$d/$src") ;; esac
+        done < <(awk '
+            /^    volumes:[[:space:]]*$/ { inv = 1; next }
+            inv && $0 !~ /^[[:space:]]*(#.*)?$/ { match($0, /^ */); if (RLENGTH <= 4) inv = 0 }
+            inv && /^[[:space:]]+-[[:space:]]+"[^"]*"[[:space:]]*$/ {
+                item = $0; sub(/^[[:space:]]+-[[:space:]]+"/, "", item); sub(/"[[:space:]]*$/, "", item)
+                n = split(item, f, ":")
+                if (n >= 2 && f[1] !~ /\$/) {
+                    if (n >= 3 && f[n] ~ /(^|,)ro(,|$)/) next
+                    print f[1]
+                }
+            }' "$d/docker-compose.yml")
+    done
+    [ ${#srcs[@]} -gt 0 ] || return 1
+    mapfile -t resolved < <(readlink -m -- "${srcs[@]}" 2>/dev/null)
+    for src in "${resolved[@]}"; do
+        [ -n "$src" ] || continue
+        case $real in "$src"|"$src"/*) return 0 ;; esac
+    done
+    return 1
+}
+
+# C-GIT, host side: the only way the host runs git against a repository, apart
+# from ai_sandbox_confined_git. <repository> is a host-owned directory (status
+# 3, without starting git, when a sandbox can write it); '-' discovers no
+# repository, for commands given a URL alone, because a git started inside a
+# repository reads that repository's configuration even then. The working
+# directory is / in that form and the repository's own path, links resolved,
+# in the other. Variables set for the call (GIT_SSH_COMMAND and the like) reach
+# git; GIT_DIR and GIT_WORK_TREE never do, since they would override the
+# repository this function has just vetted. AI_SANDBOX_GIT_TIMEOUT=<seconds>
+# bounds the run (exit 124).
+ai_sandbox_host_git() {   # <repository|-> <git args...>
+    local repo=$1 real=""
+    shift
+    if [ "$repo" != - ]; then
+        real=$(readlink -m -- "$repo" 2>/dev/null) || real=$repo
+        if ai_sandbox_writable_path "$real"; then
+            echo "ai_sandbox_host_git: refusing to run git in $repo: a sandbox can write it" >&2
+            return 3
+        fi
+    fi
+    (
+        unset GIT_DIR GIT_WORK_TREE
+        if [ -n "$real" ]; then
+            cd -- "$real" 2>/dev/null || { echo "ai_sandbox_host_git: cannot enter $repo" >&2; exit 128; }
+        else
+            cd / || exit 128
+        fi
+        if [ -n "${AI_SANDBOX_GIT_TIMEOUT:-}" ]; then exec timeout "$AI_SANDBOX_GIT_TIMEOUT" git "$@"; fi
+        exec git "$@"
+    )
+}
+
+# C-GIT, confined side: git run on a tree a sandbox can write, inside a
+# throwaway container of the sandbox image: no network, no entrypoint, the
+# host's uid, <root> (resolved) the only mount, read-only and at its own path,
+# no variable of the caller or of any .env reaches it, nothing is pulled.
+# <subdirectory> of <root> is the working directory. Standard input and output
+# are git's; so is the exit status, except 125 (no image, or docker could not
+# start the container) and 124 (AI_SANDBOX_GIT_TIMEOUT expired, and the named
+# container is removed so that nothing keeps running).
+# A caller that serves a fetch (--upload-pack) gets exit 128 from git when this
+# fails, not 125: it has to find out about a missing image by itself.
+ai_sandbox_confined_git() {   # <root> <subdirectory> <git args...>
+    local root sub=$2 variant tag="" name rc=0
+    root=$(readlink -m -- "$1" 2>/dev/null) && [ -n "$root" ] || { echo "ai_sandbox_confined_git: no such root: $1" >&2; return 125; }
+    shift 2
+    command -v docker >/dev/null 2>&1 || { echo "ai_sandbox_confined_git: docker is not available" >&2; return 125; }
+    for variant in base docker; do
+        if docker image inspect "$(ai_sandbox_image_name "$variant")" >/dev/null 2>&1; then
+            tag=$(ai_sandbox_image_name "$variant"); break
+        fi
+    done
+    [ -n "$tag" ] || { echo "ai_sandbox_confined_git: no sandbox image exists yet (create-ai-sandbox.sh builds it)" >&2; return 125; }
+    name="ai-sandbox-git-$$-$RANDOM"
+    set -- docker run --rm -i --pull never --network none --user "$(id -u):$(id -g)" \
+        --name "$name" -v "$root:$root:ro" -w "$root/$sub" --entrypoint git "$tag" "$@"
+    if [ -n "${AI_SANDBOX_GIT_TIMEOUT:-}" ]; then
+        timeout -k 5 "$AI_SANDBOX_GIT_TIMEOUT" "$@" || rc=$?
+        if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            return 124
+        fi
+        return "$rc"
+    fi
+    "$@"
+}
+
+# C-GIT, every fetch from a tree a sandbox can write. The host-owned <repository> is
+# an ordinary git client of an untrusted server: the remote program of the fetch is
+# ai_sandbox_confined_git (upload-pack, in the throwaway container), the URL is
+# <root>/<subdirectory>, and no tag is followed, so the fetch changes refs of
+# <repository> only at the destinations of its refspecs: each <ref pattern>
+# refs/<name>/* lands as <prefix>/<name>/*, pruned below it. <prefix> is a full ref
+# name below refs/, outside refs/heads/ and refs/tags/, and holds refs of this one
+# tree only. Exit: ai_sandbox_host_git's (3 for a sandbox-writable <repository>), 125
+# when no sandbox image exists or the container cannot start, 124 when
+# AI_SANDBOX_GIT_TIMEOUT expires, 2 for arguments that do not fit the contract.
+# git answers 128 when its remote program fails, whatever that program's own status
+# was, so the program records its status in a file this function reads afterwards.
+ai_sandbox_confined_fetch() {   # <repository> <prefix> <root> <subdirectory> <ref pattern>...
+    local repo=$1 prefix=$2 root=$3 sub=$4 pat name real tmpd stat prog rc=0 crc outer lib
+    local -a specs=()
+    shift 4
+    case $prefix in
+        refs/heads|refs/heads/*|refs/tags|refs/tags/*|refs/|"") echo "ai_sandbox_confined_fetch: bad prefix: $prefix" >&2; return 2 ;;
+        refs/*) ai_sandbox_host_git - check-ref-format "$prefix" 2>/dev/null || { echo "ai_sandbox_confined_fetch: bad prefix: $prefix" >&2; return 2; } ;;
+        *) echo "ai_sandbox_confined_fetch: bad prefix: $prefix" >&2; return 2 ;;
+    esac
+    case $sub in ""|/*|..|../*|*/..|*/../*) echo "ai_sandbox_confined_fetch: bad subdirectory: $sub" >&2; return 2 ;; esac
+    [ $# -gt 0 ] || { echo "ai_sandbox_confined_fetch: no ref pattern" >&2; return 2; }
+    for pat in "$@"; do
+        name=${pat#refs/}; name=${name%/\*}
+        case $pat in
+            refs/*/\*) ;;
+            *) echo "ai_sandbox_confined_fetch: bad ref pattern: $pat" >&2; return 2 ;;
+        esac
+        case $name in ""|*[!A-Za-z0-9._-]*|.*) echo "ai_sandbox_confined_fetch: bad ref pattern: $pat" >&2; return 2 ;; esac
+        specs+=("+refs/$name/*:$prefix/$name/*")
+    done
+    real=$(readlink -m -- "$root" 2>/dev/null) && [ -n "$real" ] || { echo "ai_sandbox_confined_fetch: no such root: $root" >&2; return 125; }
+    lib=$(readlink -f -- "${BASH_SOURCE[0]}")
+    tmpd=$(mktemp -d) || return 125
+    stat="$tmpd/status"
+    prog="AI_SANDBOX_FETCH_STATUS=$(printf '%q' "$stat")"
+    outer=${AI_SANDBOX_GIT_TIMEOUT:-}
+    if [ -n "$outer" ]; then
+        prog="$prog AI_SANDBOX_GIT_TIMEOUT=$(printf '%q' "$outer")"
+        # a backstop only: the container's own limit fires first and is the one reported
+        case $outer in *[!0-9]*) ;; *) outer=$((outer + 10)) ;; esac
+    fi
+    prog="$prog bash -c $(printf '%q' '. "$0"; ai_sandbox_confined_git "$@"; rc=$?; printf %s "$rc" > "$AI_SANDBOX_FETCH_STATUS"; exit "$rc"')"
+    prog="$prog $(printf '%q %q %q upload-pack' "$lib" "$real" "$sub")"
+    AI_SANDBOX_GIT_TIMEOUT=$outer ai_sandbox_host_git "$repo" fetch -q --no-tags --prune \
+        --upload-pack="$prog" "$real/$sub" "${specs[@]}" || rc=$?
+    if [ "$rc" -ne 0 ] && [ -s "$stat" ]; then
+        crc=$(cat "$stat")
+        case $crc in 124|125) rc=$crc ;; esac
+    fi
+    rm -rf -- "$tmpd"
+    return "$rc"
 }
 
 # True when the sandbox container NAME is running. Without docker on PATH
@@ -367,6 +628,7 @@ ai_sandbox_state_dirs() {
 .claude
 .claude/projects
 .codex
+status
 antigravity-data
 antigravity-ide-data
 claude-data

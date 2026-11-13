@@ -1,0 +1,22 @@
+id: host-git-start
+language: bash
+rule:
+  kind: command
+  has:
+    any:
+      - { kind: command_name, regex: "^[\"']?(\\S*/)?git[\"']?$" }
+      - { kind: word, regex: '^(\S*/)?git$' }
+      - { kind: string, regex: '^"(\S*/)?git"$' }
+      - { kind: raw_string, regex: "^'(\\S*/)?git'$" }
+  not:
+    any:
+      - inside:
+          stopBy: end
+          kind: function_definition
+          has: { field: name, regex: '^(ai_sandbox_host_git|ai_sandbox_confined_git)$' }
+      - has: { kind: command_name, regex: '^(hint|require)$' }
+      - all:
+          - has: { kind: command_name, regex: '^command$' }
+          - has: { kind: word, regex: '^-v$' }
+severity: error
+message: a command with the word git as its name or an argument

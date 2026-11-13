@@ -52,6 +52,8 @@ if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/d
         echo "Starting $AI_SANDBOX_NAME..."
         ai_sandbox_compose up -d || exit 1
     fi
+else
+    ai_sandbox_say_recreate "$AI_SANDBOX_DIR"
 fi
 
 if [ "$#" -eq 0 ]; then

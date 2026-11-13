@@ -111,8 +111,9 @@ usage() {
 Usage: create-ai-sandbox.sh [OPTIONS] [PROJECT_DIR]
 
 Creates or refreshes an isolated container sandbox for PROJECT_DIR, defaulting
-to the current directory. The project's git root is used, so running from a
-subdirectory is safe. Sandboxes are keyed on the project's full path, so two
+to the current directory. Running from a subdirectory is safe: the nearer of the
+directory's sandboxed ancestor and its ancestor holding a .git entry is used,
+else the directory itself. Sandboxes are keyed on the project's full path, so two
 projects whose directories share a name do not collide.
 
 Options:
@@ -218,10 +219,14 @@ Shared knowledge (optional): after 'ai-knowledge init <private-git-url>
 --integrator <dev-tools dir>' the global rules and roles come from that
 repository instead, rendered read-only into every sandbox as GEMINI.md,
 CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
-gets its own clone at ~/knowledge with main checked out; the 'propose-rule'
+gets its own clone at ~/knowledge with main checked out, made and kept current
+inside the sandbox from a read-only origin the host maintains; the 'propose-rule'
 skill commits one file on a proposal/<date>-<slug>-<hex> branch, and the host
-pushes it on the next sandbox start or 'ai-knowledge sync --all'. A
-'process-report' report travels the same way as a ref refs/reports/<name>.
+pushes it on the next sandbox start or 'ai-knowledge sync --all', reading the clone
+without running git in it. A 'process-report' report travels the same way as a ref
+refs/reports/<name>. A sandbox created before this setup (its SANDBOX_KNOWLEDGE
+stamp is not the one knowledge needs, 2) is refused at start until it is
+re-created: run this script for its project again.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
@@ -378,7 +383,7 @@ if [ -x "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" ]; then
     "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" || true
 fi
 
-PROJECT_ABS_DIR=$(ai_sandbox_project_root "${PROJECT_ARG:-.}") \
+PROJECT_ABS_DIR=$(ai_sandbox_create_root "${PROJECT_ARG:-.}") \
     || die "Cannot enter ${PROJECT_ARG:-.}"
 cd "$PROJECT_ABS_DIR"
 
@@ -472,6 +477,12 @@ while IFS= read -r _dir; do
     [ -n "$_dir" ] && mkdir -p "$SANDBOX_DIR/$_dir"
 done < <(ai_sandbox_state_dirs)
 unset _dir
+# The clone's directory and the bare origin it fetches from (C-KNOW), made here for the
+# same reason, before the sync step below, which may fail or find the lock busy.
+if ai_knowledge_configured; then
+    mkdir -p "$SANDBOX_DIR/knowledge"
+    ai_sandbox_make_origin "$SANDBOX_DIR" || warn "cannot make the knowledge origin in $SANDBOX_DIR"
+fi
 
 # ---------------------------------------------------------------------------
 # Locate the host tools/ directory
@@ -539,11 +550,9 @@ CPU_LIMIT=$(( (MEMORY_GB + 1) / 2 ))
 [ "$CPU_LIMIT" -ge 1 ] || CPU_LIMIT=1
 readonly CPU_LIMIT
 
-# The uid suffix keeps two host users sharing one Docker daemon from fighting
-# over a single tag, since the image bakes in USER_ID.
 if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
-IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"
-IMAGE_STAMP="$IMAGE_DIR/${IMAGE_VARIANT}-u${HOST_UID}.stamp"
+IMAGE_NAME=$(ai_sandbox_image_name "$IMAGE_VARIANT")
+IMAGE_STAMP="$IMAGE_DIR/${IMAGE_NAME#ai-sandbox:}.stamp"   # <variant>-u<uid>, as before
 
 if [ "$DISPLAY_MODE_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_MODE=$(sed -n 's/^SANDBOX_DISPLAY_MODE=//p' "$ENV_FILE" | tail -n 1)
@@ -1531,6 +1540,13 @@ if [ -n "${TZ:-}" ]; then
     fi
 fi
 
+# --- Knowledge clone -------------------------------------------------------
+# SANDBOX_KNOWLEDGE=2: the host keeps the read-only origin and the status file; this
+# brings ~/knowledge up to date from them. Never fails the start, and never holds it long.
+if [ "${SANDBOX_KNOWLEDGE:-0}" = "2" ] && command -v sandbox-knowledge-sync >/dev/null 2>&1; then
+    timeout 60 sandbox-knowledge-sync || echo "sandbox: sandbox-knowledge-sync did not finish; sandbox-doctor shows the host's last status" >&2
+fi
+
 # --- agy grants ------------------------------------------------------------
 # Merge the sandbox's agy grants into its own agy settings; never fail the
 # start. read_url(*) is web access (agent-roles design D21). command(<name>)
@@ -1639,13 +1655,20 @@ if [ -n "${DISPLAY:-}" ]; then
         status "X server" "NOT reachable -- $(printf '%s' "$_err" | head -1)"
     fi
 fi
-# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: unset means
-# the compose file predates the knowledge mounts and the host refuses to start
-# it until the migration script has recreated it.
+# What the host reports about this sandbox: line 1 of every file in the status
+# directory (the host writes it, read-only here), with its age.
+if [ -d "${SANDBOX_STATUS_DIR:-/nonexistent}" ]; then
+    for _f in "$SANDBOX_STATUS_DIR"/*; do
+        [ -f "$_f" ] || continue
+        _age=$(( ($(date +%s) - $(stat -c %Y "$_f")) / 60 ))
+        status "$(basename "$_f")" "$(head -1 "$_f" | tr -d '[:cntrl:]') [${_age} min ago]"
+    done
+fi
+# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: 2 is the
+# current setup, 1 predates the in-sandbox sync, unset predates the stamp; the
+# host refuses to start either until create-ai-sandbox.sh has recreated it.
 case "${SANDBOX_KNOWLEDGE-unset}" in
-    1)     if [ -f "$HOME/knowledge/.sync-status" ]; then
-               _age=$(( ($(date +%s) - $(stat -c %Y "$HOME/knowledge/.sync-status")) / 60 ))
-               status "knowledge" "$(cat "$HOME/knowledge/.sync-status") [${_age} min ago]"
+    2)     if [ -f "${SANDBOX_STATUS_DIR:-/nonexistent}/knowledge" ]; then
                # Each open proposal branch: on the remote already, or waiting for the next host sync.
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' 2>/dev/null); do
                    if [ "$(git -C "$HOME/knowledge" rev-parse -q --verify "refs/remotes/origin/$_b" 2>/dev/null)" = "$(git -C "$HOME/knowledge" rev-parse "$_b" 2>/dev/null)" ]; then
@@ -1655,7 +1678,7 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                    fi
                done
                # A report ref is dropped here once the host has pushed it, so any left is pending.
-               _role=$(cut -d' ' -f1 "$HOME/knowledge/.git/ai-knowledge-role" 2>/dev/null)
+               _role=$(sed -n 's/^role=//p' "$SANDBOX_STATUS_DIR/knowledge" 2>/dev/null | head -1)
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname)' 'refs/reports/*' 2>/dev/null); do
                    if [ "$_role" = integrator ]; then status "  $_b" "open: close it with a refs/reports-closed tombstone"
                    else status "  $_b" "pending: reaches the remote on the next host sync"; fi
@@ -1664,7 +1687,8 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
            fi ;;
     0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
-    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts; on the host run create-ai-sandbox.sh <project> (every sandbox at once: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
+    1)     status "knowledge" "stale: this sandbox predates the in-sandbox sync; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
+    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge stamp; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
 esac
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
 if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
@@ -1941,6 +1965,7 @@ cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
 MANAGED_EOF
 
 cp "$SCRIPT_DIR/ai-delegate" "$BUILD_DIR/ai-delegate"
+cp "$SCRIPT_DIR/sandbox-knowledge-sync" "$BUILD_DIR/sandbox-knowledge-sync"
 cp "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
 
 # --- Dockerfile ------------------------------------------------------------
@@ -2116,6 +2141,7 @@ COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
 COPY ai-delegate       /usr/local/bin/ai-delegate
+COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync
 COPY context-statusline /usr/local/bin/context-statusline
 COPY xdg-open         /usr/local/bin/xdg-open
 COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
@@ -2126,6 +2152,7 @@ RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
                 /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+                /usr/local/bin/sandbox-knowledge-sync \
                 /usr/local/bin/context-statusline \
     && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
@@ -2229,8 +2256,10 @@ ENVEOF
 fi
 chmod 600 "$ENV_FILE"
 
-HOST_GIT_NAME=$(git config user.name 2>/dev/null || true)
-HOST_GIT_EMAIL=$(git config user.email 2>/dev/null || true)
+# The host's own identity, from its global git configuration: no repository is
+# discovered, so a project cannot choose which identity its sandbox commits as.
+HOST_GIT_NAME=$(ai_sandbox_host_git - config user.name 2>/dev/null || true)
+HOST_GIT_EMAIL=$(ai_sandbox_host_git - config user.email 2>/dev/null || true)
 
 HOST_UID="$HOST_UID" \
 HOST_GID="$HOST_GID" \
@@ -2245,6 +2274,7 @@ DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
 MEM_GB="$MEMORY_GB" \
+KNOWLEDGE_STAMP="$AI_SANDBOX_KNOWLEDGE_STAMP" \
 python3 - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
@@ -2259,9 +2289,9 @@ managed = {
     # never written) and 0 is off.
     "SANDBOX_WITH_AUDIO": "2" if os.environ.get("WITH_AUDIO") == "yes" else "0",
     # The knowledge stamp: the start scripts refuse a sandbox whose stamp does
-    # not match the host's configuration, and the migration script uses the
-    # project dir to recreate it.
-    "SANDBOX_KNOWLEDGE": "1" if os.environ.get("KNOWLEDGE") == "yes" else "0",
+    # not match the host's configuration (value and rule: ai-sandbox-lib.sh),
+    # and its project dir is what the re-create command names.
+    "SANDBOX_KNOWLEDGE": os.environ.get("KNOWLEDGE_STAMP", "") if os.environ.get("KNOWLEDGE") == "yes" else "0",
     "SANDBOX_PROJECT_DIR": os.environ.get("PROJECT_ABS_DIR", ""),
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
@@ -2350,11 +2380,16 @@ cat <<COMPOSE_ENV
       - "PYTHONPATH=${CONTAINER_HOME}"
       - "SANDBOX_WITH_DOCKER=\${SANDBOX_WITH_DOCKER}"
       - "SANDBOX_KNOWLEDGE=\${SANDBOX_KNOWLEDGE}"
+      - "SANDBOX_STATUS_DIR=${AI_SANDBOX_STATUS_MOUNT}"
       # Subagents kept alive through a review/fix loop pause for minutes at a
       # time; the 5m default lets their cache expire in every pause. The env
       # var wins over settings.json, so the seeded copy cannot undo it.
       - "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h"
 COMPOSE_ENV
+# Where sandbox-knowledge-sync finds the read-only origin (the in-image command's override).
+if [ "$KNOWLEDGE" = "yes" ]; then
+    printf '      - "SANDBOX_KNOWLEDGE_ORIGIN=%s"\n' "$AI_SANDBOX_ORIGIN_MOUNT"
+fi
 printf '%s' "$DISPLAY_ENV_LINES"
 
 # The 'idea' wrapper is baked into the shared image, so it learns the path here
@@ -2402,6 +2437,12 @@ while IFS='|' read -r _key _path; do
 done < <(ai_sandbox_build_caches)
 unset _key _path
 
+# C-STATUS: what the host reports about this sandbox, read-only, whether or not
+# knowledge is configured (the host writes it; the doctor reads it).
+cat <<COMPOSE_STATUS
+      - "${SANDBOX_DIR}/status:${AI_SANDBOX_STATUS_MOUNT}:ro"
+COMPOSE_STATUS
+
 if [ "$KNOWLEDGE" = "yes" ]; then
 cat <<COMPOSE_KNOWLEDGE
       # Shared knowledge: the rendered main branch of the knowledge repository,
@@ -2413,9 +2454,13 @@ cat <<COMPOSE_KNOWLEDGE
       - "${SHARED_DIR}/knowledge/gemini/agents:${CONTAINER_HOME}/.gemini/agents:ro"
       - "${SHARED_DIR}/knowledge/codex/agents:${CONTAINER_HOME}/.codex/agents:ro"
       # This sandbox's own clone of the knowledge repository, read-write, on its
-      # proposals branch (main for the integrator). It holds no credentials, so
-      # it can commit but never fetch or push: the host does that on every start.
+      # proposals branch (main for the integrator). It holds no credentials: it
+      # fetches only from the read-only origin below (sandbox-knowledge-sync) and
+      # never pushes; the host reads it through a confined container and does all
+      # network git.
       - "${SANDBOX_DIR}/knowledge:${CONTAINER_HOME}/knowledge"
+      # The origin that clone fetches from: bare, written by the host only.
+      - "$(ai_sandbox_origin_dir "$SANDBOX_DIR"):${AI_SANDBOX_ORIGIN_MOUNT}:ro"
 COMPOSE_KNOWLEDGE
 else
 cat <<COMPOSE_BRAIN
@@ -2756,6 +2801,11 @@ mkdir -p "$AI_SANDBOX_ROOT/bin"
 while IFS= read -r helper; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
 done < <(ai_sandbox_helpers)
+# ai-delegate runs only inside the image; an earlier run installed a host copy.
+if [ -e "$AI_SANDBOX_ROOT/bin/ai-delegate" ] || [ -L "$AI_SANDBOX_ROOT/bin/ai-delegate" ]; then
+    rm -f "$AI_SANDBOX_ROOT/bin/ai-delegate"
+    log "removed $AI_SANDBOX_ROOT/bin/ai-delegate: it runs only inside the image"
+fi
 # ai-sandbox-lib.sh is sourced, not run.
 chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 # The knowledge seed travels with the helper, so 'ai-knowledge init' on a fresh

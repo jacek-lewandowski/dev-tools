@@ -8,15 +8,23 @@
 # proposal/<date>-<slug>-<hex> per proposal. The integrator sandbox's clone
 # carries every open proposal branch and closes them with an ours-merge.
 # A process report is a ref in refs/reports/<name>, outside main and refs/heads:
-# every clone pushes its own, only the integrator fetches and closes them.
+# every clone's is pushed once, only the integrator receives and closes them.
 #
-# No sandbox has git credentials, so every fetch, merge and push happens here,
-# before a sandbox starts. A sync never fails a start: whatever goes wrong is
-# written to <clone>/.sync-status, which sandbox-doctor shows.
+# No sandbox has git credentials, so every fetch, merge and push happens here.
+# The host never runs git in a sandbox's clone, which the sandbox can write: it
+# reads the clone's branches and reports through ai_sandbox_confined_fetch into
+# refs/sandbox/<id>/ of its own repository (~/.ai-sandbox/knowledge/main), decides
+# there against its own refs/remotes/origin/main, and publishes from there. The clone
+# itself is made and updated by sandbox-knowledge-sync, inside the sandbox, from the
+# read-only bare origin this script refreshes (<sandbox dir>/knowledge-origin.git),
+# and removes a ref only as the status file lists it. A sync never fails a start:
+# whatever goes wrong is written to <sandbox dir>/status/knowledge, which
+# sandbox-doctor shows. After a sync a running sandbox of the current stamp
+# is made to run its command (docker exec).
 #
 #   ai-knowledge init <remote-url> [--integrator DIR]  configure; seed an empty remote; render
-#   ai-knowledge sync [PROJECT_DIR]                     main + render, then this project's clone
-#   ai-knowledge sync --all                             main + render, then every sandbox's clone
+#   ai-knowledge sync [PROJECT_DIR]                     main + render, then publish this project's clone
+#   ai-knowledge sync --all                             main + render, then every current sandbox's clone
 #                                                       in parallel (AI_KNOWLEDGE_JOBS, default 4)
 #   ai-knowledge render                                 render main into the shared store
 #   ai-knowledge status [PROJECT_DIR]                   config and the last sync status
@@ -27,7 +35,7 @@
 set -Eeuo pipefail
 HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # set -e ends the script on any unguarded failure, inside functions too (-E);
-# without this trap it would do so silently and leave a stale .sync-status behind.
+# without this trap it would do so silently and leave a stale status file behind.
 trap 'printf "!! ai-knowledge: unexpected error at line %s\n" "$LINENO" >&2' ERR
 # An ssh-agent this process started dies with it, however it ends. The flag is
 # a plain variable: children of 'sync --all' inherit the exported agent
@@ -56,11 +64,16 @@ usage() {
 # here can answer a prompt, so git and ssh are told not to ask: an ssh key with
 # a passphrase and no agent then fails at once instead of hanging until the
 # timeout, and the failure is reported with the command to run by hand.
+#
+# The host's network git goes through C-GIT's host function, under the time
+# limit: 'git_net -C <repository> ...' for a host-owned repository, plain
+# 'git_net ...' for a command given a URL alone, which discovers no repository.
 git_net() {
+    local repo=-
+    if [ "${1:-}" = -C ]; then repo=$2; shift 2; fi
     GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" \
-        timeout "$GIT_TIMEOUT" git "$@"
+        AI_SANDBOX_GIT_TIMEOUT="$GIT_TIMEOUT" ai_sandbox_host_git "$repo" "$@"
 }
-
 # Every network failure is remembered with its manual equivalent; print_hints
 # shows them once, at the end, in the order they have to run.
 NET_REASON=""; HINT_FETCH=(); HINT_PUSH=()
@@ -175,6 +188,8 @@ seed_dir() {
 # never removed. Prints the new path; nothing when there was nothing to move.
 move_aside() {   # <path>
     [ -e "$1" ] || [ -L "$1" ] || return 0
+    # empty, it is where the checkout goes
+    if [ -d "$1" ] && [ ! -L "$1" ] && [ -z "$(ls -A -- "$1")" ]; then return 0; fi
     local to="$1.not-a-clone.$(date +%Y%m%d%H%M%S)"
     mv "$1" "$to" && printf '%s\n' "$to"
 }
@@ -196,6 +211,17 @@ cmd_init() {
         esac
     done
     [ -n "$remote" ] || die "usage: ai-knowledge init <remote-url> [--integrator DIR]"
+    # The record is the stamp's project when the sandbox exists and the
+    # directory itself otherwise; say which, because only the sandbox created
+    # for exactly that directory (create-ai-sandbox.sh DIR) then takes the role.
+    if [ -n "$integrator" ]; then
+        if ai_sandbox_stamped "$integrator"; then
+            log "integrator: $integrator (sandbox $(basename "$(ai_sandbox_dir_for "$integrator")"))"
+        else
+            log "integrator: $integrator; no sandbox exists yet for that directory."
+            log "  The sandbox create-ai-sandbox.sh creates for exactly that directory takes the role."
+        fi
+    fi
     command -v git   >/dev/null 2>&1 || die "git is required"
     command -v rsync >/dev/null 2>&1 || die "rsync is required"
 
@@ -228,13 +254,13 @@ cmd_init() {
     # 'git init' points HEAD at a master that never exists, so a clone of a
     # seeded repository can still have an unborn HEAD; that is not empty.
     local seeded=no
-    if git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
-        git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1 \
-            || git -C "$KNOWLEDGE_MAIN" checkout -q -B main origin/main
-    elif ! git -C "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    if ai_sandbox_host_git "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
+        ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1 \
+            || ai_sandbox_host_git "$KNOWLEDGE_MAIN" checkout -q -B main refs/remotes/origin/main
+    elif ! ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
         seed_main; seeded=yes
     fi
-    git -C "$KNOWLEDGE_MAIN" checkout -q main 2>/dev/null \
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" checkout -q main 2>/dev/null \
         || warn "$remote has no 'main' branch; ai-knowledge follows main only"
     record_integrator
     [ "$seeded" = yes ] || offer_gemini_drift
@@ -264,9 +290,9 @@ PYSTRIP
 # README.md on main. A second host asking to integrate is warned, not recorded,
 # because two clones committing on main can make it diverge.
 record_integrator() {
-    local readme existing mine tmp commit rc=0 out iclone
-    git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main || return 0
-    readme=$(git -C "$KNOWLEDGE_MAIN" show origin/main:README.md 2>/dev/null || true)
+    local readme existing mine tmp commit rc=0 out idir iid imain hmain
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main || return 0
+    readme=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" show refs/remotes/origin/main:README.md 2>/dev/null || true)
     existing=$(printf '%s\n' "$readme" | sed -n 's/^<!-- ai-knowledge integrator: \(.*\) -->$/\1/p' | head -1)
     if [ -z "$INTEGRATOR" ]; then
         [ -z "$existing" ] || log "integrator: $existing (recorded in README.md on main)"
@@ -276,20 +302,31 @@ record_integrator() {
     if [ -z "$existing" ]; then
         # A README commit on origin/main while the integrator's own clone has
         # main ahead would make that main diverge; its push has to come first.
-        iclone="$(ai_sandbox_dir_for "$INTEGRATOR")/knowledge"
-        if [ -d "$iclone/.git" ] && git -C "$iclone" merge-base --is-ancestor origin/main main 2>/dev/null \
-           && [ "$(git -C "$iclone" rev-parse main)" != "$(git -C "$iclone" rev-parse origin/main)" ]; then
-            warn "the integrator clone $iclone has commits on main that are not on origin/main yet; the record is skipped so that main does not diverge."
-            warn "Run: ai-knowledge sync --all (it pushes that main), then this init again."
-            return 0
+        # The clone is read through the confined fetch, so what is compared is
+        # the clone's main as it is now, not as it was at some earlier sync.
+        idir=$(ai_sandbox_dir_for "$INTEGRATOR"); iid=$(ai_sandbox_project_id "$INTEGRATOR")
+        if [ -d "$idir/knowledge/.git" ]; then
+            if ! AI_SANDBOX_GIT_TIMEOUT="$GIT_TIMEOUT" ai_sandbox_confined_fetch "$KNOWLEDGE_MAIN" "refs/sandbox/$iid" "$idir" knowledge 'refs/heads/*' >/dev/null 2>&1; then
+                warn "the integrator clone $idir/knowledge could not be read; the record is skipped so that main does not diverge."
+                warn "Run: ai-knowledge sync --all, then this init again."
+                return 0
+            fi
+            imain=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse -q --verify "refs/sandbox/$iid/heads/main^{commit}" 2>/dev/null || true)
+            hmain=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse -q --verify "refs/remotes/origin/main^{commit}" 2>/dev/null || true)
+            if [ -n "$imain" ] && [ "$imain" != "$hmain" ] \
+               && ai_sandbox_host_git "$KNOWLEDGE_MAIN" merge-base --is-ancestor "$hmain" "$imain" 2>/dev/null; then
+                warn "the integrator clone $idir/knowledge has commits on main that are not on origin/main yet; the record is skipped so that main does not diverge."
+                warn "Run: ai-knowledge sync --all (it pushes that main), then this init again."
+                return 0
+            fi
         fi
         tmp=$(mktemp)
         { printf '%s\n' "$readme"; printf '\n<!-- ai-knowledge integrator: %s -->\n' "$mine"; } > "$tmp"
-        commit=$(build_commit "$KNOWLEDGE_MAIN" origin/main README.md "$tmp" "chore: record the integrator ($mine)")
+        commit=$(build_commit "$KNOWLEDGE_MAIN" refs/remotes/origin/main README.md "$tmp" "chore: record the integrator ($mine)")
         rm -f "$tmp"
         out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$commit:refs/heads/main" 2>&1) || rc=$?
         if [ "$rc" -eq 0 ]; then
-            git -C "$KNOWLEDGE_MAIN" merge -q --ff-only origin/main >/dev/null 2>&1 || true
+            ai_sandbox_host_git "$KNOWLEDGE_MAIN" merge -q --ff-only refs/remotes/origin/main >/dev/null 2>&1 || true
             log "recorded the integrator in README.md on main: $mine"
         else
             net_failed "$rc" "$out"; warn "could not record the integrator on main: $NET_REASON (run 'ai-knowledge sync', then init again)"
@@ -308,10 +345,10 @@ record_integrator() {
 offer_gemini_drift() {
     local brain="$HOME/.gemini/GEMINI.md" local_rules remote_rules diff ans ts prop slug branch
     [ -f "$brain" ] && [ ! -L "$brain" ] || return 0
-    git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main || return 0
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main || return 0
     local_rules=$(mktemp); remote_rules=$(mktemp)
     strip_env_block "$brain" "$local_rules"
-    git -C "$KNOWLEDGE_MAIN" show origin/main:rules/global.md > "$remote_rules" 2>/dev/null || : > "$remote_rules"
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" show refs/remotes/origin/main:rules/global.md > "$remote_rules" 2>/dev/null || : > "$remote_rules"
     diff=$(diff -u --label rules/global.md --label "$(hostname):~/.gemini/GEMINI.md" "$remote_rules" "$local_rules" || true)
     rm -f "$local_rules" "$remote_rules"
     [ -n "$diff" ] || return 0
@@ -360,19 +397,19 @@ seed_main() {
         printf '# Global rules\n\nRules every agent follows in every project. Keep them generic.\n' \
             > "$KNOWLEDGE_MAIN/rules/global.md"
     fi
-    git -C "$KNOWLEDGE_MAIN" symbolic-ref HEAD refs/heads/main
-    git -C "$KNOWLEDGE_MAIN" add -A
-    git -C "$KNOWLEDGE_MAIN" config user.email >/dev/null 2>&1 \
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" symbolic-ref HEAD refs/heads/main
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" add -A
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" config user.email >/dev/null 2>&1 \
         || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
-    git -C "$KNOWLEDGE_MAIN" "${identity[@]+"${identity[@]}"}" commit -qm "chore: seed the knowledge repository"
+    ai_sandbox_host_git "$KNOWLEDGE_MAIN" "${identity[@]+"${identity[@]}"}" commit -qm "chore: seed the knowledge repository"
     local rc=0 out
-    out=$(git_net -C "$KNOWLEDGE_MAIN" push -q -u origin main 2>&1) || rc=$?
+    out=$(git_net -C "$KNOWLEDGE_MAIN" push -q -u origin refs/heads/main:refs/heads/main 2>&1) || rc=$?
     if [ "$rc" -eq 0 ]; then
         log "pushed main to $REMOTE"
     else
         net_failed "$rc" "$out"
         warn "seeded locally but could not push to $REMOTE"
-        HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push -u origin main)")
+        HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push -u origin refs/heads/main:refs/heads/main)")
     fi
 }
 
@@ -404,21 +441,24 @@ lock_drop() {
 # ---------------------------------------------------------------------------
 
 # The canonical checkout only ever fast-forwards; nobody edits it by hand.
+# One fetch brings the remote's heads and its reports, each into a namespace of its own
+# (C-KNOW): the reports reach the integrator's origin, nothing else reads them here.
+FETCH_SPECS=('+refs/heads/*:refs/remotes/origin/*' '+refs/reports/*:refs/origin-reports/*')
 MAIN_FETCHED=yes
 sync_main() {
     [ -d "$KNOWLEDGE_MAIN/.git" ] || { warn "no checkout at $KNOWLEDGE_MAIN; run: ai-knowledge init"; return 1; }
     local rc=0 out
-    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin 2>&1) || rc=$?
+    out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin "${FETCH_SPECS[@]}" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
         net_failed "$rc" "$out"
         warn "cannot fetch $REMOTE; rendering the last fetched main"
-        HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin)")
+        HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin "${FETCH_SPECS[@]}")")
         MAIN_FETCHED=no
     fi
     # A manual fetch lands here on the next sync, so the merge runs either way.
-    if git -C "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
-        git -C "$KNOWLEDGE_MAIN" merge -q --ff-only origin/main >/dev/null 2>&1 \
-            || warn "$KNOWLEDGE_MAIN is not a fast-forward of origin/main; it is never edited by hand, so repair it with: $(hint git -C "$KNOWLEDGE_MAIN" reset --hard origin/main)"
+    if ai_sandbox_host_git "$KNOWLEDGE_MAIN" show-ref -q --verify refs/remotes/origin/main; then
+        ai_sandbox_host_git "$KNOWLEDGE_MAIN" merge -q --ff-only refs/remotes/origin/main >/dev/null 2>&1 \
+            || warn "$KNOWLEDGE_MAIN is not a fast-forward of origin/main; it is never edited by hand, so repair it with: $(hint git -C "$KNOWLEDGE_MAIN" reset --hard refs/remotes/origin/main)"
     fi
 }
 
@@ -607,26 +647,100 @@ prepare_targets() {
     done
 }
 
+# C-KNOW: the sandbox's origin is rewritten from the host's own refs, never from the
+# clone: refs/heads/* from refs/remotes/origin/*, and for the integrator alone
+# refs/reports/* from refs/origin-reports/*. Whatever else an origin holds is removed.
+# The refs are named in full; origin/HEAD is a pointer and not a branch.
+refresh_origin() {   # <sandbox dir> <proposals|integrator>
+    local o ref
+    local -a specs=('+refs/remotes/origin/*:refs/heads/*' '^refs/remotes/origin/HEAD')
+    ai_sandbox_make_origin "$1" || return 1
+    o=$(ai_sandbox_origin_dir "$1")
+    [ "$2" != integrator ] || specs+=('+refs/origin-reports/*:refs/reports/*')
+    ai_sandbox_host_git "$o" fetch -q --prune --no-tags "$KNOWLEDGE_MAIN" "${specs[@]}" || return 1
+    while IFS= read -r ref; do
+        case $ref in
+            refs/heads/*) continue ;;
+            refs/reports/*) [ "$2" = integrator ] && continue ;;
+        esac
+        ai_sandbox_host_git "$o" update-ref -d "$ref" || return 1
+    done < <(ai_sandbox_host_git "$o" for-each-ref --format='%(refname)')
+}
+
+# The status says once that the origin could not be refreshed, however many refreshes of a sync failed.
+refresh_origin_noted() {   # <sandbox dir> <proposals|integrator>
+    local note="the knowledge origin could not be refreshed"
+    refresh_origin "$@" && return 0
+    case $STATUS_NOTE in *"$note"*) ;; *) STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }$note" ;; esac
+}
+
 # ---------------------------------------------------------------------------
 # per-sandbox clone
 # ---------------------------------------------------------------------------
 
 CLONE=""
 MAIN_PUSHED="no"   # set when the integrator sync advanced origin/main
-STATUS_NOTE=""     # appended to this clone's status line, e.g. that a non-git knowledge dir was moved aside
+STATUS_NOTE=""     # appended to this clone's status line
+STATUS_FILE=""; STATUS_ROLE=""; STATUS_ID=""
+STATUS_KEYS=()     # the key=value lines after the role and project id (closed-proposal=...)
+STATUS_WORD=""; STATUS_TEXT=""   # the line set_status wrote last, for status_amend
+# C-STATUS: the outcome of a sync is the file <sandbox dir>/status/knowledge, which
+# the sandbox sees read-only at /run/ai-sandbox/status. Nothing is written below the
+# clone. Line 1 is "<time> <ok|warn|refused|offline> <message>", then the keys below;
+# the file is replaced whole, so a reader never sees half of it.
+# reads-outside: the sandbox-doctor generated by create-ai-sandbox.sh, in the container,
+# reads line 1 and role=<proposals|integrator> of this file.
+status_context() {   # <sandbox dir> <project id> <proposals|integrator>
+    CLONE="$1/knowledge"; STATUS_NOTE=""; STATUS_KEYS=()
+    STATUS_FILE="$1/status/knowledge"; STATUS_ID=$2; STATUS_ROLE=$3
+}
 set_status() {
-    printf '%s %s%s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$*" "${STATUS_NOTE:+; $STATUS_NOTE}" > "$CLONE/.sync-status"
-    log "$*${STATUS_NOTE:+; $STATUS_NOTE}"
+    local word=warn text="$*" tmp
+    case $text in
+        ok:*)      word=ok;      text=${text#ok: } ;;
+        refused:*) word=refused; text=${text#refused: } ;;
+        offline:*) word=offline; text=${text#offline: } ;;
+    esac
+    STATUS_WORD=$word; STATUS_TEXT=$text
+    text="$text${STATUS_NOTE:+; $STATUS_NOTE}"
+    mkdir -p "$(dirname "$STATUS_FILE")"
+    tmp="$STATUS_FILE.$$"
+    {
+        printf '%s %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$word" "$(printf '%s' "$text" | tr -d '[:cntrl:]')"
+        printf 'role=%s\nproject-id=%s\n' "$STATUS_ROLE" "$STATUS_ID"
+        [ ${#STATUS_KEYS[@]} -eq 0 ] || printf '%s\n' "${STATUS_KEYS[@]}" | tr -d '\000-\011\013-\037\177'
+    } > "$tmp" && mv -f "$tmp" "$STATUS_FILE"
+    log "$text"
+}
+# The same status with one more note; an ok line becomes a warning.
+status_amend() {   # <note>
+    local word=$STATUS_WORD text=$STATUS_TEXT
+    STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }$1"
+    case $word in
+        ok|warn) set_status "$text" ;;
+        *)       set_status "$word: $text" ;;
+    esac
+}
+# Line 1 of a sandbox's status file for a person to read: control characters removed,
+# "never" when there is none.
+status_line() {   # <sandbox dir>
+    local line=""
+    [ -f "$1/status/knowledge" ] && line=$(head -1 "$1/status/knowledge" | tr -d '[:cntrl:]')
+    printf '%s' "${line:-never}"
 }
 
-# Closed per the contract: the tip is an ancestor of origin/main and not on
-# origin/main's first-parent chain. An ours-merge puts the tip on the second
-# parent; a fresh or emptied branch sits on the chain itself and is "empty":
-# reported, neither deleted nor pushed. 0 closed, 1 empty, 2 open (or no origin/main).
-tip_state() {   # <tip>
-    git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main || return 2
-    git -C "$CLONE" merge-base --is-ancestor "$1" origin/main 2>/dev/null || return 2
-    if grep -qxF "$1" <<<"$(git -C "$CLONE" rev-list --first-parent origin/main)"; then return 1; fi
+# Closed per the contract: the tip is an ancestor of the host's own refs/remotes/origin/main
+# and not on its first-parent chain. An ours-merge puts the tip on the second parent; a
+# fresh or emptied branch sits on the chain itself and is "empty": reported, neither
+# deleted nor pushed. 0 closed, 1 empty, 2 open (or no origin/main). The tips come from the
+# mirror of a sandbox's clone, which lies in the host-owned repository; the main they are
+# compared with is the one the host fetched itself.
+HOST_MAIN=refs/remotes/origin/main
+hostgit() { ai_sandbox_host_git "$KNOWLEDGE_MAIN" "$@"; }
+tip_state() {   # <commit>
+    hostgit show-ref -q --verify "$HOST_MAIN" || return 2
+    hostgit merge-base --is-ancestor "$1" "$HOST_MAIN" 2>/dev/null || return 2
+    if grep -qxF "$1" <<<"$(hostgit rev-list --first-parent "$HOST_MAIN")"; then return 1; fi
     return 0
 }
 
@@ -636,133 +750,86 @@ PROPOSAL_RE='^proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
 # skill. A name is matched after the refs/reports/ prefix.
 REPORT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
 
-# The hook is advisory (an agent can bypass it); the host's scope check below
-# is the enforcement. It fails at commit time, inside the sandbox, where the
-# agent sees the message, instead of at the next sync on the host.
-install_hook() {   # <clone>
-    local hook="$1/.git/hooks/pre-commit"
-    mkdir -p "$1/.git/hooks"
-    cat > "$hook.new" <<'HOOK'
-#!/usr/bin/env bash
-# Installed by ai-knowledge on the host; refreshed on every sync. Advisory:
-# the host refuses to push what this hook would have refused to commit.
-role=$(cut -d' ' -f1 "$(git rev-parse --git-dir)/ai-knowledge-role" 2>/dev/null)
-role=${role:-proposals}
-branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || true)
-case "$branch" in
-    main)
-        if [ "$role" = proposals ]; then
-            echo "ai-knowledge: this clone proposes, it does not edit main. Use the propose-rule skill: it commits on a proposal/* branch." >&2
-            exit 1
-        fi ;;
-    proposal/*)
-        bad=$(git diff --cached --name-only | grep -v '^proposals/' || true)
-        if [ -n "$bad" ]; then
-            echo "ai-knowledge: a proposal branch may change only proposals/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
-            exit 1
-        fi ;;
-    report/*)
-        bad=$(git diff --cached --name-only | grep -v '^reports/' || true)
-        if [ -n "$bad" ]; then
-            echo "ai-knowledge: a report branch may change only reports/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
-            exit 1
-        fi ;;
-esac
-exit 0
-HOOK
-    chmod 0755 "$hook.new"; mv -f "$hook.new" "$hook"
+# After a sync, a running container whose stamp is current runs the in-sandbox command
+# now, so the rules and the closed branches reach the clone without a restart; a
+# container that is not running runs it at its start. It runs as the sandbox's own user
+# (the image's USER; no -u, so no root), without a terminal and with standard input
+# closed, under the time limit; what it prints is shown with control characters removed.
+# Failure is a warning on the status line, never the end of the sync.
+run_in_sandbox() {   # <sandbox dir>
+    local name out rc=0
+    name=$(basename "$1")
+    [ "$(ai_sandbox_knowledge_state "$1")" = current ] || return 0
+    ai_sandbox_container_running "$name" || return 0
+    out=$(timeout -k 5 "$GIT_TIMEOUT" docker exec "$name" /usr/local/bin/sandbox-knowledge-sync </dev/null 2>&1) || rc=$?
+    [ -z "$out" ] || printf '%s\n' "$out" | tr -d '\000-\011\013-\037\177' | sed 's/^/  /'
+    case $rc in
+        0) ;;
+        124|137) status_amend "the sandbox's own sync failed (timed out after ${GIT_TIMEOUT}s)" ;;
+        *)       status_amend "the sandbox's own sync failed (exit $rc)" ;;
+    esac
 }
 
-# Local main follows origin/main fast-forward only, whether or not it is
-# checked out (git refuses to fetch into the checked-out branch, so that case
-# merges). Returns 1 when main has local commits.
-ff_main() {   # <clone> <current branch> <role>
-    git -C "$1" show-ref -q --verify refs/remotes/origin/main || return 0
-    # The integrator's main is allowed ahead (it has commits to push); a
-    # proposing clone's is not. --ff-only alone would report "already up to
-    # date" for a main that is ahead, which is exactly the case to catch.
-    if [ "$3" = integrator ] && git -C "$1" merge-base --is-ancestor origin/main main 2>/dev/null; then
-        return 0
-    fi
-    git -C "$1" merge-base --is-ancestor main origin/main 2>/dev/null || return 1
-    if [ "$2" = main ]; then
-        git -C "$1" merge -q --ff-only origin/main >/dev/null 2>&1
-    else
-        git -C "$1" update-ref refs/heads/main origin/main
-    fi
-}
-
-# <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the
-# caller: every outcome is one line in .sync-status.
+# <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the caller: every
+# outcome is line 1 of the sandbox's status/knowledge. The host reads the clone only
+# through ai_sandbox_confined_fetch, which mirrors its branches, reports and tombstones
+# into refs/sandbox/<id>/ of the host-owned repository; everything else (scope, ancestry,
+# closing, pushing) is decided there against the host's own refs/remotes/origin/main,
+# and the clone is changed only by the sandbox's own command, from the status keys
+# written here (closed-proposal=).
 #
-# Order, for both roles: fetch (prune) -> fast-forward main -> classify every
-# local proposal/* branch as malformed, closed (tip_state), empty, or open ->
-# push the open ones -> delete the closed ones. The integrator also pushes main
-# and deletes closed branches on the remote, under a lease on the tip it
-# fetched, so an amendment pushed meanwhile survives.
+# Order, for both roles: mirror -> classify every proposal branch as malformed, closed
+# (tip_state), empty, or open -> push the open ones -> list the closed ones. The
+# integrator also pushes its main when it descends from the host's own and deletes
+# closed branches on the remote, under a lease on the tip it saw, so an amendment pushed
+# meanwhile survives.
 sync_clone() {
-    local sb=$1 id=$2 role=$3 out rc net=yes current b tip remote_tip aside st
+    local sb=$1 id=$2 role=$3 out rc net=yes b ref tip remote_tip st mirror mmain hmain listed=" "
     local pushed=0 closed=0 empty=0 pending=0 main_state=current refused="" conflicts="" pushfail=""
     local rpushed=0 rname rref rtip
-    CLONE="$sb/knowledge"; STATUS_NOTE=""
+    status_context "$sb" "$id" "$role"
+    mirror="refs/sandbox/$id"
+    # First, so that every outcome below leaves the origin as current as the host's refs.
+    refresh_origin_noted "$sb" "$role"
+    [ "$MAIN_FETCHED" = yes ] || net=no
 
     if [ ! -d "$CLONE/.git" ]; then
-        aside=$(move_aside "$CLONE")
-        if [ -n "$aside" ]; then
-            warn "$CLONE was not a git checkout; moved it to $aside"
-            STATUS_NOTE="the previous $(basename "$CLONE") was not a clone and was moved to $(basename "$aside")"
+        if [ -n "$(ls -A -- "$CLONE" 2>/dev/null)" ]; then
+            set_status "~/knowledge is not a clone and the sandbox leaves it alone; move it aside inside the sandbox and restart it"
+        else
+            set_status "ok: no clone yet; the sandbox makes ~/knowledge from its origin when it starts"
         fi
-        rc=0; out=$(git_net clone -q "$REMOTE" "$CLONE" 2>&1) || rc=$?
-        if [ "$rc" -ne 0 ]; then
-            net_failed "$rc" "$out"
-            warn "cannot clone $REMOTE into $CLONE: $NET_REASON"
-            HINT_FETCH+=("$(hint git clone "$REMOTE" "$CLONE")")
-            return 0
-        fi
-        log "cloned $REMOTE -> $CLONE"
-    fi
-    # A bare remote made with plain 'git init' points HEAD at a master that
-    # never exists, so the clone has an unborn HEAD; main is what it follows.
-    if ! git -C "$CLONE" rev-parse -q --verify HEAD >/dev/null 2>&1 \
-       && git -C "$CLONE" show-ref -q --verify refs/remotes/origin/main; then
-        git -C "$CLONE" checkout -q -B main origin/main || warn "cannot put $CLONE on main"
-    fi
-    grep -qx '.sync-status' "$CLONE/.git/info/exclude" 2>/dev/null \
-        || printf '.sync-status\n' >> "$CLONE/.git/info/exclude"
-    printf '%s %s\n' "$role" "$id" > "$CLONE/.git/ai-knowledge-role"
-    install_hook "$CLONE"
-
-    if [ -n "$(git -C "$CLONE" status --porcelain)" ]; then
-        set_status "skipped: uncommitted changes in ~/knowledge; commit them and sync again"
+        run_in_sandbox "$sb"
         return 0
     fi
-    current=$(git -C "$CLONE" branch --show-current)
-    case $current in
-        proposals/*)
-            set_status "skipped: ~/knowledge is on the old-style branch '$current'; run ai-sandbox-migrate-knowledge on the host"
-            return 0 ;;
-    esac
 
-    rc=0; out=$(git_net -C "$CLONE" fetch -q --prune origin 2>&1) || rc=$?
+    rc=0; out=$(AI_SANDBOX_GIT_TIMEOUT="$GIT_TIMEOUT" ai_sandbox_confined_fetch "$KNOWLEDGE_MAIN" "$mirror" "$sb" knowledge \
+        'refs/heads/*' 'refs/reports/*' 'refs/reports-closed/*' 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
-        net_failed "$rc" "$out"
-        HINT_FETCH+=("$(hint git -C "$CLONE" fetch --prune origin)")
-        net=no
+        case $rc in
+            124) set_status "the sandbox's clone could not be read: timed out after ${GIT_TIMEOUT}s; nothing was pushed" ;;
+            125) set_status "the sandbox's clone could not be read: $(printf '%s' "$out" | grep -m1 -v '^\s*$' || echo 'no container could run'); nothing was pushed" ;;
+            *)   set_status "the sandbox's clone could not be read (exit $rc): $(printf '%s' "$out" | grep -m1 -v '^\s*$' || true); nothing was pushed" ;;
+        esac
+        run_in_sandbox "$sb"
+        return 0
     fi
-    # The integrator carries every open proposal as a local branch; a branch
-    # that is not a fast-forward is left alone by git and reported below.
-    if [ "$role" = integrator ]; then
-        if [ "$net" = yes ]; then
-            git_net -C "$CLONE" fetch -q origin 'refs/heads/proposal/*:refs/heads/proposal/*' >/dev/null 2>&1 || true
-        else
-            HINT_FETCH+=("$(hint git -C "$CLONE" fetch origin 'refs/heads/proposal/*:refs/heads/proposal/*')")
+
+    # Where the clone's main stands against the host's own: ahead or equal is the
+    # integrator's to push; behind is the sandbox's command to fast-forward, never
+    # pushed (the remote would reject it); anything else has local commits the remote lacks.
+    mmain=$(hostgit rev-parse -q --verify "$mirror/heads/main^{commit}" 2>/dev/null || true)
+    hmain=$(hostgit rev-parse -q --verify "$HOST_MAIN^{commit}" 2>/dev/null || true)
+    if [ -n "$mmain" ] && [ -n "$hmain" ]; then
+        if [ "$role" = integrator ] && hostgit merge-base --is-ancestor "$hmain" "$mmain" 2>/dev/null; then :
+        elif hostgit merge-base --is-ancestor "$mmain" "$hmain" 2>/dev/null; then main_state=behind
+        else main_state=diverged
         fi
     fi
-    ff_main "$CLONE" "$current" "$role" || main_state=diverged
     # An ours-merge keeps proposal files off main; one that got there was
     # merged for real, and the doc says how to re-open it.
-    if [ "$role" = integrator ]; then
-        out=$(git -C "$CLONE" ls-tree -r --name-only main -- proposals/ 2>/dev/null \
+    if [ "$role" = integrator ] && [ -n "$mmain" ]; then
+        out=$(hostgit ls-tree -r --name-only "$mmain" -- proposals/ 2>/dev/null \
             | { grep '\.md$' || true; } | { grep -v '/README\.md$' || true; })
         if [ -n "$out" ]; then
             warn "main carries proposal files ($(printf '%s' "$out" | tr '\n' ' ')): a proposal branch was merged for real, not with -s ours; every sync reports it as empty and keeps it"
@@ -771,23 +838,24 @@ sync_clone() {
         fi
     fi
 
-    while IFS= read -r b; do
-        [ -n "$b" ] || continue
-        tip=$(git -C "$CLONE" rev-parse "$b")
+    while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        b=${ref#"$mirror/heads/"}
         if ! [[ $b =~ $PROPOSAL_RE ]]; then
             refused="$refused $b (name must be proposal/<date>-<slug>-<4 hex>; rename it: git -C ~/knowledge branch -m $b proposal/<date>-<slug>-<4 hex>)"; continue
         fi
+        tip=$(hostgit rev-parse -q --verify "$ref^{commit}" 2>/dev/null || true)
+        if [ -z "$tip" ]; then refused="$refused $b (not a commit)"; continue; fi
         tip_state "$tip" && st=0 || st=$?
         case $st in
-            0)  if [ "$current" = "$b" ]; then git -C "$CLONE" checkout -q main; current=main; fi
-                git -C "$CLONE" branch -q -D "$b"
+            0)  STATUS_KEYS+=("closed-proposal=$b $tip"); listed="$listed$b "
                 closed=$((closed + 1)); continue ;;
             1)  empty=$((empty + 1)); continue ;;
         esac
         # Fail closed: no merge base (an orphan branch) is refused like a path
         # outside proposals/; without rename detection a file moved out of
         # rules/ shows up as the deleted path it is.
-        rc=0; out=$(git -C "$CLONE" diff --name-only --no-renames "origin/main...$b" 2>/dev/null) || rc=$?
+        rc=0; out=$(hostgit diff --name-only --no-renames "$HOST_MAIN...$tip" 2>/dev/null) || rc=$?
         if [ "$rc" -ne 0 ]; then
             refused="$refused $b (no common history with main)"; continue
         fi
@@ -795,31 +863,30 @@ sync_clone() {
         if [ -n "$out" ]; then
             refused="$refused $b changes $(printf '%s' "$out" | tr '\n' ' ')"; continue
         fi
-        remote_tip=$(git -C "$CLONE" rev-parse -q --verify "refs/remotes/origin/$b" 2>/dev/null || true)
+        remote_tip=$(hostgit rev-parse -q --verify "refs/remotes/origin/$b^{commit}" 2>/dev/null || true)
         [ "$remote_tip" != "$tip" ] || continue
-        if [ -n "$remote_tip" ] && ! git -C "$CLONE" merge-base --is-ancestor "$remote_tip" "$b"; then
+        if [ -n "$remote_tip" ] && ! hostgit merge-base --is-ancestor "$remote_tip" "$tip"; then
             conflicts="$conflicts $b"; continue
         fi
         if [ "$net" = no ]; then
-            HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$b:refs/heads/$b")"); pending=$((pending + 1)); continue
+            HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$ref:refs/heads/$b")"); pending=$((pending + 1)); continue
         fi
-        rc=0; out=$(git_net -C "$CLONE" push -q origin "$b:refs/heads/$b" 2>&1) || rc=$?
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$tip:refs/heads/$b" 2>&1) || rc=$?
         if [ "$rc" -ne 0 ]; then
-            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$b:refs/heads/$b")")
+            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$ref:refs/heads/$b")")
             pushfail="$pushfail $b"; continue
         fi
         pushed=$((pushed + 1))
-    done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
+    done < <(hostgit for-each-ref --format='%(refname)' "$mirror/heads/proposal/")
 
     local main_note=""
-    if [ "$role" = integrator ] && [ "$main_state" = current ] \
-       && [ "$(git -C "$CLONE" rev-parse main)" != "$(git -C "$CLONE" rev-parse -q --verify origin/main 2>/dev/null || true)" ]; then
+    if [ "$role" = integrator ] && [ "$main_state" = current ] && [ -n "$mmain" ] && [ "$mmain" != "$hmain" ]; then
         if [ "$net" = no ]; then
-            HINT_PUSH+=("$(hint git -C "$CLONE" push origin main)"); main_note="main pending"
+            HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$mirror/heads/main:refs/heads/main")"); main_note="main pending"
         else
-            rc=0; out=$(git_net -C "$CLONE" push -q origin main 2>&1) || rc=$?
+            rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$mmain:refs/heads/main" 2>&1) || rc=$?
             if [ "$rc" -eq 0 ]; then MAIN_PUSHED="yes"; main_note="main pushed"
-            else net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$CLONE" push origin main)"); main_note="main push failed"
+            else net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$mirror/heads/main:refs/heads/main")"); main_note="main push failed"
             fi
         fi
     fi
@@ -829,46 +896,55 @@ sync_clone() {
     # an amendment: the proposal is open again, nothing is lost.
     if [ "$role" = integrator ] && [ "$net" = yes ] && [ "$main_note" != "main push failed" ] && [ "$main_note" != "main pending" ]; then
         # Branches the integrator closed in this round became ancestors of
-        # origin/main only now that main is pushed; drop the local copies too.
-        while IFS= read -r b; do
-            [ -n "$b" ] || continue
-            tip_state "$(git -C "$CLONE" rev-parse "$b")" && st=0 || st=$?
-            [ "$st" -eq 0 ] || continue
-            if [ "$current" = "$b" ]; then git -C "$CLONE" checkout -q main; current=main; fi
-            git -C "$CLONE" branch -q -D "$b"; closed=$((closed + 1))
-        done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
-        while IFS= read -r b; do
-            [ -n "$b" ] || continue
-            tip=$(git -C "$CLONE" rev-parse "refs/remotes/$b")
+        # origin/main only now that main is pushed; list those too.
+        while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            b=${ref#"$mirror/heads/"}
+            [[ $b =~ $PROPOSAL_RE ]] || continue
+            case $listed in *" $b "*) continue ;; esac
+            tip=$(hostgit rev-parse -q --verify "$ref^{commit}" 2>/dev/null || true)
+            [ -n "$tip" ] || continue
             tip_state "$tip" && st=0 || st=$?
             [ "$st" -eq 0 ] || continue
-            b=${b#origin/}
-            out=$(git_net -C "$CLONE" push -q "--force-with-lease=refs/heads/$b:$tip" origin ":refs/heads/$b" 2>&1) \
+            STATUS_KEYS+=("closed-proposal=$b $tip"); listed="$listed$b "; closed=$((closed + 1))
+        done < <(hostgit for-each-ref --format='%(refname)' "$mirror/heads/proposal/")
+        while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            tip=$(hostgit rev-parse "$ref")
+            tip_state "$tip" && st=0 || st=$?
+            [ "$st" -eq 0 ] || continue
+            b=${ref#refs/remotes/origin/}
+            out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/heads/$b:$tip" origin ":refs/heads/$b" 2>&1) \
                 || case $out in *"stale info"*|*"remote ref does not exist"*) ;; *) warn "cannot delete $b on the remote: $out" ;; esac
-        done < <(git -C "$CLONE" for-each-ref --format='%(refname:short)' 'refs/remotes/origin/proposal/*')
+        done < <(hostgit for-each-ref --format='%(refname)' 'refs/remotes/origin/proposal/*')
     fi
 
-    # Reports live in refs/reports/<name>, not in refs/heads, so nothing above
-    # touches them. Every clone pushes its own; only the integrator fetches them
-    # and acts on tombstones (refs/reports-closed/<name>, made by the integrator).
-    # A writer clone drops a ref once its push succeeded; the integrator keeps it
-    # until it is closed.
-    # The integrator holds refs it fetched: one ls-remote tells which already
-    # match the remote, so a sync with nothing new pushes and counts nothing.
-    local rremote=""
-    if [ "$role" = integrator ] && [ "$net" = yes ]; then
-        rremote=$(git_net -C "$CLONE" ls-remote origin 'refs/reports/*' 2>/dev/null) || rremote=""
-    fi
+    # Reports live in refs/reports/<name>, not in refs/heads, so nothing above touches them. The mirror
+    # holds the clone's reports and, for the integrator, its tombstones (refs/reports-closed/<name>).
+    # A writer's report is pushed once per commit: the host records the push in
+    # refs/pushed-reports/<id>/<name> and lists the report as pushed-report= while the clone holds that
+    # commit; the clone's command drops it, and the record goes once the mirror no longer holds the
+    # report. The integrator keeps its reports until closed: it pushes one the host's own copy of the
+    # remote's reports lacks, and deletes a tombstone's report on the remote under a lease on the
+    # tombstone's value. closed-report= is written only for a tombstone whose report a fetch of the
+    # remote's reports, made after those deletions, no longer finds (N1): a sync that did not reach
+    # the remote lists nothing, and the clone keeps both refs.
+    local rrec rn
     while IFS= read -r rref; do
         [ -n "$rref" ] || continue
-        rname=${rref#refs/reports/}
-        if [ "$role" = integrator ] && git -C "$CLONE" show-ref -q --verify "refs/reports-closed/$rname"; then continue; fi
+        rn=${rref#"refs/pushed-reports/$id/"}
+        hostgit show-ref -q --verify "$mirror/reports/$rn" || hostgit update-ref -d "$rref" || true
+    done < <(hostgit for-each-ref --format='%(refname)' "refs/pushed-reports/$id/")
+    while IFS= read -r rref; do
+        [ -n "$rref" ] || continue
+        rname=${rref#"$mirror/reports/"}
+        if [ "$role" = integrator ] && hostgit show-ref -q --verify "$mirror/reports-closed/$rname"; then continue; fi
         if ! [[ $rname =~ $REPORT_RE ]]; then
-            refused="$refused $rref (name must be refs/reports/<date>-<project>-<4 hex>)"; continue
+            refused="$refused refs/reports/$rname (name must be refs/reports/<date>-<project>-<4 hex>)"; continue
         fi
-        rtip=$(git -C "$CLONE" rev-parse -q --verify "$rref^{commit}" 2>/dev/null || true)
+        rtip=$(hostgit rev-parse -q --verify "$rref^{commit}" 2>/dev/null || true)
         if [ -z "$rtip" ]; then refused="$refused $rname (not a commit)"; continue; fi
-        rc=0; out=$(git -C "$CLONE" diff --name-only --no-renames "origin/main...$rtip" 2>/dev/null) || rc=$?
+        rc=0; out=$(hostgit diff --name-only --no-renames "$HOST_MAIN...$rtip" 2>/dev/null) || rc=$?
         if [ "$rc" -ne 0 ]; then
             refused="$refused $rname (no common history with main)"; continue
         fi
@@ -876,47 +952,66 @@ sync_clone() {
         if [ -n "$out" ]; then
             refused="$refused $rname changes $(printf '%s' "$out" | tr '\n' ' ')"; continue
         fi
-        if [ "$role" = integrator ] && grep -qxF "$rtip	$rref" <<<"$rremote"; then continue; fi
-        if [ "$net" = no ]; then
-            HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")"); pending=$((pending + 1)); continue
+        rrec="refs/pushed-reports/$id/$rname"
+        if [ "$role" = integrator ]; then
+            [ "$(hostgit rev-parse -q --verify "refs/origin-reports/$rname" 2>/dev/null || true)" != "$rtip" ] || continue
+        elif [ "$(hostgit rev-parse -q --verify "$rrec" 2>/dev/null || true)" = "$rtip" ]; then
+            STATUS_KEYS+=("pushed-report=$rname"); continue
         fi
-        rc=0; out=$(git_net -C "$CLONE" push -q origin "$rref:$rref" 2>&1) || rc=$?
+        if [ "$net" = no ]; then
+            HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$rref:refs/reports/$rname")"); pending=$((pending + 1)); continue
+        fi
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$rtip:refs/reports/$rname" 2>&1) || rc=$?
         if [ "$rc" -ne 0 ]; then
-            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$CLONE" push origin "$rref:$rref")")
+            net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$rref:refs/reports/$rname")")
             pushfail="$pushfail $rname"; continue
         fi
         rpushed=$((rpushed + 1))
-        [ "$role" = integrator ] || git -C "$CLONE" update-ref -d "$rref"
-    done < <(git -C "$CLONE" for-each-ref --format='%(refname)' 'refs/reports/*')
+        if [ "$role" != integrator ]; then
+            hostgit update-ref "$rrec" "$rtip" || true
+            STATUS_KEYS+=("pushed-report=$rname")
+        fi
+    done < <(hostgit for-each-ref --format='%(refname)' "$mirror/reports/")
 
     if [ "$role" = integrator ] && [ "$net" = yes ]; then
-        # The lease is the tombstone's own value, the tip the integrator saw: a
-        # remote ref that moved since is kept, locally and remotely, and reported.
+        local -a rtombs=()
+        local rfail=" " rstale=" "
         while IFS= read -r rref; do
             [ -n "$rref" ] || continue
-            rname=${rref#refs/reports-closed/}
+            rname=${rref#"$mirror/reports-closed/"}
             [[ $rname =~ $REPORT_RE ]] || continue
-            rtip=$(git -C "$CLONE" rev-parse "$rref")
-            rc=0; out=$(git_net -C "$CLONE" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
-            if [ "$rc" -ne 0 ]; then
-                case $out in
-                    *"remote ref does not exist"*) ;;
-                    *"stale info"*)
-                        # git answers "stale info" for a ref the remote no longer has
-                        # too; only a ref still there under another tip has moved.
-                        if git_net -C "$CLONE" ls-remote origin "refs/reports/$rname" 2>/dev/null | grep -q .; then
-                            STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched"; continue
-                        fi ;;
-                    *) net_failed "$rc" "$out"; warn "cannot delete report $rname on the remote: $out"; continue ;;
-                esac
-            fi
-            git -C "$CLONE" update-ref -d "refs/reports/$rname"
-            git -C "$CLONE" update-ref -d "$rref"
-        done < <(git -C "$CLONE" for-each-ref --format='%(refname)' 'refs/reports-closed/*')
-        git_net -C "$CLONE" fetch -q origin 'refs/reports/*:refs/reports/*' >/dev/null 2>&1 || true
-    elif [ "$role" = integrator ]; then
-        HINT_FETCH+=("$(hint git -C "$CLONE" fetch origin 'refs/reports/*:refs/reports/*')")
+            rtip=$(hostgit rev-parse -q --verify "$rref" 2>/dev/null || true)
+            [ -n "$rtip" ] || continue
+            rtombs+=("$rname")
+            rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
+            [ "$rc" -ne 0 ] || continue
+            case $out in
+                *"remote ref does not exist"*) ;;
+                *"stale info"*) rstale="$rstale$rname " ;;
+                *) net_failed "$rc" "$out"; warn "cannot delete report $rname on the remote: $out"; rfail="$rfail$rname " ;;
+            esac
+        done < <(hostgit for-each-ref --format='%(refname)' "$mirror/reports-closed/")
+        # git answers "stale info" for a report the remote no longer has too, so only this fetch tells
+        # a report that moved from one that is gone.
+        rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" fetch -q --prune origin '+refs/reports/*:refs/origin-reports/*' 2>&1) || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            for rname in ${rtombs[@]+"${rtombs[@]}"}; do
+                case $rfail in *" $rname "*) continue ;; esac
+                if hostgit show-ref -q --verify "refs/origin-reports/$rname"; then
+                    case $rstale in *" $rname "*) STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: the remote ref moved since it was fetched" ;; esac
+                    continue
+                fi
+                STATUS_KEYS+=("closed-report=$rname")
+            done
+        else
+            net_failed "$rc" "$out"
+            HINT_FETCH+=("$(hint git -C "$KNOWLEDGE_MAIN" fetch --prune origin '+refs/reports/*:refs/origin-reports/*')")
+        fi
     fi
+
+    # The origin carries the host's refs as this sync left them, pushes and deletions included: the
+    # sandbox's command that follows reads it, and so does the doctor's pushed or pending.
+    refresh_origin_noted "$sb" "$role"
 
     if [ -n "$refused" ]; then
         set_status "refused: not pushed:$refused; fix or delete those branches"
@@ -937,6 +1032,7 @@ sync_clone() {
     else
         set_status "ok: main current${main_note:+, $main_note}; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")$([ "$rpushed" -eq 0 ] || printf '; reports pushed %d' "$rpushed")"
     fi
+    run_in_sandbox "$sb"
 }
 
 # ---------------------------------------------------------------------------
@@ -950,7 +1046,7 @@ sync_project_clone() {   # <project dir> <sandbox dir>
     id=$(ai_sandbox_project_id "$project")
     if [ -n "$INTEGRATOR" ] && [ "$INTEGRATOR" = "$project" ]; then role=integrator; fi
     if ! lock_take "$sb/.knowledge.lock"; then
-        CLONE="$sb/knowledge"; STATUS_NOTE=""
+        status_context "$sb" "$id" "$role"
         if [ -d "$CLONE/.git" ]; then set_status "skipped: lock busy; another ai-knowledge is syncing this clone"
         else warn "skipped $CLONE: lock busy; another ai-knowledge is syncing it"; fi
         return 0
@@ -961,13 +1057,14 @@ sync_project_clone() {   # <project dir> <sandbox dir>
     lock_drop
 }
 
-# Undocumented child of 'sync --all': one clone, no render, own hints.
-cmd_sync_clone() {   # <project dir> [sandbox dir]
+# Undocumented child of 'sync --all': one clone, no render, own hints. The
+# parent names the project (the stamp's) and the sandbox; nothing is resolved here.
+cmd_sync_clone() {   # <project dir> <sandbox dir>
     load_config
-    local project sb
-    project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
-    sb=${2:-$(ai_sandbox_dir_for "$project")}
+    [ $# -eq 2 ] || die "usage: ai-knowledge _sync-clone <project dir> <sandbox dir>"
+    local project=$1 sb=$2
     [ -d "$sb" ] || die "no sandbox directory $sb"
+    (cd -- "$project") 2>/dev/null || die "not a directory: $project"
     sync_project_clone "$project" "$sb"
     print_hints "$project"
 }
@@ -1009,7 +1106,7 @@ cmd_sync_all() {
     local jobs="${AI_KNOWLEDGE_JOBS:-4}" before after sb project state pids=() running=0
     local -a sbs=() projects=()
     sync_main_and_render || return 0
-    before=$(git -C "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
+    before=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
 
     while IFS=$'\t' read -r sb project; do
         [ -n "$sb" ] || continue
@@ -1028,7 +1125,7 @@ cmd_sync_all() {
     done < <(ai_sandbox_list)
     wait "${pids[@]+"${pids[@]}"}" 2>/dev/null || true
 
-    local i hint_project
+    local i
     for i in "${!sbs[@]}"; do
         sb=${sbs[$i]}
         [ -s "$sb/.sync-output.$$" ] || continue
@@ -1040,7 +1137,7 @@ cmd_sync_all() {
     if [ "$MAIN_FETCHED" = yes ]; then
         if lock_take "$AI_KNOWLEDGE_ROOT/.lock"; then
             sync_main || true
-            after=$(git -C "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
+            after=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
             [ "$after" = "$before" ] || cmd_render || true
             lock_drop
         else
@@ -1052,19 +1149,17 @@ cmd_sync_all() {
     for i in "${!sbs[@]}"; do
         sb=${sbs[$i]}; project=${projects[$i]}
         state=$(ai_sandbox_knowledge_state "$sb")
-        # The repair is a plain create-ai-sandbox.sh run for that sandbox; the
-        # bulk script is the shortcut for every stale one at once.
+        # The one repair is a plain create-ai-sandbox.sh run for that sandbox.
         if [ -z "$project" ]; then
-            hint_project=$(head -1 "$sb/project-path" 2>/dev/null || true)
-            status="not synced: unstamped; recreate it: create-ai-sandbox.sh ${hint_project:-<project dir>} (every sandbox at once: ai-sandbox-migrate-knowledge)"
+            status="not synced: unstamped; recreate it: $(ai_sandbox_recreate_command "$sb")"
         elif [ "$state" != current ]; then
-            status="not synced: $state; recreate it: create-ai-sandbox.sh $project (every sandbox at once: ai-sandbox-migrate-knowledge)"
+            status="not synced: $state; recreate it: $(ai_sandbox_recreate_command "$sb")"
         elif [ "$(cat "$sb/.sync-exit.$$" 2>/dev/null)" != 0 ]; then
             if [ ! -d "$project" ]; then status="missing project: $project"
             else status="error: exit $(cat "$sb/.sync-exit.$$" 2>/dev/null || echo '?'); see its output above"
             fi
         else
-            status=$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)
+            status=$(status_line "$sb")
         fi
         printf '%-45s %-10s %s\n' "$(basename "$sb")" "$state" "$status"
         rm -f "$sb/.sync-output.$$" "$sb/.sync-exit.$$"
@@ -1079,7 +1174,7 @@ cmd_status() {
     load_config
     printf 'remote:      %s\nintegrator:  %s\nmain:        %s\nrender:      %s\n' \
         "$REMOTE" "${INTEGRATOR:-<none>}" \
-        "$(git -C "$KNOWLEDGE_MAIN" rev-parse --short HEAD 2>/dev/null || echo none)" \
+        "$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse --short HEAD 2>/dev/null || echo none)" \
         "$AI_KNOWLEDGE_RENDER"
     # The one clone that commits on main: where the owner edits the rules directly.
     [ -z "$INTEGRATOR" ] || printf 'clone (integrator): %s\n' "$(ai_sandbox_dir_for "$INTEGRATOR")/knowledge"
@@ -1088,22 +1183,29 @@ cmd_status() {
         project=$(ai_sandbox_project_root "$1") || die "not a directory: $1"
         sb=$(ai_sandbox_dir_for "$project")
         printf 'project:     %s\nclone:       %s\nlast sync:   %s\n' \
-            "$project" "$sb/knowledge" "$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)"
+            "$project" "$sb/knowledge" "$(status_line "$sb")"
         return 0
     fi
     printf '\n%-45s %-10s %s\n' sandbox state 'project; last sync'
     while IFS=$'\t' read -r sb project; do
         [ -n "$sb" ] || continue
         printf '%-45s %-10s %s; %s\n' "$(basename "$sb")" "$(ai_sandbox_knowledge_state "$sb")" \
-            "${project:-unknown}" "$(cat "$sb/knowledge/.sync-status" 2>/dev/null || echo never)"
+            "${project:-unknown}" "$(status_line "$sb")"
     done < <(ai_sandbox_list)
+}
+
+# A --repo directory that a sandbox can write is not a repository the host may
+# run git in (C-GIT); inside a sandbox there is no ~/.ai-sandbox and so no such directory.
+require_host_repo() {   # <dir>
+    [ -d "$1/.git" ] || die "no git repository at $1"
+    ! ai_sandbox_writable_path "$1" || die "$1 is a directory a sandbox can write; the host does not run git in it"
 }
 
 # '<branch> <path>' per open proposal file, across every local proposal/*
 # branch that main has not absorbed yet. Inside a sandbox the clone is
 # ~/knowledge; on the host it is the canonical main checkout unless --repo says.
 cmd_proposals() {
-    local repo="" b
+    local repo="" b ref
     while [ $# -gt 0 ]; do
         case $1 in
             --repo)   [ $# -ge 2 ] || die "--repo needs a directory"; repo=$2; shift 2 ;;
@@ -1114,13 +1216,14 @@ cmd_proposals() {
     if [ -z "$repo" ]; then
         if [ -d "$HOME/knowledge/.git" ]; then repo="$HOME/knowledge"; else repo="$KNOWLEDGE_MAIN"; fi
     fi
-    [ -d "$repo/.git" ] || die "no git repository at $repo"
-    while IFS= read -r b; do
-        [ -n "$b" ] || continue
-        git -C "$repo" merge-base --is-ancestor "$b" main 2>/dev/null && continue
-        git -C "$repo" ls-tree -r --name-only "$b" -- proposals/ \
+    require_host_repo "$repo"
+    while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        b=${ref#refs/heads/}
+        ai_sandbox_host_git "$repo" merge-base --is-ancestor "$ref" refs/heads/main 2>/dev/null && continue
+        ai_sandbox_host_git "$repo" ls-tree -r --name-only "$ref" -- proposals/ \
             | { grep '\.md$' || true; } | { grep -v '/README\.md$' || true; } | sed "s|^|$b |"
-    done < <(git -C "$repo" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*')
+    done < <(ai_sandbox_host_git "$repo" for-each-ref --format='%(refname)' 'refs/heads/proposal/*')
 }
 
 # '<name> <path>' per open report file in refs/reports/*; a name with a
@@ -1137,13 +1240,13 @@ cmd_reports() {
     if [ -z "$repo" ]; then
         if [ -d "$HOME/knowledge/.git" ]; then repo="$HOME/knowledge"; else repo="$KNOWLEDGE_MAIN"; fi
     fi
-    [ -d "$repo/.git" ] || die "no git repository at $repo"
+    require_host_repo "$repo"
     while IFS= read -r r; do
         [ -n "$r" ] || continue
         name=${r#refs/reports/}
-        git -C "$repo" show-ref -q --verify "refs/reports-closed/$name" && continue
-        git -C "$repo" ls-tree -r --name-only "$r" -- reports/ | { grep '\.md$' || true; } | sed "s|^|$name |"
-    done < <(git -C "$repo" for-each-ref --format='%(refname)' 'refs/reports/*')
+        ai_sandbox_host_git "$repo" show-ref -q --verify "refs/reports-closed/$name" && continue
+        ai_sandbox_host_git "$repo" ls-tree -r --name-only "$r" -- reports/ | { grep '\.md$' || true; } | sed "s|^|$name |"
+    done < <(ai_sandbox_host_git "$repo" for-each-ref --format='%(refname)' 'refs/reports/*')
 }
 
 # One commit on top of BASE that adds or replaces PATH with the content of
@@ -1151,18 +1254,18 @@ cmd_reports() {
 # commit id. Used for proposal branches and for the integrator record on main.
 build_commit() {   # <repo> <base ref> <path> <file> <message>
     local repo=$1 base=$2 path=$3 file=$4 msg=$5 idx blob tree identity=()
-    git -C "$repo" config user.email >/dev/null 2>&1 \
+    ai_sandbox_host_git "$repo" config user.email >/dev/null 2>&1 \
         || identity=(-c user.name=ai-knowledge -c user.email=ai-knowledge@localhost)
     # No RETURN trap: in bash it stays armed in the caller and fires again there.
     idx=$(mktemp); rm -f "$idx"
-    if ! { GIT_INDEX_FILE=$idx git -C "$repo" read-tree "$base" \
-           && blob=$(git -C "$repo" hash-object -w "$file") \
-           && GIT_INDEX_FILE=$idx git -C "$repo" update-index --add --cacheinfo "100644,$blob,$path" \
-           && tree=$(GIT_INDEX_FILE=$idx git -C "$repo" write-tree); }; then
+    if ! { GIT_INDEX_FILE=$idx ai_sandbox_host_git "$repo" read-tree "$base" \
+           && blob=$(ai_sandbox_host_git "$repo" hash-object -w "$file") \
+           && GIT_INDEX_FILE=$idx ai_sandbox_host_git "$repo" update-index --add --cacheinfo "100644,$blob,$path" \
+           && tree=$(GIT_INDEX_FILE=$idx ai_sandbox_host_git "$repo" write-tree); }; then
         rm -f "$idx"; die "cannot build a commit on $base in $repo"
     fi
     rm -f "$idx"
-    git -C "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p "$base" -m "$msg"
+    ai_sandbox_host_git "$repo" "${identity[@]+"${identity[@]}"}" commit-tree "$tree" -p "$base" -m "$msg"
 }
 
 # A file becomes one proposal branch, built with plumbing from origin/main so
@@ -1183,8 +1286,8 @@ cmd_propose() {
         esac
     done
     [ -n "$file" ] && [ -f "$file" ] || die "usage: ai-knowledge propose FILE [--repo DIR] [--slug S] [--project-id ID] [--machine M] [--project P] [--push]"
-    [ -d "$repo/.git" ] || die "no git repository at $repo"
-    git -C "$repo" show-ref -q --verify refs/remotes/origin/main || die "$repo has no origin/main"
+    require_host_repo "$repo"
+    ai_sandbox_host_git "$repo" show-ref -q --verify refs/remotes/origin/main || die "$repo has no origin/main"
     command -v python3 >/dev/null 2>&1 || die "python3 is required"
     if [ -z "$slug" ]; then
         slug=$(basename "$file" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
@@ -1210,17 +1313,17 @@ elif extra:
 open(os.environ["DST"], "w", encoding="utf-8").write(text if text.endswith("\n") else text + "\n")
 PYFM
     [ -s "$tmp" ] || { rm -f "$tmp"; die "cannot read $file"; }
-    commit=$(build_commit "$repo" origin/main "$path" "$tmp" "proposal: $slug") || { rm -f "$tmp"; die "cannot build the proposal commit"; }
+    commit=$(build_commit "$repo" refs/remotes/origin/main "$path" "$tmp" "proposal: $slug") || { rm -f "$tmp"; die "cannot build the proposal commit"; }
     rm -f "$tmp"
     branch="proposal/$date-$slug-${commit:0:4}"
     [[ $branch =~ $PROPOSAL_RE ]] || die "slug '$slug' does not make a valid branch name ($branch); use lowercase letters, digits and dashes"
-    git -C "$repo" update-ref "refs/heads/$branch" "$commit"
+    ai_sandbox_host_git "$repo" update-ref "refs/heads/$branch" "$commit"
     if [ "$push" = yes ]; then
         local rc=0 out
-        out=$(git_net -C "$repo" push -q origin "$branch:refs/heads/$branch" 2>&1) || rc=$?
+        out=$(git_net -C "$repo" push -q origin "refs/heads/$branch:refs/heads/$branch" 2>&1) || rc=$?
         if [ "$rc" -ne 0 ]; then
             net_failed "$rc" "$out"; warn "created $branch but could not push: $NET_REASON"
-            HINT_PUSH+=("$(hint git -C "$repo" push origin "$branch:refs/heads/$branch")"); print_hints
+            HINT_PUSH+=("$(hint git -C "$repo" push origin "refs/heads/$branch:refs/heads/$branch")"); print_hints
         fi
     fi
     printf '%s\n' "$branch"

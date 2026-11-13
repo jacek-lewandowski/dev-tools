@@ -39,28 +39,86 @@ assert_eq "dir_for uses AI_SANDBOX_ROOT" \
     "$(ai_sandbox_dir_for /home/u/work/dev-tools)" "$tmp/home/.ai-sandbox/${a}-agent"
 rm -rf "$tmp"
 
-# Test ai_sandbox_project_root: inside a git repo from a subdirectory
-git_tmp=$(mktemp -d)
-(cd "$git_tmp" && git init -q && mkdir subdir)
-subdir_result=$(ai_sandbox_project_id "$git_tmp/subdir")
-toplevel_result=$(ai_sandbox_project_id "$git_tmp")
-assert_eq "project_root returns toplevel from subdir" \
-    "$(cd "$git_tmp/subdir" && ai_sandbox_project_root)" "$git_tmp"
-rm -rf "$git_tmp"
+# C-STAMP: ai_sandbox_project_root answers from the stamps under AI_SANDBOX_ROOT
+# alone and starts no git process (a recording git first on PATH sees no call).
+# The lookups run in a fake home so no real stamp is read.
+fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
+REAL_GIT=$(command -v git)
+rec="$tmp/rec"; mkdir -p "$rec"; GITLOG="$tmp/git.log"; export GITLOG; : > "$GITLOG"
+printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$PWD" "$*" >> "$GITLOG"\nexec %s "$@"\n' "$REAL_GIT" > "$rec/git"
+chmod +x "$rec/git"
+stamp() {   # <dir the sandbox directory is named for> [project-path content]
+    local d; d=$(ai_sandbox_dir_for "$1"); mkdir -p "$d"
+    printf '%s\n' "${2:-$1}" > "$d/project-path"
+}
+root_of() { PATH="$rec:$PATH" ai_sandbox_project_root "$@"; }
 
-# Test ai_sandbox_project_root: outside a git repo
-no_git=$(mktemp -d)
-assert_eq "project_root returns dir outside git" \
-    "$(ai_sandbox_project_root "$no_git")" "$no_git"
-rm -rf "$no_git"
+w="$tmp/work"; mkdir -p "$w/proj/sub/deep" "$w/proj/repo/inner" "$w/plain/x" "$w/gitonly/sub"
+git init -q "$w/proj/repo"; git init -q "$w/gitonly"
+stamp "$w/proj"
+assert_eq "the project's own directory" "$(root_of "$w/proj")" "$w/proj"
+assert_eq "a subdirectory of the project" "$(root_of "$w/proj/sub/deep")" "$w/proj"
+assert_eq "no argument: the current directory" "$(cd "$w/proj/sub" && root_of)" "$w/proj"
+assert_eq "a repository below a sandboxed parent without a sandbox of its own" \
+    "$(root_of "$w/proj/repo/inner")" "$w/proj"
+assert_eq "no git process started by the lookup" "$(wc -l < "$GITLOG" | tr -d ' ')" 0
 
-# Test ai_sandbox_project_root: nonexistent directory fails
-nonexist=/tmp/this-dir-definitely-does-not-exist-$$
-result=$(ai_sandbox_project_root "$nonexist" 2>&1) || exit_code=$?
-if [ "${exit_code:-0}" -ne 0 ]; then
-    TESTS_RUN=$((TESTS_RUN + 1)); _pass "project_root fails for nonexistent dir"
-else
-    TESTS_RUN=$((TESTS_RUN + 1)); _fail "project_root should fail for nonexistent dir" "exit code was 0"
-fi
+stamp "$w/proj/repo"
+assert_eq "the nearest stamped ancestor wins" "$(root_of "$w/proj/repo/inner")" "$w/proj/repo"
+assert_eq "an ancestor above it still answers for its other subdirectories" "$(root_of "$w/proj/sub")" "$w/proj"
+
+# No stamped ancestor: the directory itself, git's toplevel plays no part
+assert_eq "unstamped plain directory: itself" "$(root_of "$w/plain")" "$w/plain"
+assert_eq "unstamped subdirectory: itself" "$(root_of "$w/plain/x")" "$w/plain/x"
+assert_eq "unstamped repository, from a subdirectory: the subdirectory itself" "$(root_of "$w/gitonly/sub")" "$w/gitonly/sub"
+ln -s "$w/plain" "$tmp/plain-link"
+assert_eq "unstamped, reached through a link: the directory with links resolved" "$(root_of "$tmp/plain-link/x")" "$w/plain/x"
+
+# A stamp counts only where its project-path names the directory it is filed for
+stamp "$w/other" "$w/proj/sub"
+mkdir -p "$w/other/below"
+assert_eq "a stamp whose project-path names another directory is not found" "$(root_of "$w/other/below")" "$w/other/below"
+printf '%s' "$w/other" > "$(ai_sandbox_dir_for "$w/other")/project-path"
+assert_eq "a project-path without its trailing newline counts" "$(root_of "$w/other/below")" "$w/other"
+
+# Both path forms today's function stored are found from a linked parent: a
+# repository was stored with git's resolved toplevel, anything else as given.
+mkdir -p "$w/real/repo/sub" "$w/real/dir/sub"; git init -q "$w/real/repo"
+ln -s "$w/real" "$tmp/lnk"
+stamp "$w/real/repo"
+stamp "$tmp/lnk/dir"
+assert_eq "resolved stamp, reached through the link" "$(root_of "$tmp/lnk/repo/sub")" "$w/real/repo"
+assert_eq "resolved stamp, reached directly" "$(root_of "$w/real/repo/sub")" "$w/real/repo"
+assert_eq "unresolved stamp, reached through the link" "$(root_of "$tmp/lnk/dir/sub")" "$tmp/lnk/dir"
+assert_eq "no git process started with links either" "$(wc -l < "$GITLOG" | tr -d ' ')" 0
+
+# found or not: the predicate init uses
+ai_sandbox_stamped "$w/proj" && r=0 || r=$?
+assert_eq "stamped: a directory whose stamp names it" "$r" 0
+ai_sandbox_stamped "$w/proj/sub" && r=0 || r=$?
+assert_eq "stamped: not a subdirectory of a stamped one" "$r" 1
+ai_sandbox_stamped "$w/plain" && r=0 || r=$?
+assert_eq "stamped: not a directory without a stamp" "$r" 1
+
+# Nonexistent directory fails
+nonexist="$tmp/this-dir-definitely-does-not-exist"
+result=$(root_of "$nonexist" 2>&1) && exit_code=0 || exit_code=$?
+assert_eq "project_root fails for a nonexistent directory" "$exit_code" 1
+assert_eq "project_root prints nothing for a nonexistent directory" "$result" ""
+rm -rf "$tmp"
+
+# The image tag is composed once, in ai_sandbox_image_name (the search that
+# missed a third copy at planning time, S22). The pattern is a tag built from a
+# variable or a literal variant, or a '-u<uid>' suffix, under bin/ai. Known
+# case first: a scratch file with each of the forms the base had must be reported.
+tagpat='ai-sandbox:(\$|base-|docker-)|-u\$\{?[A-Za-z_]*[Uu][Ii][Dd]'
+tagdir=$(mktemp -d)
+printf '%s\n' 'IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"' \
+    'IMAGE_STAMP="$D/${IMAGE_VARIANT}-u${HOST_UID}.stamp"' \
+    'tag="ai-sandbox:${variant}-u${uid}"' 'tag=ai-sandbox:base-u1000' > "$tagdir/known"
+assert_eq "tag search reports every composed form in its known case" "$(command grep -cE "$tagpat" "$tagdir/known")" 4
+rm -rf "$tagdir"
+assert_eq "no image tag is composed under bin/ai outside ai_sandbox_image_name" \
+    "$(command grep -rnaE "$tagpat" "$REPO_ROOT/bin/ai" | wc -l | tr -d ' ')" 0
 
 finish

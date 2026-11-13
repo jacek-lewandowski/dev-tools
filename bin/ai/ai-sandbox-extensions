@@ -32,9 +32,8 @@ done
 populated "$shared_ide" && exit 0
 
 # 2. Otherwise install them with a throwaway container.
-uid=$(id -u)
 for variant in docker base; do
-    tag="ai-sandbox:${variant}-u${uid}"
+    tag=$(ai_sandbox_image_name "$variant")
     docker image inspect "$tag" >/dev/null 2>&1 || continue
     echo "Installing IDE extensions into $shared_ide using $tag..."
     for ext in $EXTENSIONS; do
