@@ -105,8 +105,9 @@ usage() {
 Usage: create-ai-sandbox.sh [OPTIONS] [PROJECT_DIR]
 
 Creates or refreshes an isolated container sandbox for PROJECT_DIR, defaulting
-to the current directory. The project's git root is used, so running from a
-subdirectory is safe. Sandboxes are keyed on the project's full path, so two
+to the current directory. Running from a subdirectory is safe: the nearer of the
+directory's sandboxed ancestor and its ancestor holding a .git entry is used,
+else the directory itself. Sandboxes are keyed on the project's full path, so two
 projects whose directories share a name do not collide.
 
 Options:
@@ -366,7 +367,7 @@ if [ -x "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" ]; then
     "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" || true
 fi
 
-PROJECT_ABS_DIR=$(ai_sandbox_project_root "${PROJECT_ARG:-.}") \
+PROJECT_ABS_DIR=$(ai_sandbox_create_root "${PROJECT_ARG:-.}") \
     || die "Cannot enter ${PROJECT_ARG:-.}"
 cd "$PROJECT_ABS_DIR"
 

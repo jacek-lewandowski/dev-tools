@@ -46,18 +46,65 @@ ai_sandbox_claude_project_key() {
     printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
 }
 
-# The git toplevel when there is one, so running from a subdirectory is safe.
-ai_sandbox_project_root() {
-    local dir=${1:-$PWD}
-    (
-        cd "$dir" 2>/dev/null || exit 1
-        local top
-        if top=$(git rev-parse --show-toplevel 2>/dev/null); then
-            printf '%s\n' "$top"
-        else
-            pwd
-        fi
-    )
+# C-STAMP. The project a directory belongs to is read from the stamps under
+# AI_SANDBOX_ROOT, never from the tree: a sandbox can write the tree (a nested
+# repository, a setting in the project's git configuration that names another
+# directory), and no git process runs here.
+# Whether <dir> is a project the host stamped: the sandbox directory filed
+# under its id holds a project-path whose first line is <dir>.
+ai_sandbox_stamped() {   # <dir>
+    local f line=""
+    f="$(ai_sandbox_dir_for "$1")/project-path"
+    [ -f "$f" ] || return 1
+    IFS= read -r line < "$f" || [ -n "$line" ]
+    [ "$line" = "$1" ]
+}
+
+# The parent of an absolute path; nothing for "/".
+ai_sandbox_parent_dir() {
+    case $1 in
+        /|"") ;;
+        */*)  local p=${1%/*}; printf '%s' "${p:-/}" ;;
+    esac
+}
+
+# The nearest stamped ancestor of <dir>, else (second argument "git") the
+# nearest ancestor holding a .git entry, else <dir> with links resolved.
+# Today's stamps hold two path forms: git's resolved toplevel for a repository,
+# the path as given for anything else. So both chains of ancestors are walked,
+# the path as given and the resolved one, nearest first, the given form first
+# on a tie; a stamp is found whichever form it holds. A .git entry is looked
+# for in the resolved chain, the form a repository's stamp has always had.
+# Return: 0 found a stamp or a .git, 3 found neither (printed the fallback),
+# 1 no such directory.
+ai_sandbox_root_scan() {   # <dir> [git]
+    local a b fallback
+    a=$(cd -- "$1" 2>/dev/null && pwd) || return 1
+    b=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    fallback=$b
+    while [ -n "$a" ] || [ -n "$b" ]; do
+        if [ -n "$a" ] && ai_sandbox_stamped "$a"; then printf '%s\n' "$a"; return 0; fi
+        if [ -n "$b" ] && [ "$b" != "$a" ] && ai_sandbox_stamped "$b"; then printf '%s\n' "$b"; return 0; fi
+        if [ "${2:-}" = git ] && [ -n "$b" ] && [ -e "$b/.git" ]; then printf '%s\n' "$b"; return 0; fi
+        a=$(ai_sandbox_parent_dir "$a"); b=$(ai_sandbox_parent_dir "$b")
+    done
+    printf '%s\n' "$fallback"; return 3
+}
+
+# The project of <dir> for every command but create: the nearest stamped
+# ancestor, else <dir> itself with links resolved. 1: no such directory.
+ai_sandbox_project_root() {   # [dir]
+    local rc=0
+    ai_sandbox_root_scan "${1:-$PWD}" || rc=$?
+    [ "$rc" -ne 1 ]
+}
+
+# create-ai-sandbox.sh only: the nearer of the stamped ancestor and the
+# ancestor holding a .git entry (tested for existence), else <dir> itself.
+ai_sandbox_create_root() {   # [dir]
+    local rc=0
+    ai_sandbox_root_scan "${1:-$PWD}" git || rc=$?
+    [ "$rc" -ne 1 ]
 }
 
 ai_sandbox_dir_for() {
