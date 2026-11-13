@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# sandbox-knowledge-sync -- the clone's side of the knowledge sync, run inside the
+# sandbox: by the entrypoint at start (SANDBOX_KNOWLEDGE=2) and by the host after
+# each of its syncs. Takes no arguments, always exits 0, prints its outcome.
+#
+# The host owns every network and every ref it publishes; this command only brings
+# ~/knowledge up to date from the read-only origin the host refreshed, and removes a
+# ref inside only when the host's status file says to (closed-proposal=, pushed-report=,
+# closed-report=). It decides nothing about what is closed or in scope.
+#
+# Not a host helper: it runs only in the image (copied there by create-ai-sandbox.sh).
+#
+# Paths come from the compose file (SANDBOX_STATUS_DIR, SANDBOX_KNOWLEDGE_ORIGIN);
+# SANDBOX_KNOWLEDGE_CLONE (default ~/knowledge) is for tests; all three are overrides
+# for tests as well.
+set -u
+export GIT_TERMINAL_PROMPT=0
+
+STATUS_FILE="${SANDBOX_STATUS_DIR:-}/knowledge"
+ORIGIN="${SANDBOX_KNOWLEDGE_ORIGIN:-}"
+CLONE="${SANDBOX_KNOWLEDGE_CLONE:-$HOME/knowledge}"
+
+say() { printf 'sandbox-knowledge-sync: %s\n' "$*"; }
+g() { git -C "$CLONE" "$@"; }
+
+# Every line of the status file with key $1, value only, control characters but the
+# line end removed.
+status_values() {
+    [ -r "$STATUS_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$STATUS_FILE" | tr -d '\000-\011\013-\037\177'
+}
+
+# A name that is one safe path component of a ref under refs/<kind>/.
+safe_ref_name() {   # <refs/heads|refs/reports|refs/reports-closed> <name>
+    case $2 in ""|-*|/*|*..*|*//*|*/) return 1 ;; esac
+    git check-ref-format "$1/$2"
+}
+
+# reads-outside: <role> <project id> in <clone>/.git/ai-knowledge-role, the old shape;
+# the propose-rule skill of the knowledge repository reads the project id from it.
+write_role_file() {   # <role> <project id>
+    [ -n "$2" ] || return 0
+    printf '%s %s\n' "$1" "$2" > "$CLONE/.git/ai-knowledge-role"
+}
+
+# The hook is advisory (an agent can bypass it); the host's scope check is the
+# enforcement. It fails at commit time, where the agent sees the message.
+install_hook() {
+    local hook="$CLONE/.git/hooks/pre-commit"
+    mkdir -p "$CLONE/.git/hooks"
+    cat > "$hook.new" <<'HOOK'
+#!/usr/bin/env bash
+# Installed by the knowledge sync; refreshed on every sync. Advisory:
+# the host refuses to push what this hook would have refused to commit.
+role=$(cut -d' ' -f1 "$(git rev-parse --git-dir)/ai-knowledge-role" 2>/dev/null)
+role=${role:-proposals}
+branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || true)
+case "$branch" in
+    main)
+        if [ "$role" = proposals ]; then
+            echo "ai-knowledge: this clone proposes, it does not edit main. Use the propose-rule skill: it commits on a proposal/* branch." >&2
+            exit 1
+        fi ;;
+    proposal/*)
+        bad=$(git diff --cached --name-only | grep -v '^proposals/' || true)
+        if [ -n "$bad" ]; then
+            echo "ai-knowledge: a proposal branch may change only proposals/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+            exit 1
+        fi ;;
+    report/*)
+        bad=$(git diff --cached --name-only | grep -v '^reports/' || true)
+        if [ -n "$bad" ]; then
+            echo "ai-knowledge: a report branch may change only reports/. Refused: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+            exit 1
+        fi ;;
+esac
+exit 0
+HOOK
+    chmod 0755 "$hook.new"; mv -f "$hook.new" "$hook"
+}
+
+# The clone of the base design pointed at the remote and carried a status file of its
+# own; both are replaced, local branches and unpushed commits stay.
+adopt() {
+    local url
+    url=$(g config --get remote.origin.url 2>/dev/null || true)
+    if [ -z "$url" ]; then
+        g remote add origin "$ORIGIN"
+    elif [ "$url" != "$ORIGIN" ]; then
+        g remote set-url origin "$ORIGIN" && say "the clone now fetches from the host's origin (it fetched from $url)"
+    fi
+    rm -f "$CLONE/.sync-status"
+}
+
+# Local main follows origin/main fast-forward only. Reports what it left alone.
+ff_main() {   # <role>
+    local current
+    g show-ref -q --verify refs/remotes/origin/main || return 0
+    if ! g rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        g checkout -q -B main origin/main && say "main created at origin/main"
+        return 0
+    fi
+    # The integrator's main may be ahead (it has commits for the host to push).
+    if [ "$1" = integrator ] && g merge-base --is-ancestor origin/main main 2>/dev/null; then
+        [ "$(g rev-parse main)" = "$(g rev-parse origin/main)" ] \
+            || say "main is ahead of origin/main (the integrator's own commits): left as it is"
+        return 0
+    fi
+    if ! g merge-base --is-ancestor main origin/main 2>/dev/null; then
+        say "main has local commits that origin/main lacks: not fast-forwarded"
+        return 0
+    fi
+    [ "$(g rev-parse main)" != "$(g rev-parse origin/main)" ] || return 0
+    if [ -n "$(g status --porcelain)" ]; then
+        say "main not fast-forwarded: uncommitted changes in $CLONE"
+        return 0
+    fi
+    current=$(g branch --show-current)
+    if [ "$current" = main ]; then g merge -q --ff-only origin/main >/dev/null 2>&1 \
+        || { say "main not fast-forwarded"; return 0; }
+    else g update-ref refs/heads/main origin/main
+    fi
+    say "main fast-forwarded to origin/main"
+}
+
+# Removals follow the host's status file, nothing else.
+apply_status() {   # <role>
+    local role=$1 b c n current closed=0 dropped=0
+    while read -r b c; do
+        [ -n "$b" ] && [ -n "$c" ] || continue
+        case $b in proposal/*) ;; *) continue ;; esac
+        safe_ref_name refs/heads "$b" || continue
+        [ "$(g rev-parse -q --verify "refs/heads/$b" 2>/dev/null)" = "$c" ] || continue
+        current=$(g branch --show-current)
+        if [ "$current" = "$b" ]; then g checkout -q main 2>/dev/null || continue; fi
+        g update-ref -d "refs/heads/$b" "$c" && closed=$((closed + 1))
+    done < <(status_values closed-proposal)
+    if [ "$role" = proposals ]; then
+        while read -r n; do
+            safe_ref_name refs/reports "$n" || continue
+            g show-ref -q --verify "refs/reports/$n" || continue
+            g update-ref -d "refs/reports/$n" && dropped=$((dropped + 1))
+        done < <(status_values pushed-report)
+    else
+        while read -r n; do
+            safe_ref_name refs/reports "$n" || continue
+            g show-ref -q --verify "refs/reports/$n" || g show-ref -q --verify "refs/reports-closed/$n" || continue
+            g update-ref -d "refs/reports/$n"; g update-ref -d "refs/reports-closed/$n"
+            dropped=$((dropped + 1))
+        done < <(status_values closed-report)
+    fi
+    [ "$closed" -eq 0 ] || say "closed $closed proposal branch(es) the host listed"
+    [ "$dropped" -eq 0 ] || say "dropped $dropped report(s) the host listed"
+}
+
+main() {
+    local role id
+    if [ -z "$ORIGIN" ] || [ ! -d "$ORIGIN" ]; then
+        say "no knowledge origin (${ORIGIN:-not set}); nothing to do"
+        return 0
+    fi
+    role=$(status_values role | head -1); id=$(status_values project-id | head -1)
+    case $role in proposals|integrator) ;; *) role=proposals ;; esac
+
+    if [ ! -d "$CLONE/.git" ]; then
+        if [ -e "$CLONE" ] || [ -L "$CLONE" ]; then
+            if [ ! -d "$CLONE" ] || [ -L "$CLONE" ] || [ -n "$(ls -A -- "$CLONE")" ]; then
+                say "$CLONE exists and is not a clone; left alone"
+                return 0
+            fi
+        fi
+        mkdir -p "$CLONE" && git clone -q "$ORIGIN" "$CLONE" >/dev/null 2>&1 \
+            || { say "cannot clone $ORIGIN into $CLONE"; return 0; }
+        say "cloned the origin into $CLONE"
+    else
+        adopt
+    fi
+
+    if ! g fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*' >/dev/null 2>&1; then
+        say "cannot fetch from the origin"
+        return 0
+    fi
+    if [ "$role" = integrator ]; then
+        g fetch -q origin 'refs/heads/proposal/*:refs/heads/proposal/*' >/dev/null 2>&1 \
+            || say "some proposal branches were not updated (local commits on them, or one is checked out)"
+        g fetch -q origin 'refs/reports/*:refs/reports/*' >/dev/null 2>&1 \
+            || say "some reports were not updated"
+    fi
+    # An empty origin leaves an unborn HEAD that has to follow main.
+    g rev-parse -q --verify HEAD >/dev/null 2>&1 || g symbolic-ref HEAD refs/heads/main >/dev/null 2>&1 || true
+    ff_main "$role"
+    apply_status "$role"
+    write_role_file "$role" "$id"
+    install_hook
+    say "done (role $role)"
+}
+
+main || true
+exit 0

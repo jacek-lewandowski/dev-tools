@@ -62,7 +62,10 @@ assert_file "refresh leaves a backup"      "$dir/.credentials-backup"
 assert_eq   "backup holds the replaced login" \
             "$(cat "$dir/.credentials-backup/.claude/.credentials.json")" 'project-token'
 
+assert_file "create made status/ for the read-only bind" "$dir/status"
+rm -rf "$dir/status"
 acct reset --yes >/dev/null
+assert_file "reset recreates status/, a bind source of every sandbox" "$dir/status"
 assert_no_file "reset cleared claude creds" "$dir/.claude/.credentials.json"
 assert_file    "reset kept the sandbox"     "$dir/docker-compose.yml"
 # Bind sources must survive reset, or compose recreates them root-owned.

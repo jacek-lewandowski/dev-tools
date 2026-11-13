@@ -57,6 +57,21 @@ out=$( cd "$proj" && AI_SANDBOX_ROOT="$AI_SANDBOX_ROOT" \
        bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" --print-context 2>&1 )
 assert_contains "helper resolves the same sandbox" "$out" "${id}-agent"
 
+# O22: ai-delegate and sandbox-knowledge-sync run in the image only, so neither is a host helper.
+assert_eq "ai-delegate is not in the helper list"            "$(ai_sandbox_helpers | grep -cx 'ai-delegate')" 0
+assert_eq "sandbox-knowledge-sync is not in the helper list" "$(ai_sandbox_helpers | grep -cx 'sandbox-knowledge-sync')" 0
+assert_no_file "a first create installs no ai-delegate"      "$AI_SANDBOX_ROOT/bin/ai-delegate"
+assert_eq "a first create has nothing to remove and says nothing" "$(grep -c 'ai-delegate' "$tmp/out")" 0
+# A copy an earlier run installed is removed by the next create, with one line saying so.
+echo '# an earlier install' > "$AI_SANDBOX_ROOT/bin/ai-delegate"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-delegate" 2>&1 || true
+assert_no_file "a create removes the host copy of ai-delegate" "$AI_SANDBOX_ROOT/bin/ai-delegate"
+assert_eq "and prints one line saying so" "$(grep -c "removed $AI_SANDBOX_ROOT/bin/ai-delegate" "$tmp/out-delegate")" 1
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-delegate2" 2>&1 || true
+assert_eq "the next create prints nothing about it" "$(grep -c 'ai-delegate' "$tmp/out-delegate2")" 0
+# Every other helper is still installed.
+for h in $(ai_sandbox_helpers); do assert_file "helper still installed: $h" "$AI_SANDBOX_ROOT/bin/$h"; done
+
 # Re-running create refreshes stale installed copies.
 echo '# stale' > "$AI_SANDBOX_ROOT/bin/ai-sandbox-stop"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true

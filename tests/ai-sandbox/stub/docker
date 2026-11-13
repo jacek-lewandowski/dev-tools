@@ -7,6 +7,7 @@ printf '%s\n' "$*" >> "${DOCKER_STUB_LOG:-/dev/null}"
 STOPPED_FILE="${DOCKER_STUB_LOG:-/dev/null}.stopped"
 case "$1 $2" in
     "compose version") exit 0 ;;
+    "buildx version") [ -z "${DOCKER_STUB_NO_BUILDX:-}" ] || exit 1; exit 0 ;;
 esac
 case "$1" in
     image)
@@ -162,6 +163,46 @@ JSON
         fi
         exit 0
         ;;
-    build|rename|rm|rmi|images|exec|inspect) exit 0 ;;
+    run)
+        # 'docker run' of the confined git (ai_sandbox_confined_git): runs the git
+        # command it names, in the -w directory, with an empty environment, the way a
+        # container that was given no variable would see it. The arguments are in
+        # DOCKER_STUB_LOG; DOCKER_STUB_RUN_EXIT=<n> answers with that status instead
+        # (125 is what docker says when the container cannot start).
+        [ -z "${DOCKER_STUB_RUN_EXIT:-}" ] || exit "$DOCKER_STUB_RUN_EXIT"
+        shift; w=/
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --rm|-i) shift ;;
+                -w) w="$2"; shift 2 ;;
+                --pull|--network|--user|-v|--entrypoint|--name) shift 2 ;;
+                *) shift; break ;;       # the image; what follows is git's own
+            esac
+        done
+        cd "$w"
+        exec env -i PATH="$PATH" git "$@"
+        ;;
+    exec)
+        # 'docker exec [options] NAME .../sandbox-knowledge-sync' (the host's run of the in-sandbox
+        # command): runs the real command for the sandbox directory <AI_SANDBOX_ROOT>/NAME with the
+        # three paths the compose file passes into the container, so a test sees the effect of the
+        # host's exec on that sandbox's clone. DOCKER_STUB_EXEC_EXIT=<n> answers with that status
+        # instead (the exec failing), DOCKER_STUB_EXEC_HANG=<s> sleeps first (a container that
+        # hangs), DOCKER_STUB_EXEC_OUT=<text, printf %b> is printed first. Any other exec exits 0.
+        prev=""; sks=""; name=""
+        for a in "$@"; do
+            case $a in */sandbox-knowledge-sync) sks=1; name=$prev ;; esac
+            prev=$a
+        done
+        [ -n "$sks" ] || exit 0
+        printf 'exec-stdin=%s\n' "$(readlink /proc/self/fd/0 2>/dev/null)" >> "${DOCKER_STUB_LOG:-/dev/null}"
+        [ -z "${DOCKER_STUB_EXEC_OUT:-}" ] || printf '%b\n' "$DOCKER_STUB_EXEC_OUT"
+        [ -z "${DOCKER_STUB_EXEC_HANG:-}" ] || sleep "$DOCKER_STUB_EXEC_HANG"
+        [ -z "${DOCKER_STUB_EXEC_EXIT:-}" ] || exit "$DOCKER_STUB_EXEC_EXIT"
+        d="${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}/$name"
+        exec env -i HOME="$HOME" PATH="$PATH" SANDBOX_STATUS_DIR="$d/status" SANDBOX_KNOWLEDGE_ORIGIN="$d/knowledge-origin.git" \
+            SANDBOX_KNOWLEDGE_CLONE="$d/knowledge" bash "$(dirname "$(readlink -f "$0")")/../../../bin/ai/sandbox-knowledge-sync"
+        ;;
+    build|rename|rm|rmi|images|inspect) exit 0 ;;
 esac
 exit 0

@@ -28,6 +28,9 @@ readonly ANTIGRAVITY_IDE_VERSION='2.5.5-4923483625488384'
 readonly COMBY_VERSION='1.8.1'
 readonly EARTHLY_VERSION='v0.8.15'
 readonly GITLEAKS_VERSION='8.30.1'
+# uv installs the Python packages; headroom's own 'sandbox' extra has no torch, nvidia or lancedb.
+readonly UV_VERSION='0.13.8'
+readonly HEADROOM_VERSION='0.42.0'
 # From the release's gitleaks_${GITLEAKS_VERSION}_checksums.txt; bump with the version.
 readonly GITLEAKS_LINUX_X64_SHA256='551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
@@ -47,7 +50,7 @@ readonly -a CLAUDE_PLUGINS=(
 
 # Resource limits for the container. Docker imposes none by default, so a
 # runaway build or an Electron leak can take the whole host down with it.
-#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 6,
+#   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 2,
 #                     remembered per sandbox (SANDBOX_MEMORY_GB in .env).
 #                     MEMORY_LIMIT is the same number in Docker's notation.
 #   MEMORY_SWAP_LIMIT RAM+swap ceiling. Equal to MEMORY_LIMIT means the
@@ -60,7 +63,7 @@ readonly -a CLAUDE_PLUGINS=(
 #                     under the limit stops one large shm allocation from
 #                     OOM-killing the sandbox by itself.
 #   CPU_LIMIT         Derived: half as many cores as GB of RAM, rounded up and
-#                     never fewer than one, so a sandbox of 6 GB sees three.
+#                     never fewer than one, so the default 2 GB sandbox sees one and 6 GB sees three.
 #                     Applied as a cpuset rather than a CPU quota,
 #                     because a quota is invisible to nproc, make -j, cargo,
 #                     Node and every other tool that sizes its parallelism by
@@ -81,6 +84,10 @@ readonly IDEA_HOST_DIR="${IDEA_HOST_DIR:-/opt/idea-IU}"
 # Where the host keeps /etc/timezone and /etc/localtime, read to give the
 # sandbox the host's timezone. Overridable so the tests can stand in a fake.
 readonly HOST_ETC_DIR="${HOST_ETC_DIR:-/etc}"
+# Where the host keeps its sound devices, tested for and mounted (at /dev/snd in
+# the sandbox) only for a sandbox created with --audio. Overridable so the
+# tests can stand in a fake.
+readonly HOST_SND_DIR="${HOST_SND_DIR:-/dev/snd}"
 
 readonly SHM_SIZE='1gb'
 
@@ -88,13 +95,15 @@ readonly SHM_SIZE='1gb'
 # Options
 # ---------------------------------------------------------------------------
 
-DISPLAY_MODE="auto"     # auto | wayland | nested | host | none
+DISPLAY_MODE="none"     # auto | wayland | nested | host | none; none unless one is remembered or passed
 DISPLAY_MODE_EXPLICIT="no"
 WITH_DOCKER="no"        # rootless Docker + Earthly inside the sandbox
 WITH_DOCKER_EXPLICIT="no"
-WITH_AUDIO="yes"        # host sound socket and devices, microphone included
+WITH_AUDIO="no"         # host sound socket and devices, microphone included; off unless asked for
 WITH_AUDIO_EXPLICIT="no"
-MEMORY_GB=""            # --memory=GB; the remembered size, else 6, when empty
+AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
+AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
+MEMORY_GB=""            # --memory=GB; the remembered size, else 2, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
 NO_START="no"
@@ -105,12 +114,13 @@ usage() {
 Usage: create-ai-sandbox.sh [OPTIONS] [PROJECT_DIR]
 
 Creates or refreshes an isolated container sandbox for PROJECT_DIR, defaulting
-to the current directory. The project's git root is used, so running from a
-subdirectory is safe. Sandboxes are keyed on the project's full path, so two
+to the current directory. Running from a subdirectory is safe: the nearer of the
+directory's sandboxed ancestor and its ancestor holding a .git entry is used,
+else the directory itself. Sandboxes are keyed on the project's full path, so two
 projects whose directories share a name do not collide.
 
 Options:
-  --display=MODE   How GUI apps reach a screen. Default: auto. Remembered.
+  --display=MODE   How GUI apps reach a screen. Default: none. Remembered.
                      wayland  Mount only the host Wayland socket. The container
                               runs its own Xwayland for X11-only apps. Wayland's
                               client isolation means sandboxed apps cannot read
@@ -140,12 +150,18 @@ Options:
                    keeps its own image store inside the container, costing disk
                    per sandbox.
   --no-docker      Undo a remembered --with-docker.
-  --audio          Share the host's PulseAudio/PipeWire socket and ALSA devices
-                   with the sandbox. On by default; note that the socket carries
-                   capture as well as playback, so anything in the sandbox can
-                   record from your microphone. Remembered.
-  --no-audio       Keep the host's sound out of the sandbox. Remembered.
-  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 6.
+  --audio          Share the host's sound socket and sound devices with the
+                   sandbox, microphone included. Off by default. The socket
+                   carries capture as well as playback, so anything in the
+                   sandbox can record from your microphone, and a program in
+                   the sandbox can make the host's sound server, which runs as
+                   you, act on its requests: a sandbox with --audio is outside
+                   the promise that a sandbox is
+                   given no host daemon's socket but its display's.
+                   Remembered until --no-audio.
+  --no-audio       Drop a remembered --audio: the host's sound stays out of the
+                   sandbox.
+  --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 2 (one CPU core).
                    Remembered. The sandbox gets half as many CPU cores as GB,
                    rounded up (see Resources below).
   --rebuild        Force a no-cache rebuild of the image. That image is
@@ -206,10 +222,14 @@ Shared knowledge (optional): after 'ai-knowledge init <private-git-url>
 --integrator <dev-tools dir>' the global rules and roles come from that
 repository instead, rendered read-only into every sandbox as GEMINI.md,
 CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
-gets its own clone at ~/knowledge with main checked out; the 'propose-rule'
+gets its own clone at ~/knowledge with main checked out, made and kept current
+inside the sandbox from a read-only origin the host maintains; the 'propose-rule'
 skill commits one file on a proposal/<date>-<slug>-<hex> branch, and the host
-pushes it on the next sandbox start or 'ai-knowledge sync --all'. A
-'process-report' report travels the same way as a ref refs/reports/<name>.
+pushes it on the next sandbox start or 'ai-knowledge sync --all', reading the clone
+without running git in it. A 'process-report' report travels the same way as a ref
+refs/reports/<name>. A sandbox created before this setup (its SANDBOX_KNOWLEDGE
+stamp is not the one knowledge needs, 2) is refused at start until it is
+re-created: run this script for its project again.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
 runnable inside the sandbox as 'idea'. Settings and the licence are copied from
@@ -233,7 +253,7 @@ directory and are discarded on every start; nothing is ever written back to
 the host. 'sandbox-doctor' reports each mount; 'ai-sandbox-gc' reclaims
 leftovers from a reset it could not delete outright.
 
-Resources: the container is capped at --memory GB of RAM (default 6) with no
+Resources: the container is capped at --memory GB of RAM (default 2, one CPU core) with no
 swap, and /dev/shm at 1 GB, which counts against that cap; a changed size
 applies from the next start. CPUs follow the memory: half as many cores as GB,
 rounded up and never more than the host has, pinned as a cpuset so that
@@ -325,6 +345,7 @@ require docker "Install Docker Engine and ensure your user can run it."
 require rsync
 require python3
 docker compose version >/dev/null 2>&1 || die "'docker compose' (v2 plugin) is required."
+docker buildx version >/dev/null 2>&1 || die "'docker buildx' (BuildKit) is required: the image build uses cache mounts. Install the docker-buildx-plugin package."
 log "ok"
 
 # ---------------------------------------------------------------------------
@@ -366,7 +387,7 @@ if [ -x "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" ]; then
     "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" || true
 fi
 
-PROJECT_ABS_DIR=$(ai_sandbox_project_root "${PROJECT_ARG:-.}") \
+PROJECT_ABS_DIR=$(ai_sandbox_create_root "${PROJECT_ARG:-.}") \
     || die "Cannot enter ${PROJECT_ARG:-.}"
 cd "$PROJECT_ABS_DIR"
 
@@ -460,6 +481,12 @@ while IFS= read -r _dir; do
     [ -n "$_dir" ] && mkdir -p "$SANDBOX_DIR/$_dir"
 done < <(ai_sandbox_state_dirs)
 unset _dir
+# The clone's directory and the bare origin it fetches from (C-KNOW), made here for the
+# same reason, before the sync step below, which may fail or find the lock busy.
+if ai_knowledge_configured; then
+    mkdir -p "$SANDBOX_DIR/knowledge"
+    ai_sandbox_make_origin "$SANDBOX_DIR" || warn "cannot make the knowledge origin in $SANDBOX_DIR"
+fi
 
 # ---------------------------------------------------------------------------
 # Locate the host tools/ directory
@@ -479,7 +506,7 @@ log "tools     $HOST_TOOLS_DIR"
 step "Selecting display mode"
 
 # A display mode chosen once stays chosen. Without this, re-running the script
-# bare would silently fall back to 'auto' and undo a deliberate --display=host.
+# bare would silently fall back to 'none' and undo a deliberate --display=host.
 # A Docker choice made once stays chosen. Without this, re-running the script
 # bare silently regenerates the sandbox without the daemon: the Dockerfile loses
 # it, security_opt disappears from the compose file, SANDBOX_WITH_DOCKER flips to
@@ -493,9 +520,13 @@ if [ "$WITH_DOCKER_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
 fi
 if [ "$WITH_AUDIO_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_AUDIO=$(sed -n 's/^SANDBOX_WITH_AUDIO=//p' "$ENV_FILE" | tail -n 1)
+    # 2 is a request (--audio, remembered). 1 is the old shape: every run
+    # before audio became opt-in wrote it, for the old default and for --audio
+    # alike, so it is no request. 0 and anything else read as off.
     case "$STORED_AUDIO" in
-        1) WITH_AUDIO="yes"; log "keeping host audio (pass --no-audio to drop it)" ;;
-        0) WITH_AUDIO="no";  log "keeping host audio off (pass --audio to share it)" ;;
+        2) WITH_AUDIO="yes" ;;
+        1) AUDIO_OLD_VALUE="yes" ;;
+        0) AUDIO_STORED_OFF="yes" ;;
     esac
 fi
 
@@ -504,11 +535,12 @@ fi
 # ---------------------------------------------------------------------------
 
 # The size chosen once stays chosen, like the options above; a sandbox created
-# before the key existed, or a fresh one, gets the default, and so does a
-# hand-edited size the lib rejects (it warns, like the start scripts do). See
+# before the key existed, or one whose hand-edited size the lib rejects (it
+# warns, like the start scripts do), gets the lib's 6 GB from
+# ai_sandbox_memory_gb; only a sandbox with no .env gets the default 2 GB. See
 # the comment on the resource limits at the top of this script.
 if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
-    MEMORY_GB=6
+    MEMORY_GB=2
     if [ -f "$ENV_FILE" ]; then
         STORED_MEMORY=$(ai_sandbox_env_value "$SANDBOX_DIR" SANDBOX_MEMORY_GB)
         MEMORY_GB=$(ai_sandbox_memory_gb "$SANDBOX_DIR")
@@ -523,11 +555,9 @@ CPU_LIMIT=$(( (MEMORY_GB + 1) / 2 ))
 [ "$CPU_LIMIT" -ge 1 ] || CPU_LIMIT=1
 readonly CPU_LIMIT
 
-# The uid suffix keeps two host users sharing one Docker daemon from fighting
-# over a single tag, since the image bakes in USER_ID.
 if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
-IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"
-IMAGE_STAMP="$IMAGE_DIR/${IMAGE_VARIANT}-u${HOST_UID}.stamp"
+IMAGE_NAME=$(ai_sandbox_image_name "$IMAGE_VARIANT")
+IMAGE_STAMP="$IMAGE_DIR/${IMAGE_NAME#ai-sandbox:}.stamp"   # <variant>-u<uid>, as before
 
 if [ "$DISPLAY_MODE_EXPLICIT" = "no" ] && [ -f "$ENV_FILE" ]; then
     STORED_MODE=$(sed -n 's/^SANDBOX_DISPLAY_MODE=//p' "$ENV_FILE" | tail -n 1)
@@ -768,18 +798,46 @@ fi
 # Audio
 # ---------------------------------------------------------------------------
 
-# On by default, --no-audio turns it off. The socket carries capture as well
-# as playback, and neither PulseAudio nor PipeWire's compatibility socket can
-# restrict one client to playback, so sharing it is sharing the microphone.
+# Off unless --audio asks for it, and then remembered until --no-audio. The
+# socket carries capture as well as playback, and neither PulseAudio nor
+# PipeWire's compatibility socket can restrict one client to playback, so
+# sharing it is sharing the microphone, and the host's sound server, which runs
+# as the user, acts on requests from the sandbox.
 PULSE_SOCKET_HOST="${XDG_RUNTIME_DIR:-/run/user/$HOST_UID}/pulse/native"
+if [ "$AUDIO_OLD_VALUE" = "yes" ] && [ "$WITH_AUDIO" != "yes" ]; then
+    warn "Audio: the host's sound was shared with this sandbox because that used to be the default. It is now off. Pass --audio to share it again."
+fi
+# The sound devices are mounted only with a display (the device section below
+# reads AUDIO_DEVICES), so the warning names only what this run shares.
+AUDIO_DEVICES="no"
+[ "$WITH_AUDIO" = "yes" ] && [ -d "$HOST_SND_DIR" ] && [ "$DISPLAY_MODE" != "none" ] && AUDIO_DEVICES="yes"
 if [ "$WITH_AUDIO" != "yes" ]; then
-    log "Audio: not shared (--no-audio; pass --audio to share the host's sound, microphone included)."
-elif [ -S "$PULSE_SOCKET_HOST" ]; then
-    add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
-    add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
-    log "Audio: PulseAudio/PipeWire socket shared, microphone included (pass --no-audio to drop it)."
+    if [ "$WITH_AUDIO_EXPLICIT" = "yes" ] || [ "$AUDIO_STORED_OFF" = "yes" ]; then
+        log "Audio: not shared; pass --audio to share the host's sound, microphone included."
+    else
+        log "Audio: not shared by default; pass --audio to share the host's sound, microphone included."
+    fi
 else
-    warn "Audio is on, but there is no PulseAudio/PipeWire socket at $PULSE_SOCKET_HOST (pass --no-audio to silence this)."
+    audio_shared=""
+    [ -S "$PULSE_SOCKET_HOST" ] && audio_shared="sound socket"
+    [ "$AUDIO_DEVICES" = "yes" ] && audio_shared="${audio_shared:+$audio_shared and }sound devices"
+    if [ -n "$audio_shared" ]; then
+        audio_warning="Audio is shared (--audio): the sandbox gets the host's ${audio_shared}, microphone included."
+        if [ -S "$PULSE_SOCKET_HOST" ]; then
+            audio_warning="${audio_warning}
+   A program in the sandbox can make the host's sound server, which runs as you,
+   act on its requests, so this sandbox is outside the promise that a
+   sandbox is given no host daemon's socket but its display's."
+        fi
+        warn "${audio_warning}
+   Pass --no-audio to drop it."
+    fi
+    if [ -S "$PULSE_SOCKET_HOST" ]; then
+        add_env "PULSE_SERVER=unix:/run/sandbox-pulse"
+        add_vol "\"${PULSE_SOCKET_HOST}:/run/sandbox-pulse\""
+    else
+        warn "Audio is on, but there is no sound socket at $PULSE_SOCKET_HOST (pass --no-audio to silence this)."
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -880,8 +938,8 @@ shopt -u nullglob
 add_cgroup 'c 188:* rwm'    # ttyUSB
 add_cgroup 'c 166:* rwm'    # ttyACM
 
-if [ "$WITH_AUDIO" = "yes" ] && [ -d /dev/snd ] && [ "$DISPLAY_MODE" != "none" ]; then
-    add_vol '"/dev/snd:/dev/snd"'
+if [ "$AUDIO_DEVICES" = "yes" ]; then
+    add_vol "\"${HOST_SND_DIR}:/dev/snd\""
     add_cgroup 'c 116:* rwm'
     log "audio: /dev/snd (ALSA)"
 fi
@@ -975,7 +1033,6 @@ TOOL_NOTES="- \`headroom\` -- token compression for tool output, logs and files
   (\`headroom wrap <tool>\`, \`headroom proxy --port 8787\`, \`headroom doctor\`, \`headroom mcp\`),
   or \`from headroom import compress\`. Use it to shrink large JSON payloads, logs or
   command output before they land in context.
-- \`semantic-docs\` -- local vector search over docs, notes, PDFs and daily tasks.
 - \`socat\` -- create virtual serial port pairs, e.g.
   \`socat -d -d pty,raw,echo=0 pty,raw,echo=0\`.
 - \`sox\`/\`ffmpeg\` -- audio and video conversion.
@@ -1487,6 +1544,13 @@ if [ -n "${TZ:-}" ]; then
     fi
 fi
 
+# --- Knowledge clone -------------------------------------------------------
+# SANDBOX_KNOWLEDGE=2: the host keeps the read-only origin and the status file; this
+# brings ~/knowledge up to date from them. Never fails the start, and never holds it long.
+if [ "${SANDBOX_KNOWLEDGE:-0}" = "2" ] && command -v sandbox-knowledge-sync >/dev/null 2>&1; then
+    timeout 60 sandbox-knowledge-sync || echo "sandbox: sandbox-knowledge-sync did not finish; sandbox-doctor shows the host's last status" >&2
+fi
+
 # --- agy grants ------------------------------------------------------------
 # Merge the sandbox's agy grants into its own agy settings; never fail the
 # start. read_url(*) is web access (agent-roles design D21). command(<name>)
@@ -1595,13 +1659,20 @@ if [ -n "${DISPLAY:-}" ]; then
         status "X server" "NOT reachable -- $(printf '%s' "$_err" | head -1)"
     fi
 fi
-# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: unset means
-# the compose file predates the knowledge mounts and the host refuses to start
-# it until the migration script has recreated it.
+# What the host reports about this sandbox: line 1 of every file in the status
+# directory (the host writes it, read-only here), with its age.
+if [ -d "${SANDBOX_STATUS_DIR:-/nonexistent}" ]; then
+    for _f in "$SANDBOX_STATUS_DIR"/*; do
+        [ -f "$_f" ] || continue
+        _age=$(( ($(date +%s) - $(stat -c %Y "$_f")) / 60 ))
+        status "$(basename "$_f")" "$(head -1 "$_f" | tr -d '[:cntrl:]') [${_age} min ago]"
+    done
+fi
+# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: 2 is the
+# current setup, 1 predates the in-sandbox sync, unset predates the stamp; the
+# host refuses to start either until create-ai-sandbox.sh has recreated it.
 case "${SANDBOX_KNOWLEDGE-unset}" in
-    1)     if [ -f "$HOME/knowledge/.sync-status" ]; then
-               _age=$(( ($(date +%s) - $(stat -c %Y "$HOME/knowledge/.sync-status")) / 60 ))
-               status "knowledge" "$(cat "$HOME/knowledge/.sync-status") [${_age} min ago]"
+    2)     if [ -f "${SANDBOX_STATUS_DIR:-/nonexistent}/knowledge" ]; then
                # Each open proposal branch: on the remote already, or waiting for the next host sync.
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' 2>/dev/null); do
                    if [ "$(git -C "$HOME/knowledge" rev-parse -q --verify "refs/remotes/origin/$_b" 2>/dev/null)" = "$(git -C "$HOME/knowledge" rev-parse "$_b" 2>/dev/null)" ]; then
@@ -1611,7 +1682,7 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                    fi
                done
                # A report ref is dropped here once the host has pushed it, so any left is pending.
-               _role=$(cut -d' ' -f1 "$HOME/knowledge/.git/ai-knowledge-role" 2>/dev/null)
+               _role=$(sed -n 's/^role=//p' "$SANDBOX_STATUS_DIR/knowledge" 2>/dev/null | head -1)
                for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname)' 'refs/reports/*' 2>/dev/null); do
                    if [ "$_role" = integrator ]; then status "  $_b" "open: close it with a refs/reports-closed tombstone"
                    else status "  $_b" "pending: reaches the remote on the next host sync"; fi
@@ -1620,7 +1691,8 @@ case "${SANDBOX_KNOWLEDGE-unset}" in
                status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
            fi ;;
     0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
-    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge mounts; on the host run create-ai-sandbox.sh <project> (every sandbox at once: dev-tools/bin/ai/ai-sandbox-migrate-knowledge)" ;;
+    1)     status "knowledge" "stale: this sandbox predates the in-sandbox sync; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
+    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge stamp; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
 esac
 status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
 if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
@@ -1897,6 +1969,7 @@ cat > "$BUILD_DIR/claude-managed-settings.json" <<'MANAGED_EOF'
 MANAGED_EOF
 
 cp "$SCRIPT_DIR/ai-delegate" "$BUILD_DIR/ai-delegate"
+cp "$SCRIPT_DIR/sandbox-knowledge-sync" "$BUILD_DIR/sandbox-knowledge-sync"
 cp "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
 
 # --- Dockerfile ------------------------------------------------------------
@@ -1914,15 +1987,6 @@ ENV DEBIAN_FRONTEND=noninteractive \\
     PLAYWRIGHT_HTML_REPORT=none \\
     LANG=C.UTF-8
 
-ARG NODE_MAJOR=${NODE_MAJOR}
-ARG ANTIGRAVITY_CLI_VERSION=${ANTIGRAVITY_CLI_VERSION}
-ARG ANTIGRAVITY_HUB_VERSION=${ANTIGRAVITY_HUB_VERSION}
-ARG ANTIGRAVITY_IDE_VERSION=${ANTIGRAVITY_IDE_VERSION}
-ARG COMBY_VERSION=${COMBY_VERSION}
-ARG EARTHLY_VERSION=${EARTHLY_VERSION}
-ARG GITLEAKS_VERSION=${GITLEAKS_VERSION}
-ARG GITLEAKS_LINUX_X64_SHA256=${GITLEAKS_LINUX_X64_SHA256}
-ARG GOOGLE_CHROME_VERSION=${GOOGLE_CHROME_VERSION}
 DOCKERFILE_HEAD
 
 cat >> "$BUILD_DIR/Dockerfile" <<'DOCKERFILE_EOF'
@@ -1931,6 +1995,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl wget gnupg ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# Python and its packages sit before the big apt layer, and every version ARG
+# is declared right before the RUN that uses it (a changed ARG invalidates the
+# cache from its first use), so bumping Chrome, Antigravity or the big apt list
+# does not rebuild them. The uv cache mount keeps downloaded wheels between builds.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UV_VERSION=@UV_VERSION@
+RUN pip3 install --no-cache-dir uv==${UV_VERSION}
+
+ARG HEADROOM_VERSION=@HEADROOM_VERSION@
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy uv pip install --system "headroom-ai[sandbox]==${HEADROOM_VERSION}"
+
+ARG NODE_MAJOR=@NODE_MAJOR@
 # Third-party repositories.
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings /usr/share/keyrings; \
@@ -1963,7 +2043,6 @@ RUN set -eux; \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git sudo less vim-tiny nano ca-certificates \
-        python3 python3-pip python3-venv \
         socat usbutils net-tools \
         libwayland-client0 libwayland-egl1 libwayland-cursor0 xwayland \
         openbox xterm x11-utils \
@@ -1976,14 +2055,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && dbus-uuidgen > /etc/machine-id
 
+ARG GOOGLE_CHROME_VERSION=@GOOGLE_CHROME_VERSION@
 # Google Chrome, in its own layer so the rest of the image caches independently.
 RUN set -eux; \
     wget -q -O /tmp/chrome.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${GOOGLE_CHROME_VERSION}_amd64.deb"; \
     apt-get update; \
     apt-get install -y --no-install-recommends /tmp/chrome.deb; \
     rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
-
-RUN pip3 install --no-cache-dir lancedb fastembed pypdf tqdm "headroom-ai[all]"
 
 RUN npm install -g --force \
         @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
@@ -2003,12 +2081,15 @@ RUN set -eux; \
 
 # The release binary is dynamically linked: without libev4 (and libpcre3,
 # libsqlite3-0, all installed above) it dies with a loader error on first use.
+ARG COMBY_VERSION=@COMBY_VERSION@
 RUN set -eux; \
     wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
     chmod +x /usr/local/bin/comby; \
     comby -version
 
 # Static binary; the git hooks in .githooks/ refuse to run without it.
+ARG GITLEAKS_VERSION=@GITLEAKS_VERSION@
+ARG GITLEAKS_LINUX_X64_SHA256=@GITLEAKS_LINUX_X64_SHA256@
 RUN set -eux; \
     wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
     echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
@@ -2016,6 +2097,7 @@ RUN set -eux; \
     rm /tmp/gitleaks.tar.gz; \
     gitleaks version
 
+ARG ANTIGRAVITY_CLI_VERSION=@ANTIGRAVITY_CLI_VERSION@
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
     tar -xzf /tmp/cli.tar.gz -C /tmp; \
@@ -2023,11 +2105,13 @@ RUN set -eux; \
     chmod +x /usr/local/bin/agy; \
     rm -f /tmp/cli.tar.gz
 
+ARG ANTIGRAVITY_HUB_VERSION=@ANTIGRAVITY_HUB_VERSION@
 RUN set -eux; \
     wget -q "https://storage.googleapis.com/antigravity-public/antigravity-hub/${ANTIGRAVITY_HUB_VERSION}/linux-x64/Antigravity.tar.gz" -O /tmp/hub.tar.gz; \
     tar -xzf /tmp/hub.tar.gz -C /usr/local/; \
     rm -f /tmp/hub.tar.gz
 
+ARG ANTIGRAVITY_IDE_VERSION=@ANTIGRAVITY_IDE_VERSION@
 RUN set -eux; \
     wget -q "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/${ANTIGRAVITY_IDE_VERSION}/linux-x64/Antigravity%20IDE.tar.gz" -O /tmp/ide.tar.gz; \
     tar -xzf /tmp/ide.tar.gz -C /usr/local/; \
@@ -2050,9 +2134,8 @@ RUN set -eux; \
 
 # Thin wrappers for the dev-tools Python utilities mounted at ~/tools.
 RUN set -eux; \
-    printf '#!/bin/bash\nexec python3 -m tools.semantic_docs.cli "$@"\n' > /usr/local/bin/semantic-docs; \
     printf '#!/bin/bash\nexec python3 -m tools.agent_log_trimmer "$@"\n' > /usr/local/bin/agent-log-trimmer; \
-    chmod +x /usr/local/bin/semantic-docs /usr/local/bin/agent-log-trimmer
+    chmod +x /usr/local/bin/agent-log-trimmer
 
 # Allow the agent to work with PDFs through ImageMagick.
 RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' \
@@ -2072,6 +2155,7 @@ COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
 COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
 COPY sandbox-sdk      /usr/local/bin/sdk
 COPY ai-delegate       /usr/local/bin/ai-delegate
+COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync
 COPY context-statusline /usr/local/bin/context-statusline
 COPY xdg-open         /usr/local/bin/xdg-open
 COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
@@ -2082,6 +2166,7 @@ RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
     && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
                 /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
                 /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+                /usr/local/bin/sandbox-knowledge-sync \
                 /usr/local/bin/context-statusline \
     && chmod 0644 /etc/claude-code/managed-settings.json \
     && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
@@ -2126,6 +2211,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     systemctl disable docker.service containerd.service 2>/dev/null || true
 
+ARG EARTHLY_VERSION=@EARTHLY_VERSION@
 RUN wget -q "https://github.com/earthly/earthly/releases/download/${EARTHLY_VERSION}/earthly-linux-amd64" \
         -O /usr/local/bin/earthly \
     && chmod +x /usr/local/bin/earthly
@@ -2170,6 +2256,15 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["tail", "-f", "/dev/null"]
 DOCKERFILE_TAIL
 
+# Fill the @NAME@ placeholders of the ARG lines above (the generated Dockerfile
+# is written through quoted heredocs, so the shell cannot expand them there).
+for _arg in NODE_MAJOR ANTIGRAVITY_CLI_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION \
+        COMBY_VERSION EARTHLY_VERSION GITLEAKS_VERSION GITLEAKS_LINUX_X64_SHA256 \
+        GOOGLE_CHROME_VERSION UV_VERSION HEADROOM_VERSION; do
+    sed -i "s|@${_arg}@|${!_arg}|g" "$BUILD_DIR/Dockerfile"
+done
+unset _arg
+
 log "Dockerfile and helper scripts written to $BUILD_DIR"
 
 # ---------------------------------------------------------------------------
@@ -2185,8 +2280,10 @@ ENVEOF
 fi
 chmod 600 "$ENV_FILE"
 
-HOST_GIT_NAME=$(git config user.name 2>/dev/null || true)
-HOST_GIT_EMAIL=$(git config user.email 2>/dev/null || true)
+# The host's own identity, from its global git configuration: no repository is
+# discovered, so a project cannot choose which identity its sandbox commits as.
+HOST_GIT_NAME=$(ai_sandbox_host_git - config user.name 2>/dev/null || true)
+HOST_GIT_EMAIL=$(ai_sandbox_host_git - config user.email 2>/dev/null || true)
 
 HOST_UID="$HOST_UID" \
 HOST_GID="$HOST_GID" \
@@ -2201,6 +2298,7 @@ DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
 MEM_GB="$MEMORY_GB" \
+KNOWLEDGE_STAMP="$AI_SANDBOX_KNOWLEDGE_STAMP" \
 python3 - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
@@ -2211,11 +2309,13 @@ managed = {
     "HOST_GIT_NAME": os.environ.get("HOST_GIT_NAME", ""),
     "HOST_GIT_EMAIL": os.environ.get("HOST_GIT_EMAIL", ""),
     "SANDBOX_WITH_DOCKER": "1" if os.environ.get("WITH_DOCKER") == "yes" else "0",
-    "SANDBOX_WITH_AUDIO": "1" if os.environ.get("WITH_AUDIO") == "yes" else "0",
+    # 2 is a request for host audio; 1 is the old shape (read as no request,
+    # never written) and 0 is off.
+    "SANDBOX_WITH_AUDIO": "2" if os.environ.get("WITH_AUDIO") == "yes" else "0",
     # The knowledge stamp: the start scripts refuse a sandbox whose stamp does
-    # not match the host's configuration, and the migration script uses the
-    # project dir to recreate it.
-    "SANDBOX_KNOWLEDGE": "1" if os.environ.get("KNOWLEDGE") == "yes" else "0",
+    # not match the host's configuration (value and rule: ai-sandbox-lib.sh),
+    # and its project dir is what the re-create command names.
+    "SANDBOX_KNOWLEDGE": os.environ.get("KNOWLEDGE_STAMP", "") if os.environ.get("KNOWLEDGE") == "yes" else "0",
     "SANDBOX_PROJECT_DIR": os.environ.get("PROJECT_ABS_DIR", ""),
     "SANDBOX_DISPLAY_MODE": os.environ.get("DISPLAY_MODE", ""),
     "SANDBOX_DISPLAY_NUM": os.environ.get("DISPLAY_NUM", ""),
@@ -2304,11 +2404,16 @@ cat <<COMPOSE_ENV
       - "PYTHONPATH=${CONTAINER_HOME}"
       - "SANDBOX_WITH_DOCKER=\${SANDBOX_WITH_DOCKER}"
       - "SANDBOX_KNOWLEDGE=\${SANDBOX_KNOWLEDGE}"
+      - "SANDBOX_STATUS_DIR=${AI_SANDBOX_STATUS_MOUNT}"
       # Subagents kept alive through a review/fix loop pause for minutes at a
       # time; the 5m default lets their cache expire in every pause. The env
       # var wins over settings.json, so the seeded copy cannot undo it.
       - "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h"
 COMPOSE_ENV
+# Where sandbox-knowledge-sync finds the read-only origin (the in-image command's override).
+if [ "$KNOWLEDGE" = "yes" ]; then
+    printf '      - "SANDBOX_KNOWLEDGE_ORIGIN=%s"\n' "$AI_SANDBOX_ORIGIN_MOUNT"
+fi
 printf '%s' "$DISPLAY_ENV_LINES"
 
 # The 'idea' wrapper is baked into the shared image, so it learns the path here
@@ -2356,6 +2461,12 @@ while IFS='|' read -r _key _path; do
 done < <(ai_sandbox_build_caches)
 unset _key _path
 
+# C-STATUS: what the host reports about this sandbox, read-only, whether or not
+# knowledge is configured (the host writes it; the doctor reads it).
+cat <<COMPOSE_STATUS
+      - "${SANDBOX_DIR}/status:${AI_SANDBOX_STATUS_MOUNT}:ro"
+COMPOSE_STATUS
+
 if [ "$KNOWLEDGE" = "yes" ]; then
 cat <<COMPOSE_KNOWLEDGE
       # Shared knowledge: the rendered main branch of the knowledge repository,
@@ -2367,9 +2478,13 @@ cat <<COMPOSE_KNOWLEDGE
       - "${SHARED_DIR}/knowledge/gemini/agents:${CONTAINER_HOME}/.gemini/agents:ro"
       - "${SHARED_DIR}/knowledge/codex/agents:${CONTAINER_HOME}/.codex/agents:ro"
       # This sandbox's own clone of the knowledge repository, read-write, on its
-      # proposals branch (main for the integrator). It holds no credentials, so
-      # it can commit but never fetch or push: the host does that on every start.
+      # proposals branch (main for the integrator). It holds no credentials: it
+      # fetches only from the read-only origin below (sandbox-knowledge-sync) and
+      # never pushes; the host reads it through a confined container and does all
+      # network git.
       - "${SANDBOX_DIR}/knowledge:${CONTAINER_HOME}/knowledge"
+      # The origin that clone fetches from: bare, written by the host only.
+      - "$(ai_sandbox_origin_dir "$SANDBOX_DIR"):${AI_SANDBOX_ORIGIN_MOUNT}:ro"
 COMPOSE_KNOWLEDGE
 else
 cat <<COMPOSE_BRAIN
@@ -2710,6 +2825,11 @@ mkdir -p "$AI_SANDBOX_ROOT/bin"
 while IFS= read -r helper; do
     install -m 0755 "$SCRIPT_DIR/$helper" "$AI_SANDBOX_ROOT/bin/$helper"
 done < <(ai_sandbox_helpers)
+# ai-delegate runs only inside the image; an earlier run installed a host copy.
+if [ -e "$AI_SANDBOX_ROOT/bin/ai-delegate" ] || [ -L "$AI_SANDBOX_ROOT/bin/ai-delegate" ]; then
+    rm -f "$AI_SANDBOX_ROOT/bin/ai-delegate"
+    log "removed $AI_SANDBOX_ROOT/bin/ai-delegate: it runs only inside the image"
+fi
 # ai-sandbox-lib.sh is sourced, not run.
 chmod 0644 "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
 # The knowledge seed travels with the helper, so 'ai-knowledge init' on a fresh
@@ -2799,7 +2919,7 @@ if [ "$need_build" = "yes" ]; then
     log "building $IMAGE_NAME -- one image, shared by every project"
     docker_build_flags=()
     [ "$FORCE_REBUILD" = "yes" ] && docker_build_flags+=(--no-cache)
-    docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \
+    DOCKER_BUILDKIT=1 docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \
         --build-arg "USER_ID=$HOST_UID" \
         --build-arg "GROUP_ID=$HOST_GID" \
         --build-arg "USER_NAME=$HOST_USER" \
