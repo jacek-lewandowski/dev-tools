@@ -390,6 +390,22 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
     )
 }
 
+# C-GIT's display rule, the one filter for text that came from a place a sandbox can write
+# (a branch name, a path, a commit subject, a status file) before it reaches a terminal or a
+# status line: standard input to standard output, every code point of category Cc except
+# newline and tab, the bidi marks (U+200E, U+200F, U+061C), embeddings, overrides and
+# isolates (U+202A to U+202E, U+2066 to U+2069), and every byte that is not UTF-8, dropped.
+ai_sandbox_display_clean() {
+    python3 -I -c '
+import sys, unicodedata
+text = sys.stdin.buffer.read().decode("utf-8", "ignore")
+keep = "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
+        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
+        and not "\u2066" <= c <= "\u2069"))
+sys.stdout.buffer.write(keep.encode("utf-8"))' \
+        || LC_ALL=C tr -cd '\11\12\40-\176'   # no usable python3: only printable ASCII, never the raw text
+}
+
 # C-INSTALL: a host entry point calls this first, with its own path. 0 when the directory
 # holding it, links resolved, is not one a sandbox can write (ai_sandbox_writable_path);
 # else says so with the install command and returns 3, the status ai_sandbox_host_git gives

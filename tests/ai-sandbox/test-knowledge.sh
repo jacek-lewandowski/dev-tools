@@ -1702,6 +1702,29 @@ assert_ne "O19 negative control: without the confinement a tag of the clone land
     "$(git -C "$tmp/gw-neg.git" for-each-ref --format='%(refname)' | grep -vc '^refs/sandbox/gw/')" 0
 rm -rf "$tmp/gw-neg.git"
 
+# --- O13: text from a refused branch and a refused path, and the output of the sandbox's own sync, reach no
+# --- status line, terminal line or status listing with a control or bidi code point (one filter, the lib's)
+o13p="$tmp/work/o13"; mkdir -p "$o13p"; git -C "$o13p" init -q
+o13dir=$(ai_sandbox_dir_for "$o13p"); mkdir -p "$o13dir"
+printf 'services: {}\n' > "$o13dir/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$o13p" > "$o13dir/.env"
+ks "$o13p"; o13c="$o13dir/knowledge"
+o13bad=$'\xc2\x9b\xe2\x80\xae'
+git -C "$o13c" branch -q "proposal/o13${o13bad}name" main
+git -C "$o13c" checkout -q -b "proposal/$today-o13path-abcd" main
+printf x > "$o13c/roles/o13${o13bad}file.md"; git -C "$o13c" add -A; git -C "$o13c" commit -q --no-verify -m o13; git -C "$o13c" checkout -q main
+o13out=$(DOCKER_STUB_RUNNING=true DOCKER_STUB_EXEC_OUT=$'said\xc2\x9b2J \xe2\x80\xaeRTL end' knowledge sync "$o13p" 2>&1 </dev/null)
+o13l1=$(head -1 "$(status_file "$o13c")"); o13st=$(knowledge status "$o13p" 2>&1)
+assert_status "O13: the refusal is reported" "$o13c" "refused:"
+assert_contains "O13: line 1 names the branch without the code points" "$o13l1" "proposal/o13name"
+assert_contains "O13: line 1 names the path without them" "$o13l1" "roles/o13"
+assert_contains "O13: the sandbox's own output is shown, cleaned" "$o13out" "said2J RTL end"
+assert_eq "O13: no U+009B or U+202E in line 1, the sync's output or status" \
+    "$(printf '%s\n%s\n%s' "$o13l1" "$o13out" "$o13st" | LC_ALL=C grep -c -e $'\xc2\x9b' -e $'\xe2\x80\xae')" 0
+assert_eq "O13: no control character in the keys of the status file either" \
+    "$(tail -n +2 "$(status_file "$o13c")" | LC_ALL=C grep -c $'\xc2\x9b')" 0
+git -C "$o13c" branch -q -D "proposal/o13${o13bad}name" "proposal/$today-o13path-abcd"
+rm -rf "$o13dir"
+
 # --- O12 (who runs it): after a sync the host runs the sandbox's command with docker exec, only in a running
 # --- container whose stamp is current, as its own user, with no terminal and standard input closed, under the limit
 exp="$tmp/work/ex"; mkdir -p "$exp"; git -C "$exp" init -q

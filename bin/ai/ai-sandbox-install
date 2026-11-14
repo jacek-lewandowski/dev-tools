@@ -49,19 +49,6 @@ export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 export AI_SANDBOX_GIT_TIMEOUT="${AI_SANDBOX_GIT_TIMEOUT:-120}"
 g() { ai_sandbox_host_git "$SRC" --no-pager --no-replace-objects "$@"; }
-# Text that came from a repository a sandbox can write is printed without control characters:
-# every code point of category Cc (C0, DEL, C1) except newline and tab, the bidi marks (U+200E, U+200F, U+061C), embeddings,
-# overrides and isolates, and every byte that is not UTF-8 (C-GIT's display rule).
-clean() {
-    python3 -I -c '
-import sys, unicodedata
-text = sys.stdin.buffer.read().decode("utf-8", "ignore")
-keep = "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
-        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
-        and not "\u2066" <= c <= "\u2069"))
-sys.stdout.buffer.write(keep.encode("utf-8"))'
-}
-
 mkdir -p "$INSTALLED"
 # A new src.git checks every object it takes in: a tree that lists one name twice is refused
 # at the fetch (the export refuses it again, for a src.git made before this setting).
@@ -166,7 +153,7 @@ esac
         g log --no-decorate --no-notes -n 1 --format='  %h %s' "$COMMIT" || true
         echo "Files:               $(g ls-tree -r --name-only "$COMMIT" -- "${EXPORT_ROOTS[@]}" | wc -l | tr -d ' ')"
     fi
-} | clean
+} | ai_sandbox_display_clean
 printf 'Install it? [y/N] '
 reply=""
 read -r reply || true

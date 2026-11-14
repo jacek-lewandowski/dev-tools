@@ -706,11 +706,11 @@ set_status() {
     mkdir -p "$(dirname "$STATUS_FILE")"
     tmp="$STATUS_FILE.$$"
     {
-        printf '%s %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$word" "$(printf '%s' "$text" | tr -d '[:cntrl:]')"
+        printf '%s %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$word" "$(printf '%s' "$text" | ai_sandbox_display_clean | tr '\t\n' '  ')"
         printf 'role=%s\nproject-id=%s\n' "$STATUS_ROLE" "$STATUS_ID"
-        [ ${#STATUS_KEYS[@]} -eq 0 ] || printf '%s\n' "${STATUS_KEYS[@]}" | tr -d '\000-\011\013-\037\177'
+        [ ${#STATUS_KEYS[@]} -eq 0 ] || printf '%s\n' "${STATUS_KEYS[@]}" | ai_sandbox_display_clean
     } > "$tmp" && mv -f "$tmp" "$STATUS_FILE"
-    log "$text"
+    log "$(printf '%s' "$text" | ai_sandbox_display_clean | tr '\t\n' '  ')"
 }
 # The same status with one more note; an ok line becomes a warning.
 status_amend() {   # <note>
@@ -725,7 +725,7 @@ status_amend() {   # <note>
 # "never" when there is none.
 status_line() {   # <sandbox dir>
     local line=""
-    [ -f "$1/status/knowledge" ] && line=$(head -1 "$1/status/knowledge" | tr -d '[:cntrl:]')
+    [ -f "$1/status/knowledge" ] && line=$(head -1 "$1/status/knowledge" | ai_sandbox_display_clean | tr '\t\n' '  ')
     printf '%s' "${line:-never}"
 }
 
@@ -762,7 +762,7 @@ run_in_sandbox() {   # <sandbox dir>
     [ "$(ai_sandbox_knowledge_state "$1")" = current ] || return 0
     ai_sandbox_container_running "$name" || return 0
     out=$(timeout -k 5 "$GIT_TIMEOUT" docker exec "$name" /usr/local/bin/sandbox-knowledge-sync </dev/null 2>&1) || rc=$?
-    [ -z "$out" ] || printf '%s\n' "$out" | tr -d '\000-\011\013-\037\177' | sed 's/^/  /'
+    [ -z "$out" ] || printf '%s\n' "$out" | ai_sandbox_display_clean | sed 's/^/  /'
     case $rc in
         0) ;;
         124|137) status_amend "the sandbox's own sync failed (timed out after ${GIT_TIMEOUT}s)" ;;
