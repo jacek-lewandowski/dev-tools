@@ -1201,9 +1201,9 @@ assert_contains "doctor prints line 1 of every status file" "$dout" "2026-02-02T
 assert_contains "doctor gives the age" "$dout" " min ago]"
 assert_eq "doctor prints no line but line 1" "$(printf '%s\n' "$dout" | grep -c 'second-line-secret')" 0
 assert_eq "doctor prints no control character from a status file" "$(printf '%s' "$dout" | tr -d '\n' | LC_ALL=C grep -c "[[:cntrl:]]")" 0
-dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=2 bash "$doctor" 2>&1)
+dout=$(env -u SANDBOX_STATUS_DIR -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=2 bash "$doctor" 2>&1)
 assert_contains "doctor without a status directory says the clone is not synced" "$dout" "clone not synced yet"
-dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE="$AI_SANDBOX_KNOWLEDGE_STAMP" bash "$doctor" 2>&1)
+dout=$(env -u SANDBOX_STATUS_DIR -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE="$AI_SANDBOX_KNOWLEDGE_STAMP" bash "$doctor" 2>&1)
 assert_contains "doctor handles the stamp the lib names" "$dout" "clone not synced yet"
 dout=$(env -u DISPLAY -u WAYLAND_DISPLAY HOME="$tmp/doctor-home" SANDBOX_KNOWLEDGE=1 bash "$doctor" 2>&1)
 assert_contains "doctor says a sandbox stamped 1 must be re-created" "$dout" "re-create"
