@@ -10,4 +10,20 @@ case "$1" in
         [ -n "${RCLONE_STUB_INDEX:-}" ] || { echo "directory not found" >&2; exit 3; }
         cat "$RCLONE_STUB_INDEX"; exit 0 ;;
 esac
+# A fixture tree for the pull: `copy [options] gdrive:AI_Sync/<rel> <dst>` puts the files of
+# $RCLONE_STUB_TREE/<rel> into <dst> (not under --dry-run), as a real copy would.
+if [ "$1" = copy ] && [ -n "${RCLONE_STUB_TREE:-}" ]; then
+    dry=""; pos=()
+    for a in "$@"; do
+        case $a in --dry-run) dry=1 ;; -*) ;; *) pos+=("$a") ;; esac
+    done
+    src=${pos[1]:-}; dst=${pos[2]:-}
+    case $src in
+        gdrive:AI_Sync/*)
+            rel=${src#gdrive:AI_Sync/}
+            if [ -z "$dry" ] && [ -d "$RCLONE_STUB_TREE/$rel" ]; then
+                mkdir -p "$dst"; cp -a "$RCLONE_STUB_TREE/$rel/." "$dst/"
+            fi ;;
+    esac
+fi
 exit 0
