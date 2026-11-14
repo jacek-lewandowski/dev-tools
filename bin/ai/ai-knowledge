@@ -484,11 +484,38 @@ cmd_render() {
     local tmp
     tmp=$(mktemp -d "$AI_SANDBOX_ROOT/shared/.knowledge-render.XXXXXX") || return 1
     if ! python3 -I - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
-import os, re, shutil, sys
+import os, re, shutil, stat, sys
 main, out, env_block = sys.argv[1:4]
+
+def refuse(path, why):
+    sys.exit("refused: %s %s" % (os.path.relpath(path, main), why))
+
+# Regular files and directories only, at every level, checked with lstat before anything is
+# written (a sandbox's integrator can put a link in main; the render would copy its target).
+def check_tree(path):
+    mode = os.lstat(path).st_mode
+    if stat.S_ISDIR(mode):
+        for fn in sorted(os.listdir(path)):
+            check_tree(os.path.join(path, fn))
+    elif not stat.S_ISREG(mode):
+        refuse(path, "is not a regular file or a directory")
+
+for top in ("rules", "roles", "skills"):
+    p = os.path.join(main, top)
+    if os.path.lexists(p):
+        if not stat.S_ISDIR(os.lstat(p).st_mode):
+            refuse(p, "is not a directory")
+        check_tree(p)
 
 def read(path):
     return open(path, encoding="utf-8").read()
+
+def read_main(path):   # no link is followed even if one appears after the check
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, encoding="utf-8") as f:
+        return f.read()
+
+ROLE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 def frontmatter(text):
     m = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.DOTALL)
@@ -519,7 +546,7 @@ for d in ("claude/agents", "gemini/agents", "antigravity/rules", "codex/agents",
 parts = []
 rules = os.path.join(main, "rules", "global.md")
 if os.path.isfile(rules):
-    parts.append(read(rules).rstrip("\n"))
+    parts.append(read_main(rules).rstrip("\n"))
 if os.path.isfile(env_block):
     parts.append(read(env_block).rstrip("\n"))
 with open(os.path.join(out, "GLOBAL.md"), "w", encoding="utf-8") as f:
@@ -530,11 +557,13 @@ if os.path.isdir(roles):
     for fn in sorted(os.listdir(roles)):
         if not fn.endswith(".md") or fn.lower() == "readme.md":
             continue
-        text = read(os.path.join(roles, fn))
+        text = read_main(os.path.join(roles, fn))
         if not text.endswith("\n"):
             text += "\n"
         meta, body = frontmatter(text)
         name = meta.get("name") or fn[:-3]
+        if not ROLE_NAME.fullmatch(name):
+            refuse(os.path.join(roles, fn), "has a role name outside [a-z0-9][a-z0-9-]{0,63}")
         description = meta.get("description", "")
         body = body.strip("\n") + "\n"
         # Claude Code subagents read the canonical format as is. Gemini CLI
