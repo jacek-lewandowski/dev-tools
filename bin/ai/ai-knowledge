@@ -793,7 +793,8 @@ confirm_main() {   # <the tip to push> <the host's own main, or empty>
         printf '\nChanged paths:\n'
         hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --name-status "$base" "$tip" | sed 's/^/  /' || true
         printf '\nPatch:\n'
-        hostgit --no-pager diff --no-ext-diff --no-textconv --no-color "$base" "$tip" || true
+        # --text: a NUL byte or a -diff/binary attribute would else replace the content with "Binary files differ"
+        hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --text "$base" "$tip" || true
         printf '\nPush main (%s) to %s? [y/N] ' "${tip:0:12}" "$REMOTE"
     } 2>&1 | ai_sandbox_display_clean >&2
     read -r reply || true
