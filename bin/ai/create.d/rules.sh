@@ -162,7 +162,8 @@ out. A project sandbox proposes a generic rule with the \`propose-rule\` skill: 
 file on a branch proposal/<date>-<slug>-<hex>, never a commit on main (a hook
 refuses it), never a push; the host pushes on the next sync (\`ai-knowledge sync\`, or
 a re-run of create-ai-sandbox.sh) and the integrator sandbox, which commits on main,
-decides with the \`knowledge-integrate\` skill. \`sandbox-doctor\` shows what is
+decides with the \`knowledge-integrate\` skill; the host pushes that main only after
+the user has seen the change and answered yes at a terminal. \`sandbox-doctor\` shows what is
 pushed and pending. A \`process-report\` report is filed the same way, as a ref
 refs/reports/<date>-<project>-<hex>, outside main and every branch; only the
 integrator sandbox receives it.
