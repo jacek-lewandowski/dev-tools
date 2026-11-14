@@ -144,6 +144,7 @@ assert_eq "no report outside the two bodies" "$(printf '%s\n' "$tree" | command 
 # a direct start planted in a copy of a real helper is reported by the same run that finds nothing in the real one
 mkdir -p "$tmp/planted"
 cp "$REPO_ROOT/bin/ai/ai-sandbox-restart" "$tmp/planted/ai-sandbox-restart"
+chmod u+w "$tmp/planted/ai-sandbox-restart"   # the copy of a read-only export is appended to below
 assert_eq "the real helper gives no report" "$(sg_reports "$tmp/planted" | command grep -c .)" 0
 printf 'git -C "$AI_SANDBOX_PROJECT" status\n' >> "$tmp/planted/ai-sandbox-restart"
 assert_eq "a planted direct start in it is reported" "$(sg_reports "$tmp/planted" | sed 's/.*://' | command grep -c .)" 1

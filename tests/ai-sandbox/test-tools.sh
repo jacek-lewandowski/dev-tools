@@ -73,10 +73,7 @@ assert_contains "the pinned gitleaks version is passed to the build" "$df" 'ARG 
 assert_contains "the gitleaks tarball is verified against the pinned sha256" "$df" 'sha256sum -c -'
 assert_contains "the pinned sha256 is passed to the build" "$df" 'ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 assert_contains "gitleaks is extracted root-owned" "$df" 'tar -xzf /tmp/gitleaks.tar.gz --no-same-owner'
-# Every copy of the version outside the generator must equal GITLEAKS_VERSION.
-gl_ver=$(sed -n "s/^readonly GITLEAKS_VERSION='\(.*\)'$/\1/p" "$REPO_ROOT/bin/ai/create.d/image.sh")
-gl_copies=$(grep -ohE 'v?[0-9]+\.[0-9]+\.[0-9]+' "$REPO_ROOT"/.githooks/* "$REPO_ROOT/README.md" | sed 's/^v//' | sort -u | tr '\n' ' ')
-assert_eq "gitleaks version copies in .githooks and README.md equal GITLEAKS_VERSION" "$gl_copies" "$gl_ver "
+# (the copies of the version in .githooks and README.md are checked by tests/git-hooks/test-hooks.sh)
 assert_contains "gitleaks is smoke-tested at build time" "$df" 'gitleaks version; '
 assert_contains "agy is installed from the antigravity tarball" \
     "$df" 'mv /tmp/antigravity /usr/local/bin/agy'

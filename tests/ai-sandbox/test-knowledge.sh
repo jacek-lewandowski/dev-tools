@@ -1331,7 +1331,7 @@ assert_status "the next sync with a sound origin is ok again" "$clone" "ok:"
 
 # create: knowledge/ and the origin exist before the sync step runs, and before any start
 o10p="$tmp/work/o10p"; mkdir -p "$o10p"
-rec="$tmp/o10-tree"; mkdir -p "$rec/bin/ai"; cp -a "$REPO_ROOT/bin/ai/." "$rec/bin/ai/"; ln -s "$REPO_ROOT/tools" "$rec/tools"
+rec="$tmp/o10-tree"; mkdir -p "$rec/bin/ai"; cp -a "$REPO_ROOT/bin/ai/." "$rec/bin/ai/"; chmod -R u+w "$rec"; ln -s "$REPO_ROOT/tools" "$rec/tools"
 o10dir=$(ai_sandbox_dir_for "$o10p")
 cat > "$rec/bin/ai/ai-knowledge" <<REC
 #!/usr/bin/env bash
