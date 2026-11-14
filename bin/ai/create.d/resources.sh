@@ -1,3 +1,7 @@
+# create.d/resources.sh -- memory, CPU set and timezone, and the host's memory-budget gate.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 # Resource limits for the container. Docker imposes none by default, so a
 # runaway build or an Electron leak can take the whole host down with it.
 #   MEMORY_GB         RAM the sandbox may use, in GB: --memory=GB, default 2,

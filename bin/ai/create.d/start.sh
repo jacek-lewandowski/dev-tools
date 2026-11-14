@@ -1,3 +1,7 @@
+# create.d/start.sh -- capacity check, start under the cache lock and the closing summary.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 start_gate() {
 # ---------------------------------------------------------------------------
 # Build and start

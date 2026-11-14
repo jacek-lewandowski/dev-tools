@@ -1,3 +1,7 @@
+# create.d/image.sh -- build context, Dockerfile, image build and stamp; the baked files are in ../image/.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 # Pinned upstream versions. Bump deliberately; do not float.
 readonly ANTIGRAVITY_CLI_VERSION='1.4.0-5281842794987520'
 readonly ANTIGRAVITY_HUB_VERSION='2.24.0-5780333019398144'
@@ -45,18 +49,19 @@ printf '%s\n' "${CLAUDE_PLUGINS[@]}" > "$BUILD_DIR/claude-plugins.list"
 cp "$SCRIPT_DIR/image/sandbox-doctor" "$BUILD_DIR/sandbox-doctor"
 
 # The 'for' loop's key:path list, generated here from the same table every
-# other surface reads (ai_sandbox_build_caches) when this file is written,
-# rather than duplicated by hand -- an unquoted heredoc just for this line, so
-# every other '$VAR' in the script stays literal for the container to expand.
-{
+# other surface reads (ai_sandbox_build_caches) rather than duplicated by hand,
+# and filled into the placeholder of the file copied above, as the entrypoint's
+# marketplace is. The value is escaped for sed (\, & and the | delimiter).
+doctor_loop=$({
     printf 'for _bc in'
     while IFS='|' read -r _key _path; do
         [ -n "$_key" ] || continue
         printf ' "%s:%s"' "$_key" "$_path"
     done < <(ai_sandbox_build_caches)
-    printf '; do\n'
-} >> "$BUILD_DIR/sandbox-doctor"
-unset _key _path
+    printf '; do'
+})
+sed -i "s|@BUILD_CACHE_LOOP@|$(printf '%s' "$doctor_loop" | sed -e 's/[\\&|]/\\&/g')|" "$BUILD_DIR/sandbox-doctor"
+unset _key _path doctor_loop
 
 cp "$SCRIPT_DIR/image/sandbox-desktop" "$BUILD_DIR/sandbox-desktop"
 

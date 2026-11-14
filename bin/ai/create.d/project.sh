@@ -1,3 +1,7 @@
+# create.d/project.sh -- prerequisites, project resolution, paths, the sandbox directory and the sync of shared stores.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------

@@ -1,3 +1,7 @@
+# create.d/devices.sh -- audio, serial devices, device cgroup rules and security_opt.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 devices_audio() {
 # ---------------------------------------------------------------------------
 # Audio

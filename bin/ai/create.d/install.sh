@@ -1,3 +1,7 @@
+# create.d/install.sh -- helper installation and the ~/.bashrc block.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 readonly BASHRC_BEGIN='# >>> dev-tools ai-sandbox helpers >>>'
 readonly BASHRC_END='# <<< dev-tools ai-sandbox helpers <<<'
 

@@ -1,3 +1,7 @@
+# create.d/options.sh -- usage, option parsing, and the options remembered in .env.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 usage() {
     cat <<'USAGE'
 Usage: create-ai-sandbox.sh [OPTIONS] [PROJECT_DIR]

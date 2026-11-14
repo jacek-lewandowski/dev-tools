@@ -1,3 +1,7 @@
+# create.d/seed.sh -- tool-state seed, IntelliJ and the SDKMAN farm.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 seed_tool_state() {
 # ---------------------------------------------------------------------------
 # Copy tool state into the sandbox

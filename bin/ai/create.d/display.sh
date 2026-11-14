@@ -1,3 +1,7 @@
+# create.d/display.sh -- display mode, X authority, start-display.sh, stop-display.sh and xpra.conf.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 display_resolve() {
 if [ "$DISPLAY_MODE" = "auto" ]; then
     if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$HOST_UID}/${WAYLAND_DISPLAY}" ]; then

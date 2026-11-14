@@ -61,7 +61,50 @@ while [ -L "$SCRIPT_PATH" ]; do
     esac
 done
 SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+
+. "$SCRIPT_DIR/create.d/options.sh"
+. "$SCRIPT_DIR/create.d/project.sh"
+. "$SCRIPT_DIR/create.d/display.sh"
+. "$SCRIPT_DIR/create.d/resources.sh"
+. "$SCRIPT_DIR/create.d/devices.sh"
+. "$SCRIPT_DIR/create.d/rules.sh"
+. "$SCRIPT_DIR/create.d/seed.sh"
+. "$SCRIPT_DIR/create.d/image.sh"
+. "$SCRIPT_DIR/create.d/compose.sh"
+. "$SCRIPT_DIR/create.d/install.sh"
+. "$SCRIPT_DIR/create.d/start.sh"
+
+# The modules define; the stages run here, in this order.
+options_parse "$@"
+project_prerequisites
 # Identity and path helpers, shared with the ai-sandbox-* commands so the two
 # can never compute a different id for the same project.
 # shellcheck source=bin/ai/ai-sandbox-lib.sh
 . "$SCRIPT_DIR/ai-sandbox-lib.sh"
+options_check_memory
+resources_budget_gate
+project_resolve
+options_remembered
+options_remembered_memory
+resources_limits
+image_name
+options_remembered_display
+display_resolve
+resources_cpuset
+display_environment
+devices_audio
+resources_timezone
+devices_enumerate
+rules_shared_brain
+seed_tool_state
+seed_idea
+seed_sdkman
+image_context
+compose_env
+compose_file
+display_launchers
+install_helpers
+start_gate
+image_build
+project_extensions
+start_run

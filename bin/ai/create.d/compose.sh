@@ -1,3 +1,7 @@
+# create.d/compose.sh -- the managed keys of .env and docker-compose.yml.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 compose_env() {
 # ---------------------------------------------------------------------------
 # .env

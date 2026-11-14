@@ -1,3 +1,7 @@
+# create.d/rules.sh -- shared-brain wiring, the generated AI sandbox environment block and the knowledge render call.
+# Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
+# stage functions in order and they set the script's globals.
+
 readonly MARKER_BEGIN='<!-- BEGIN dev-tools:ai-sandbox-environment -->'
 readonly MARKER_END='<!-- END dev-tools:ai-sandbox-environment -->'
 
