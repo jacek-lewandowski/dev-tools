@@ -126,7 +126,7 @@ for resp in '' '  \n\t '; do
     assert_eq       "empty response prints nothing ($resp)" "$(cat "$tmp/o")" ''
 done
 
-writer_line='You cannot write files or run commands here'
+writer_line='You cannot write files here, and the only shell commands allowed are read-only tools such as ls, cat, grep, find and diff: any other call is denied and cancels the whole run, so do not try.'
 printf -- '---\nname: writer\n---\n\nROLE-BODY-WRITER\n' > "$HOME/.gemini/agents/writer.md"
 "$DELEGATE" writer "$tmp/task.md" >/dev/null 2>&1; rc=$?
 assert_eq       "writer succeeds"         "$rc" '0'
@@ -142,7 +142,7 @@ for r in scout second-reviewer; do
     esac
 done
 
-reviewer_line='You cannot run commands, search with a shell, list directories or write files here'
+reviewer_line='You cannot write files here, and the only shell commands allowed are read-only tools such as ls, cat, grep, find and diff: a test runner, a build or anything else is denied and cancels the whole run, so do not try.'
 "$DELEGATE" second-reviewer "$tmp/task.md" >/dev/null 2>&1; rc=$?
 assert_eq       "second-reviewer succeeds" "$rc" '0'
 assert_contains "second-reviewer prompt has no-commands line" "$(cat "$tmp/prompt")" "$reviewer_line"
