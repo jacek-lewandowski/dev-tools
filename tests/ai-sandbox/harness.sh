@@ -56,6 +56,11 @@ assert_no_file() {
     if [ ! -e "$2" ]; then _pass "$1"; else _fail "$1" "path should not exist: $2"; fi
 }
 
+# A snapshot of a tree for the tests that plant a link into a trap: every entry's type, link target, content hash
+# and mode, so a write, a chmod or a replacement through a link changes it. One definition for the link tests (L11).
+snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do   # modes too: a chmod through a link is a write
+    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s %s\n' "$f" "$(stat -c %a "$f")" "$(sha256sum < "$f")"; else printf '%s %s\n' "$f" "$(stat -c %a "$f")"; fi; done ); }
+
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
 # A throwaway HOME with the stub docker first on PATH.

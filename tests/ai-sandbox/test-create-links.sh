@@ -2,8 +2,6 @@
 # create-ai-sandbox.sh writes nothing through a link a sandbox placed in a bind source (O9).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do
-    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s\n' "$f" "$(sha256sum < "$f")"; else printf '%s\n' "$f"; fi; done ); }
 create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/create.out" 2>"$tmp/create.err" </dev/null; }
 
 # A host with SDKMAN (two versions, a default, a gradle), a legacy brain file, a project with a generated .agentrules.

@@ -2,8 +2,6 @@
 # ai-sandbox-account refresh and reset write nothing through a link a sandbox placed in its state (O10).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do
-    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s\n' "$f" "$(sha256sum < "$f")"; else printf '%s\n' "$f"; fi; done ); }
 create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true; }
 acct() { ( cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" "$@" 2>&1 ); }
 

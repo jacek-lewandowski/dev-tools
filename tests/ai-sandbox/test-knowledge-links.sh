@@ -7,8 +7,6 @@ today=$(date +%F)
 kn() { DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
 mkproj() { mkdir -p "$1"; git -C "$1" init -q; d=$(ai_sandbox_dir_for "$1"); mkdir -p "$d"
     printf 'services: {}\n' > "$d/docker-compose.yml"; printf 'SANDBOX_KNOWLEDGE=2\nSANDBOX_PROJECT_DIR=%s\n' "$1" > "$d/.env"; }
-snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do
-    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s\n' "$f" "$(sha256sum < "$f")"; else printf '%s\n' "$f"; fi; done ); }
 
 # A host with a remote whose main holds one skill, the integrator's project and a proposing project p.
 host() {
