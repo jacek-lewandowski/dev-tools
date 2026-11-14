@@ -59,11 +59,11 @@ for pj in "$pn" "$px"; do
     d=$(dir "$pj")
     for f in "$d/start-display.sh" "$d/stop-display.sh"; do
         assert_eq "O11: $(basename "$f") of $(basename "$pj") holds no mkdir, chmod, ln or rm that names the socket directory" \
-            "$(grep -cE '\b(mkdir|chmod|ln|rm)\b.*(SOCK_DIR|X11_SOCKET_DIR|\.ai-sandbox-)' "$f")" 0
+            "$(grep -vE '\bnofollow (mkdir|hardlink|remove) ' "$f" | grep -cE '\b(mkdir|chmod|ln|rm)\b.*(SOCK_DIR|SOCK_REL|X11_SOCKET_DIR|\.ai-sandbox-)')" 0
     done
 done
 assert_eq "O11: display.sh holds no mkdir, chmod, ln or rm that names the socket directory" \
-    "$(grep -v 'ai_sandbox_nofollow' "$REPO_ROOT/bin/ai/create.d/display.sh" | grep -cE '\b(mkdir|chmod|ln|rm)\b.*(SOCK_DIR|X11_SOCKET_DIR)')" 0
+    "$(grep -vE 'ai_sandbox_nofollow|\bnofollow (mkdir|hardlink|remove) ' "$REPO_ROOT/bin/ai/create.d/display.sh" | grep -cE '\b(mkdir|chmod|ln|rm)\b.*(SOCK_DIR|SOCK_REL|X11_SOCKET_DIR)')" 0
 assert_contains "O11: start-display.sh makes the directory and publishes the socket through the function" \
     "$(cat "$(dir "$pn")/start-display.sh")" "hardlink"
 assert_contains "O11: stop-display.sh removes the socket through the function" "$(cat "$(dir "$pn")/stop-display.sh")" "remove"
@@ -81,7 +81,7 @@ assert_eq "O11: stop-display.sh exits 0" "$rc" 0
 assert_eq "O11: and removes the published socket" "$([ -e "$sockdir/X$xnum" ] && echo yes || echo no)" no
 
 # A link a sandbox put at the socket directory (a --display=host sandbox writes /tmp/.X11-unix)
-snapt() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$([ -f "$f" ] && sha256sum < "$f")"; done ); }
+snapt() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s %s\n' "$f" "$(stat -c %a "$f")" "$([ -f "$f" ] && sha256sum < "$f")"; done ); }
 mkdir -p "$tmp/trap"; printf 'trap\n' > "$tmp/trap/X$xnum"; t0=$(snapt "$tmp/trap")
 rmdir "$sockdir"; ln -s "$tmp/trap" "$sockdir"
 PATH="$stubs:$PATH" bash "$(dir "$pn")/stop-display.sh" >/dev/null 2>&1
