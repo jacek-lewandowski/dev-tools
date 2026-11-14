@@ -181,6 +181,11 @@ kn sync "$integ" >"$tmp/l3.out" 2>"$tmp/l3.err" </dev/null
 assert_contains "L3: a refused branch leads line 1" "$(l1)" "refused not pushed:"
 assert_contains "L3: line 1 still says main waits" "$(l1)" "main waits for your confirmation"
 
+# --- L7: default-ignorable code points and the line and paragraph separators are written out too
+setup "$(printf 'v\xef\xb8\x8fA s\xf3\xa0\x84\x80B h\xe3\x85\xa4C l\xe2\x80\xa8D end')" "- be kind"
+python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/ai-knowledge" sync "$integ" >"$tmp/l7.out" 2>&1
+assert_contains "L7: U+FE0F, U+E0100, U+3164 and U+2028 are shown as text" "$(cat "$tmp/l7.out")" "v<U+FE0F>A s<U+E0100>B h<U+3164>C l<U+2028>D end"
+
 # --- read: no bypass, and the shown change comes from the id resolved before it
 cd "$REPO_ROOT" || exit 1
 assert_eq "O1 read: no variable, option or key skips the question" "$(git grep -nE 'CONFIRM|ASSUME_YES|--yes|-y\)' -- bin/ai/ai-knowledge | wc -l | tr -d ' ')" 0

@@ -413,13 +413,16 @@ sys.stdout.buffer.write(keep.encode("utf-8"))' \
 ai_sandbox_show_invisible() {
     python3 -I -c '
 import sys, unicodedata
+# Default_Ignorable_Code_Point of DerivedCoreProperties.txt, Unicode 18.0.0 (https://www.unicode.org/Public/UCD/latest/ucd/DerivedCoreProperties.txt, fetched 2026-11-14, ranges merged by script)
+IGNORABLE = ((0xAD, 0xAD), (0x34F, 0x34F), (0x61C, 0x61C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
 text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
 out = []
 for c in text:
     n = ord(c)
     if 0xDC80 <= n <= 0xDCFF:
         out.append("<0x%02X>" % (n - 0xDC00))
-    elif c not in "\n\t" and unicodedata.category(c) in ("Cc", "Cf", "Co", "Cn", "Cs"):
+    elif c not in "\n\t" and (unicodedata.category(c) in ("Cc", "Cf", "Co", "Cn", "Cs") or n in (0x2028, 0x2029)
+                              or any(lo <= n <= hi for lo, hi in IGNORABLE)):
         out.append("<U+%04X>" % n)
     else:
         out.append(c)
