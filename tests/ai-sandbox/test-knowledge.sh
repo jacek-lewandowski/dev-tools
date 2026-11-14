@@ -21,7 +21,18 @@ export AI_KNOWLEDGE_GIT_TIMEOUT=20
 # The sync reads a sandbox's clone in a container of the sandbox image; the stub docker has one
 # unless a case says otherwise (KNOWLEDGE_IMAGES=none).
 kimages="$(ai_sandbox_image_name base) $(ai_sandbox_image_name docker) $(ai_sandbox_image_name base gui) $(ai_sandbox_image_name docker gui)"
-knowledge() { DOCKER_STUB_IMAGES="${KNOWLEDGE_IMAGES-$kimages}" bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
+knowledge_plain() { DOCKER_STUB_IMAGES="${KNOWLEDGE_IMAGES-$kimages}" bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
+# U12: the integrator's main reaches the remote only after a yes at a terminal. A sync of the integrator's
+# project, and sync --all, therefore run under a pseudo-terminal that answers y; KNOWLEDGE_PLAIN=1 runs the
+# command as it is (the cases of O1 drive the terminal themselves).
+PTY="$REPO_ROOT/tests/ai-sandbox/pty-run.py"
+knowledge() {
+    if [ -z "${KNOWLEDGE_PLAIN:-}" ] && [ "${1:-}" = sync ] && { [ "${2:-}" = --all ] || [ "${2:-}" = "${integ:-}" ]; }; then
+        DOCKER_STUB_IMAGES="${KNOWLEDGE_IMAGES-$kimages}" python3 -I "$PTY" --answer y -- bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"
+    else
+        knowledge_plain "$@"
+    fi
+}
 # C-STATUS: the outcome of a sync is <sandbox dir>/status/knowledge, line 1 "<time> <word> <message>".
 status_file() { printf '%s/status/knowledge' "$(dirname "$1")"; }   # <clone>
 status_of() {   # <clone>: line 1 without its timestamp, as the sync's own text (ok/refused/offline carry their colon)
@@ -499,6 +510,8 @@ echo '- be patient' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "
 AI_KNOWLEDGE_JOBS=1 knowledge sync --all >"$tmp/all2.out" 2>&1 || cat "$tmp/all2.out"
 assert_eq "all: two renders when the integrator advanced main" "$(grep -c 'rendered' "$tmp/all2.out")" 2
 assert_contains "all: render carries the new main" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "- be patient"
+# the integrator's clone is synced last (D4), so the project's origin sees the pushed main on its next sync
+knowledge sync "$proj" >/dev/null 2>&1
 sbsync "$proj" >/dev/null
 assert_contains "all: project clone merged the new main (by the sandbox's command)" "$(cat "$clone/rules/global.md")" "- be patient"
 rm -rf "$tdir"

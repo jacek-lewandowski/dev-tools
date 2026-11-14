@@ -679,6 +679,7 @@ refresh_origin_noted() {   # <sandbox dir> <proposals|integrator>
 # ---------------------------------------------------------------------------
 
 CLONE=""
+SYNC_PROJECT=""    # the project directory of the clone being synced, for the commands the status names
 MAIN_PUSHED="no"   # set when the integrator sync advanced origin/main
 STATUS_NOTE=""     # appended to this clone's status line
 STATUS_FILE=""; STATUS_ROLE=""; STATUS_ID=""
@@ -770,6 +771,36 @@ run_in_sandbox() {   # <sandbox dir>
     esac
 }
 
+# U12: the question is asked only where a person can answer it: standard input and standard
+# error are terminals and this process group is the terminal's foreground group (a background
+# job would be stopped at the read, unseen). create's output in a log, a pipe, B4's loop: no.
+at_terminal() {
+    local pg
+    [ -t 0 ] && [ -t 2 ] || return 1
+    pg=$(ps -o pgid= -o tpgid= -p $$ 2>/dev/null) || return 1
+    set -- $pg
+    [ $# -eq 2 ] && [ "$1" = "$2" ]
+}
+# U12: shows what the integrator's main holds beyond the remote's (commits, changed paths, the
+# patch; all through the display filter, on standard error) and asks. 0 only on yes; no
+# environment variable, option or configuration key answers it (D6).
+confirm_main() {   # <the tip to push> <the host's own main, or empty>
+    local tip=$1 base=${2:-4b825dc642cb6eb9a060e54bf8d69288fbee4904} reply=""
+    {
+        printf '\nThe integrator'"'"'s main is ahead of the remote'"'"'s. Commits:\n'
+        if [ -n "${2:-}" ]; then hostgit --no-pager log --no-decorate --no-notes -n 50 --format='  %h %s' "$2..$tip" || true
+        else hostgit --no-pager log --no-decorate --no-notes -n 50 --format='  %h %s' "$tip" || true; fi
+        printf '\nChanged paths:\n'
+        hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --name-status "$base" "$tip" | sed 's/^/  /' || true
+        printf '\nPatch:\n'
+        hostgit --no-pager diff --no-ext-diff --no-textconv --no-color "$base" "$tip" || true
+        printf '\nPush main (%s) to %s? [y/N] ' "${tip:0:12}" "$REMOTE"
+    } 2>&1 | ai_sandbox_display_clean >&2
+    read -r reply || true
+    case $reply in y|Y|yes|YES|Yes) return 0 ;; esac
+    return 1
+}
+
 # <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the caller: every
 # outcome is line 1 of the sandbox's status/knowledge. The host reads the clone only
 # through ai_sandbox_confined_fetch, which mirrors its branches, reports and tombstones
@@ -780,7 +811,8 @@ run_in_sandbox() {   # <sandbox dir>
 #
 # Order, for both roles: mirror -> classify every proposal branch as malformed, closed
 # (tip_state), empty, or open -> push the open ones -> list the closed ones. The
-# integrator also pushes its main when it descends from the host's own and deletes
+# integrator also pushes its main when it descends from the host's own, after the user's yes
+# at a terminal (confirm_main), and deletes
 # closed branches on the remote, under a lease on the tip it saw, so an amendment pushed
 # meanwhile survives.
 sync_clone() {
@@ -879,22 +911,24 @@ sync_clone() {
         pushed=$((pushed + 1))
     done < <(hostgit for-each-ref --format='%(refname)' "$mirror/heads/proposal/")
 
-    local main_note=""
+    local main_note="" main_waits=""
     if [ "$role" = integrator ] && [ "$main_state" = current ] && [ -n "$mmain" ] && [ "$mmain" != "$hmain" ]; then
-        if [ "$net" = no ]; then
-            HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$mirror/heads/main:refs/heads/main")"); main_note="main pending"
-        else
+        # U12: main reaches the remote only after the user's yes, at a terminal; the id pushed is
+        # the one resolved above, before the display. Without a yes the status names the command.
+        if [ "$net" = yes ] && at_terminal && confirm_main "$mmain" "$hmain"; then
             rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$mmain:refs/heads/main" 2>&1) || rc=$?
             if [ "$rc" -eq 0 ]; then MAIN_PUSHED="yes"; main_note="main pushed"
-            else net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$mirror/heads/main:refs/heads/main")"); main_note="main push failed"
+            else net_failed "$rc" "$out"; HINT_PUSH+=("$(hint ai-knowledge sync "$SYNC_PROJECT")"); main_note="main push failed"
             fi
+        else
+            main_waits=yes; main_note="main waits for your confirmation: run $(hint ai-knowledge sync "$SYNC_PROJECT")"
         fi
     fi
     # Remote deletion: only the integrator, only after main is on the remote,
     # only for a tip that is an ancestor of origin/main, and only if the remote
     # still has that tip (the lease). A rejected lease means the proposer pushed
     # an amendment: the proposal is open again, nothing is lost.
-    if [ "$role" = integrator ] && [ "$net" = yes ] && [ "$main_note" != "main push failed" ] && [ "$main_note" != "main pending" ]; then
+    if [ "$role" = integrator ] && [ "$net" = yes ] && [ "$main_note" != "main push failed" ] && [ -z "$main_waits" ]; then
         # Branches the integrator closed in this round became ancestors of
         # origin/main only now that main is pushed; list those too.
         while IFS= read -r ref; do
@@ -1029,6 +1063,8 @@ sync_clone() {
         set_status "offline: cannot reach $REMOTE; pending push: $pending branch(es)${main_note:+, $main_note} (see the commands below)"
     elif [ -n "$pushfail" ] || [ "$main_note" = "main push failed" ]; then
         set_status "push failed: $NET_REASON (${main_note:+$main_note}${pushfail:+; branches:$pushfail})"
+    elif [ -n "$main_waits" ]; then
+        set_status "$main_note; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")$([ "$rpushed" -eq 0 ] || printf '; reports pushed %d' "$rpushed")"
     else
         set_status "ok: main current${main_note:+, $main_note}; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")$([ "$rpushed" -eq 0 ] || printf '; reports pushed %d' "$rpushed")"
     fi
@@ -1043,6 +1079,7 @@ sync_clone() {
 # by 'sync PROJECT_DIR' and by the children of 'sync --all'; never renders.
 sync_project_clone() {   # <project dir> <sandbox dir>
     local project=$1 sb=$2 id role=proposals
+    SYNC_PROJECT=$project
     id=$(ai_sandbox_project_id "$project")
     if [ -n "$INTEGRATOR" ] && [ "$INTEGRATOR" = "$project" ]; then role=integrator; fi
     if ! lock_take "$sb/.knowledge.lock"; then
@@ -1105,6 +1142,7 @@ cmd_sync() {
 cmd_sync_all() {
     local jobs="${AI_KNOWLEDGE_JOBS:-4}" before after sb project state pids=() running=0
     local -a sbs=() projects=()
+    local integ_sb="" irc=0
     sync_main_and_render || return 0
     before=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
 
@@ -1114,6 +1152,9 @@ cmd_sync_all() {
         rm -f "$sb/.sync-output.$$" "$sb/.sync-exit.$$"
         [ -n "$project" ] || continue                       # unstamped: a row, no child
         [ "$(ai_sandbox_knowledge_state "$sb")" = current ] || continue   # stale: refused at start too
+        # The integrator's clone is synced last, in the foreground: it may ask (U12), and its
+        # question is then the last thing on the terminal.
+        if [ -n "$INTEGRATOR" ] && [ "$project" = "$INTEGRATOR" ]; then integ_sb=$sb; continue; fi
         while [ "$running" -ge "$jobs" ]; do wait -n || true; running=$((running - 1)); done
         (
             # The subshell inherits set -e; without the guard a failing child
@@ -1133,7 +1174,13 @@ cmd_sync_all() {
         cat "$sb/.sync-output.$$"
     done
 
-    # An integrator child may have pushed main; one more fetch shows it.
+    if [ -n "$integ_sb" ]; then
+        printf '\n== %s\n' "$(basename "$integ_sb")"
+        sync_project_clone "$INTEGRATOR" "$integ_sb" || irc=$?
+        echo "$irc" > "$integ_sb/.sync-exit.$$"
+    fi
+
+    # An integrator clone may have pushed main; one more fetch shows it.
     if [ "$MAIN_FETCHED" = yes ]; then
         if lock_take "$AI_KNOWLEDGE_ROOT/.lock"; then
             sync_main || true
