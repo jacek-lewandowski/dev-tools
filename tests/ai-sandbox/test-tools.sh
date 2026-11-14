@@ -53,6 +53,9 @@ done
 assert_eq "no unfilled ARG placeholder is left"          "$(printf '%s\n' "$df" | grep -c '@[A-Z_0-9]*@')" 0
 assert_contains "playwright is pinned"                   "$df" 'ARG PLAYWRIGHT_VERSION=1.65.1'
 assert_contains "puppeteer-core is pinned"               "$df" 'ARG PUPPETEER_CORE_VERSION=25.17.0'
+# A project's own 'npx playwright install' writes into PLAYWRIGHT_BROWSERS_PATH (lock dir included): the sandbox user must be able to.
+assert_contains "the browsers path is writable by the sandbox user" "$df" 'chmod -R a+rwX "${PLAYWRIGHT_BROWSERS_PATH}"'
+assert_contains "and its top directory takes new revisions and locks"  "$df" 'chmod 1777 "${PLAYWRIGHT_BROWSERS_PATH}"'
 # Without buildx the build cannot use cache mounts: fail before doing anything.
 DOCKER_STUB_NO_BUILDX=1 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-start "$proj" >"$tmp/out.nobx" 2>&1; nobx_rc=$?
 assert_ne       "create refuses without docker buildx"   "$nobx_rc" 0

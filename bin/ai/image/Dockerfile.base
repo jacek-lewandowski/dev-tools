@@ -106,6 +106,8 @@ RUN set -eux; \
 # (npx @playwright/mcp, configured by PLAYWRIGHT_MCP_* variables) are pointed at.
 ARG PLAYWRIGHT_VERSION=@PLAYWRIGHT_VERSION@
 ARG PUPPETEER_CORE_VERSION=@PUPPETEER_CORE_VERSION@
+# World-writable, so a project's own 'npx playwright install' (which takes a lock
+# directory here) and the first-launch validation file work as the sandbox user.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     NODE_PATH=/usr/lib/node_modules
 RUN set -eux; \
@@ -116,7 +118,8 @@ RUN set -eux; \
     printf '#!/bin/bash\nexec "%s" --no-sandbox --disable-dev-shm-usage "$@"\n' "${shell}" \
         > /usr/local/bin/chromium-headless; \
     chmod +x /usr/local/bin/chromium-headless; \
-    chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"; \
+    chmod -R a+rwX "${PLAYWRIGHT_BROWSERS_PATH}"; \
+    chmod 1777 "${PLAYWRIGHT_BROWSERS_PATH}"; \
     npm cache clean --force
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless \
     PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/chromium-headless \
