@@ -610,7 +610,7 @@ if [ -f "$ENV_FILE" ]; then
     case "$NESTED_DISPLAY_NUM" in *[!0-9]*) NESTED_DISPLAY_NUM="" ;; esac
 fi
 if [ -z "$NESTED_DISPLAY_NUM" ]; then
-    declare -A CLAIMED_DISPLAY=()
+    declare -gA CLAIMED_DISPLAY=()
     for other_env in "$AI_SANDBOX_ROOT"/*-agent/.env; do
         other_dir=${other_env%/.env}
         [ -f "$other_env" ] && [ "$other_dir" != "$SANDBOX_DIR" ] || continue
@@ -655,7 +655,7 @@ cpuset_valid() {
 CPUSET=""
 [ -f "$ENV_FILE" ] && CPUSET=$(sed -n 's/^SANDBOX_CPUSET=//p' "$ENV_FILE" | tail -n 1)
 if ! cpuset_valid "$CPUSET"; then
-    declare -a CPU_LOAD=()
+    declare -ga CPU_LOAD=()
     for (( c = 0; c < HOST_CPUS; c++ )); do CPU_LOAD[c]=0; done
     for other_env in "$AI_SANDBOX_ROOT"/*-agent/.env; do
         other_dir=${other_env%/.env}
@@ -886,7 +886,7 @@ step "Enumerating devices"
 
 DEVICE_LINES=""
 CGROUP_LINES=""
-declare -A SEEN_CGROUP=()
+declare -gA SEEN_CGROUP=()
 
 add_device() { DEVICE_LINES="${DEVICE_LINES}      - \"$1:$1\""$'\n'; }
 add_cgroup() {
