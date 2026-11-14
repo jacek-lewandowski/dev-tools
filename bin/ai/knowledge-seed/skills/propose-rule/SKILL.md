@@ -9,7 +9,7 @@ This sandbox reads its rules read-only and proposes changes through its own clon
 of the knowledge repository at `~/knowledge`. The clone has `main` checked out;
 every proposal is one file on its own branch `proposal/<date>-<slug>-<hex>`. You
 can commit there. You cannot fetch or push; the host does that on the next sync:
-a sandbox start, or `ai-knowledge sync --all` run by the user on the host.
+`ai-knowledge sync` run by the user on the host, or a re-run of `create-ai-sandbox.sh`.
 
 ## When
 
@@ -66,7 +66,7 @@ here.
    ```
    A branch left as `proposal/tmp-...` is never pushed; finish the rename.
 6. Tell the user the proposal is committed on its branch and reaches the remote on
-   the next sync (a sandbox start, or `ai-knowledge sync --all` on the host), and
+   the next sync (`ai-knowledge sync` on the host, or a re-run of `create-ai-sandbox.sh`), and
    that the integrator decides whether it enters `main`. Once it is closed, the
    host deletes the branch here on a later sync.
 

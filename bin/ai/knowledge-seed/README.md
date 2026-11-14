@@ -41,7 +41,7 @@ edit this repository.
 
 1. An agent in a project sandbox learns something generic and runs the
    `propose-rule` skill, which commits one proposal file on its own branch.
-2. On the next sync (a sandbox start, or `ai-knowledge sync --all` on the host) the
+2. On the next sync (`ai-knowledge sync` on the host, or a re-run of `create-ai-sandbox.sh`) the
    host pushes the branch and fast-forwards the clone's `main`.
 3. In the integrator sandbox the `knowledge-integrate` skill triages every open
    proposal, the user approves, the agent commits to `main` and closes each

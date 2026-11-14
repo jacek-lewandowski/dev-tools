@@ -526,6 +526,10 @@ assert_eq "ai-sandbox enters a running stale sandbox" "$r" 0
 assert_contains "entering a running stale sandbox goes through compose" "$(stub_docker_log)" "compose"
 assert_contains "entering a running stale sandbox execs into it" "$(stub_docker_log)" "exec"
 assert_eq "no compose up for a running stale sandbox" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+# entering a sandbox does not sync knowledge: only create and an explicit sync do
+rm -f "$pdir/status/knowledge"
+(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox" >/dev/null 2>&1) || true
+assert_no_file "ai-sandbox entry does not sync knowledge" "$pdir/status/knowledge"
 : > "$DOCKER_STUB_LOG"
 msg=$(cd "$stale" && DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
 assert_eq "ai-sandbox refuses to start a stale sandbox" "$r" 1
@@ -548,7 +552,7 @@ assert_eq "ai-sandbox enters a running sandbox stamped 1" "$r" 0
 assert_contains "the host says a running sandbox stamped 1 must be re-created" "$msg" "must be re-created"
 assert_contains "the host names the re-create command for it" "$msg" "create-ai-sandbox.sh $oldp"
 assert_eq "the notice names exactly one repair command" "$(printf '%s\n' "$msg" | grep -c '^    ')" 1
-assert_status "the host side of a running sandbox stamped 1 is synced" "$odir/knowledge" "ok:"
+assert_no_file "the host does not sync a running sandbox stamped 1 on entry" "$odir/status/knowledge"
 assert_eq "nothing is executed in a running sandbox stamped 1 but the entered shell" "$(grep -c '^compose.* exec ' "$DOCKER_STUB_LOG")" 1
 assert_eq "the in-sandbox sync is not run in a sandbox stamped 1" "$(grep -c 'sandbox-knowledge-sync' "$DOCKER_STUB_LOG")" 0
 assert_eq "no compose up for a running sandbox stamped 1" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
