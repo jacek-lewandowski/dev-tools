@@ -5,6 +5,7 @@
 # the phase 3 pin matrix and writes <out>/manifest: per case and run, the exit status, the
 # output streams, the stub docker log, and every path the run left under the root.
 # PIN_CASES="K5 K15" limits a run to those cases (method checks).
+# PIN_UMASK=002 runs the create calls under that umask (default 022, the pinned one): the modes of the footprint then show what a umask does.
 # Two manifests are comparable only when taken at the same fixed work path (the project id
 # hashes the absolute path), so the work path is fixed here; run under the suite lock.
 #
@@ -37,6 +38,7 @@ UIDN=$(id -u)
 IMG_BASE=ai-sandbox:base-u$UIDN
 IMG_DOCKER=ai-sandbox:docker-u$UIDN
 MANIFEST=$OUT/manifest
+PIN_UMASK=${PIN_UMASK:-022}
 
 # ---------------------------------------------------------------- fixtures outside the root
 rm -rf "$WORK"; mkdir -p "$WORK" "$TD" "$XS" "$NR" "$BC" "$WORK/etc"
@@ -147,7 +149,7 @@ inv() {   # <create args...>: one call of the case's tree's create, recorded
     local rc
     x11_before
     if [ "$RUN" = 1 ]; then
-        ( cd "$PROJ" && umask 022 && env -i "${RUNENV[@]}" /bin/bash "$CASE_TREE/bin/ai/create-ai-sandbox.sh" "$@" \
+        ( cd "$PROJ" && umask "$PIN_UMASK" && env -i "${RUNENV[@]}" /bin/bash "$CASE_TREE/bin/ai/create-ai-sandbox.sh" "$@" \
             > "$WORK/out" 2> "$WORK/err" ); rc=$?
         { echo "== $CASE run1 inv$INV args: $*"; echo "rc=$rc"
           echo "-- stdout"; norm < "$WORK/out"
@@ -157,7 +159,7 @@ inv() {   # <create args...>: one call of the case's tree's create, recorded
           echo "-- x11"; x11_after
         } >> "$MANIFEST"
     else
-        ( cd "$PROJ" && umask 022 && env -i "${RUNENV[@]}" /bin/bash "$CASE_TREE/bin/ai/create-ai-sandbox.sh" "$@" \
+        ( cd "$PROJ" && umask "$PIN_UMASK" && env -i "${RUNENV[@]}" /bin/bash "$CASE_TREE/bin/ai/create-ai-sandbox.sh" "$@" \
             > "$WORK/comb" 2>&1 ); rc=$?
         { echo "== $CASE run2 inv$INV args: $*"; echo "rc=$rc"
           echo "-- combined"; norm < "$WORK/comb"

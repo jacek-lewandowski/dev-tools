@@ -42,11 +42,12 @@ image_context() {
 
 step "Generating build context"
 
-cp "$SCRIPT_DIR/image/entrypoint.sh" "$BUILD_DIR/entrypoint.sh"
+# Written with cat, as the base did: a new file then gets 0666 & ~umask, where cp would give 0644 & ~umask.
+cat "$SCRIPT_DIR/image/entrypoint.sh" > "$BUILD_DIR/entrypoint.sh"
 sed -i -e "s|@MARKETPLACE_SOURCE@|$CLAUDE_PLUGINS_MARKETPLACE_SOURCE|" -e "s|@MARKETPLACE@|$CLAUDE_PLUGINS_MARKETPLACE|" "$BUILD_DIR/entrypoint.sh"
 printf '%s\n' "${CLAUDE_PLUGINS[@]}" > "$BUILD_DIR/claude-plugins.list"
 
-cp "$SCRIPT_DIR/image/sandbox-doctor" "$BUILD_DIR/sandbox-doctor"
+cat "$SCRIPT_DIR/image/sandbox-doctor" > "$BUILD_DIR/sandbox-doctor"
 
 # The 'for' loop's key:path list, generated here from the same table every
 # other surface reads (ai_sandbox_build_caches) rather than duplicated by hand,
@@ -63,15 +64,15 @@ doctor_loop=$({
 sed -i "s|@BUILD_CACHE_LOOP@|$(printf '%s' "$doctor_loop" | sed -e 's/[\\&|]/\\&/g')|" "$BUILD_DIR/sandbox-doctor"
 unset _key _path doctor_loop
 
-cp "$SCRIPT_DIR/image/sandbox-desktop" "$BUILD_DIR/sandbox-desktop"
+cat "$SCRIPT_DIR/image/sandbox-desktop" > "$BUILD_DIR/sandbox-desktop"
 
-cp "$SCRIPT_DIR/image/sandbox-idea" "$BUILD_DIR/sandbox-idea"
+cat "$SCRIPT_DIR/image/sandbox-idea" > "$BUILD_DIR/sandbox-idea"
 
-cp "$SCRIPT_DIR/image/xdg-open" "$BUILD_DIR/xdg-open"
+cat "$SCRIPT_DIR/image/xdg-open" > "$BUILD_DIR/xdg-open"
 
 # Interactive shell configuration, sourced from .bashrc. Written as a real file
 # rather than a chain of echoes so that quoting is unambiguous.
-cp "$SCRIPT_DIR/image/sandbox-bashrc.sh" "$BUILD_DIR/sandbox-bashrc.sh"
+cat "$SCRIPT_DIR/image/sandbox-bashrc.sh" > "$BUILD_DIR/sandbox-bashrc.sh"
 
 # Environment for EVERY shell. Agents never get an interactive one: 'ai-sandbox
 # <cmd>' runs 'bash -lc', which reads /etc/profile.d but stops in .bashrc at
@@ -80,19 +81,19 @@ cp "$SCRIPT_DIR/image/sandbox-bashrc.sh" "$BUILD_DIR/sandbox-bashrc.sh"
 # installed" and got apt-installed instead of taken from SDKMAN. This file is
 # reached from all three directions (profile.d symlink, BASH_ENV, .bashrc) and
 # therefore has to be idempotent, silent and POSIX sh.
-cp "$SCRIPT_DIR/image/sandbox-env.sh" "$BUILD_DIR/sandbox-env.sh"
+cat "$SCRIPT_DIR/image/sandbox-env.sh" > "$BUILD_DIR/sandbox-env.sh"
 
 # 'sdk' is a shell function that only interactive shells define. Agents run
 # 'bash -c' and subprocesses, where it does not exist -- so they gave up on
 # SDKMAN and apt-installed a JDK. This wrapper makes the command work from
 # anywhere; interactive shells still get the real function, which shadows it.
-cp "$SCRIPT_DIR/image/sandbox-sdk" "$BUILD_DIR/sandbox-sdk"
+cat "$SCRIPT_DIR/image/sandbox-sdk" > "$BUILD_DIR/sandbox-sdk"
 
 # Managed settings (root-owned in the image): Claude Code takes classifier
 # (autoMode) rules only from user/flag/managed sources, and will not let a
 # session write them into its own settings. Without this, auto mode blocks
 # `agy -p` as exfiltration to Google.
-cp "$SCRIPT_DIR/image/claude-managed-settings.json" "$BUILD_DIR/claude-managed-settings.json"
+cat "$SCRIPT_DIR/image/claude-managed-settings.json" > "$BUILD_DIR/claude-managed-settings.json"
 
 cp "$SCRIPT_DIR/image/ai-delegate" "$BUILD_DIR/ai-delegate"
 cp "$SCRIPT_DIR/image/sandbox-knowledge-sync" "$BUILD_DIR/sandbox-knowledge-sync"
@@ -100,7 +101,7 @@ cp "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
 
 # --- Dockerfile ------------------------------------------------------------
 
-cp "$SCRIPT_DIR/image/Dockerfile.head" "$BUILD_DIR/Dockerfile"
+cat "$SCRIPT_DIR/image/Dockerfile.head" > "$BUILD_DIR/Dockerfile"
 
 cat "$SCRIPT_DIR/image/Dockerfile.base" >> "$BUILD_DIR/Dockerfile"
 
