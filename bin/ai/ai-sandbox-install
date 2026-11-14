@@ -78,8 +78,14 @@ fi
 # would have the host mount another directory the user can read. Links above the project
 # are the user's own.
 check_from() {   # <directory as given> <directory, links resolved>
-    local abs cur="" comp in_project=no
-    local -a parts
+    local abs cur="" comp in_project=no d line st phys
+    local -a parts stamped=()
+    # the stamps' lines, resolved as ai_sandbox_writable_path resolves them: a stamp may hold
+    # the path as the user's link gave it
+    for d in "$AI_SANDBOX_ROOT"/*-agent; do
+        [ -f "$d/project-path" ] && IFS= read -r line < "$d/project-path" && [ -n "$line" ] || continue
+        stamped+=("$(readlink -m -- "$line")")
+    done
     [ -e "$2/.git" ] || die "--from takes a repository's top level (the directory holding .git): $1"
     abs=$(realpath -sm -- "$1")
     [ "$(readlink -f -- "$abs")" = "$2" ] || die "--from: a path with a link before a '..' is not accepted: $1"
@@ -88,8 +94,9 @@ check_from() {   # <directory as given> <directory, links resolved>
         cur="$cur/$comp"
         if [ "$in_project" = yes ]; then
             [ ! -L "$cur" ] || die "--from: $cur is a link below a sandbox project; give the repository's own path"
-        elif ai_sandbox_stamped "$(readlink -f -- "$cur")"; then
-            in_project=yes
+        else
+            phys=$(readlink -f -- "$cur")
+            for st in "${stamped[@]}"; do [ "$st" != "$phys" ] || in_project=yes; done
         fi
     done
 }

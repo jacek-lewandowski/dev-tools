@@ -407,6 +407,22 @@ ln -s "$S2" "$S2/tools/self"
 rc=$(fromrun "$S2/tools/self" main)
 assert_eq "--from a path through a link below its stamped project: exit 1" "$rc" 1
 nodocker "a link below the project"
+# a stamp written in logical form (through a user's link, as an older create's pwd wrote it)
+new_home; INST="$AI_SANDBOX_ROOT/installed"
+mkdir -p "$T/real/proj" "$T/other"; ln -s real "$T/ln"
+git init -q -b main "$T/other"; git -C "$T/other" commit -q --allow-empty -m other
+ln -s "$T/other" "$T/real/proj/evil"
+qd=$(ai_sandbox_dir_for "$T/ln/proj"); mkdir -p "$qd"; printf '%s\n' "$T/ln/proj" > "$qd/project-path"
+: > "$DOCKER_STUB_LOG"
+rc=$(DOCKER_STUB_IMAGES="$img" inst --from "$T/ln/proj/evil" main)
+assert_eq "--from through a link below a project stamped in logical form: exit 1" "$rc" 1
+nodocker "a logical stamp"
+# known case: the same project stamped in physical form is refused too
+rm -rf "$qd"; qd=$(ai_sandbox_dir_for "$T/real/proj"); mkdir -p "$qd"; printf '%s\n' "$T/real/proj" > "$qd/project-path"
+rc=$(DOCKER_STUB_IMAGES="$img" inst --from "$T/real/proj/evil" main)
+assert_eq "the physical stamp refuses the same link" "$rc" 1
+new_home; INST="$AI_SANDBOX_ROOT/installed"
+qd=$(ai_sandbox_dir_for "$(readlink -f "$S2")"); mkdir -p "$qd"; printf '%s\n' "$(readlink -f "$S2")" > "$qd/project-path"
 mkdir -p "$T/hostlinks"; ln -s "$S2" "$T/hostlinks/proj"
 rc=$(fromrun "$T/hostlinks/proj" main)
 assert_eq "--from the repository through a link above the stamped project: exit 0" "$rc" 0
