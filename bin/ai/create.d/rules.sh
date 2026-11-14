@@ -158,8 +158,8 @@ Shared knowledge: the global rules and roles you read are rendered read-only fro
 a private git repository. Your own clone of it is at ~/knowledge with main checked
 out. A project sandbox proposes a generic rule with the \`propose-rule\` skill: one
 file on a branch proposal/<date>-<slug>-<hex>, never a commit on main (a hook
-refuses it), never a push; the host pushes on the next sync (a sandbox start or
-\`ai-knowledge sync --all\`) and the integrator sandbox, which commits on main,
+refuses it), never a push; the host pushes on the next sync (\`ai-knowledge sync\`, or
+a re-run of create-ai-sandbox.sh) and the integrator sandbox, which commits on main,
 decides with the \`knowledge-integrate\` skill. \`sandbox-doctor\` shows what is
 pushed and pending. A \`process-report\` report is filed the same way, as a ref
 refs/reports/<date>-<project>-<hex>, outside main and every branch; only the
