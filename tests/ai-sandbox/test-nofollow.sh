@@ -72,7 +72,8 @@ for op in mkdir write link hardlink remove copy; do
         assert_eq "O7 a: $op through a link at $pos: the trap is unchanged" "$(snap "$trap_")" "$trapsnap"
         assert_eq "O7 a: $op through a link at $pos: one line on stderr" "$(nlines "$w/err")" 1
         assert_contains "O7 a: $op through a link at $pos: it names root and path" "$(cat "$w/err")" "$root"
-        assert_contains "O7 a: $op through a link at $pos: it names the path" "$(cat "$w/err")" "a"
+        linked=a; [ "$pos" = ab ] && linked=a/b
+        assert_contains "O7 a: $op through a link at $pos: it names the path" "$(cat "$w/err")" "$root $linked"
     done
     plant c
     runop "$op" >"$w/out" 2>"$w/err" </dev/null; rc=$?
@@ -100,6 +101,15 @@ for op in write link hardlink remove; do
     assert_eq "O7 b: $op over a real directory: exit 1" "$rc" 1
     assert_eq "O7 b: $op over a real directory: directory and file byte-identical" "$(snap "$root/a/b/c")" "$before"
 done
+
+# --- the contract: a real directory inside a copy where the source holds a file is replaced only by --delete
+reset; mkdir -p "$root/dst/f"; printf 'keep' > "$root/dst/f/x"; printf 'top' > "$src/f"; before=$(snap "$root/dst/f")
+assert_eq "copy over a real directory at a file name: exit 1" "$(rcof nf copy "$root" dst "$src")" 1
+assert_eq "copy over a real directory at a file name: directory and file byte-identical" "$(snap "$root/dst/f")" "$before"
+assert_eq "copy --ignore-existing leaves it: exit 0" "$(rcof nf copy "$root" dst "$src" --ignore-existing)" 0
+assert_eq "copy --ignore-existing leaves it: byte-identical" "$(snap "$root/dst/f")" "$before"
+assert_eq "copy --delete replaces it: exit 0" "$(rcof nf copy "$root" dst "$src" --delete)" 0
+assert_eq "copy --delete replaces it: by the file" "$([ -f "$root/dst/f" ] && cat "$root/dst/f")" top
 
 # --- O7 c: copy with a link into the trap inside the destination tree
 cplant() {
