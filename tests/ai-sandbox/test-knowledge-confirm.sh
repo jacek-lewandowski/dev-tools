@@ -140,15 +140,15 @@ assert_eq "O1 g: both other sandboxes' output comes first" "$([ -n "$lastother" 
 assert_eq "O1 g: y pushes" "$(rmain)" "$(git -C "$iclone" rev-parse main)"
 
 # --- O2: what the question shows is safe to show
-setup "$(printf 'subj \xc2\x9b2J c1 \033[31mesc \xe2\x80\xaeRTL raw\x9bJ end')" "$(printf 'line \xc2\x9b2J c1 \033[31mesc \xe2\x80\xaeRTL raw\x9bJ end')"
+setup "$(printf 'subj \xc2\x9b2J c1 \033[31mesc \xe2\x80\xaeRTL raw\x9bJ tag\xf3\xa0\x81\xafX zw\xe2\x80\x8bY end')" "$(printf 'line \xc2\x9b2J c1 \033[31mesc \xe2\x80\xaeRTL raw\x9bJ tag\xf3\xa0\x81\xafX zw\xe2\x80\x8bY end')"
 python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/ai-knowledge" sync "$integ" >"$tmp/o2.out" 2>&1
-assert_contains "O2: the subject's text is kept" "$(cat "$tmp/o2.out")" "subj 2J c1 [31mesc RTL rawJ end"
-assert_contains "O2: the added line's text is kept" "$(cat "$tmp/o2.out")" "+line 2J c1 [31mesc RTL rawJ end"
-assert_eq "O2: no U+009B, escape, U+202E or raw 0x9b reaches the terminal" \
+assert_contains "O2: the subject's text is kept" "$(cat "$tmp/o2.out")" "subj <U+009B>2J c1 <U+001B>[31mesc <U+202E>RTL raw<U+009B>J tag<U+E006F>X zw<U+200B>Y end"
+assert_contains "O2: the added line's text is kept" "$(cat "$tmp/o2.out")" "+line <U+009B>2J c1 <U+001B>[31mesc <U+202E>RTL raw<0x9B>J tag<U+E006F>X zw<U+200B>Y end"
+assert_eq "O2: no control, format, private-use, unassigned code point or raw 0x9b reaches the terminal" \
     "$(python3 -I -c '
 import sys, unicodedata
 t = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
-print(sum(1 for c in t if (unicodedata.category(c) == "Cc" and c not in "\n\t") or c in "‮�"))' "$tmp/o2.out")" 0
+print(sum(1 for c in t if (unicodedata.category(c) in ("Cc", "Cf", "Co", "Cn") and c not in "\n\t") or c in "�"))' "$tmp/o2.out")" 0
 
 # --- O2 b: a file an agent made binary (one NUL byte) still shows its content
 setup
