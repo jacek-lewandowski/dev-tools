@@ -17,8 +17,9 @@ if ! command -v ast-grep >/dev/null 2>&1; then
 fi
 
 SG="$REPO_ROOT/tests/ai-sandbox/sg"
-# In-image programs are not host helpers (O22); the rule does not apply to them.
-NAMED_EXCEPTIONS="bin/ai/image/ai-delegate bin/ai/image/sandbox-knowledge-sync"
+# Programs that run only inside the container are not host helpers (C-MODULES): they live in
+# bin/ai/image/, which the rule leaves out by directory (ignores in sg/rules/host-git.yml).
+IMAGE_DIR="bin/ai/image"
 # The inline rule the coverage check uses: every file the configuration parses as bash has one program node.
 COVERAGE_RULE=$'id: coverage\nlanguage: bash\nrule: {kind: program}\nseverity: hint\nmessage: parsed'
 
@@ -47,12 +48,12 @@ bash_files() {   # <root>: paths relative to <root>
         head -n1 "$1/$f" | command grep -qaE '^#!.*\b(ba)?sh\b' && echo "$f"
     done
 }
-# Files that are bash but neither parsed by the configuration nor named as exceptions.
-uncovered() {   # <root> <named exceptions>
+# Files that are bash but neither parsed by the configuration nor under the in-image directory.
+uncovered() {   # <root>
     local parsed f
     parsed=$(sg_findings "$1/bin/ai" --inline-rules "$COVERAGE_RULE" | sed 's/:[0-9]*$//')
     bash_files "$1" | while IFS= read -r f; do
-        case " $2 " in *" $f "*) continue ;; esac
+        case $f in "$IMAGE_DIR"/*) continue ;; esac
         printf '%s\n' "$parsed" | command grep -qxF "${f#bin/ai/}" || echo "$f"
     done
 }
@@ -114,28 +115,30 @@ cp "$tmp/known/ai-known" "$tmp/cov/bin/ai/ai-known"
 printf '#!/usr/bin/env bash\ntrue\n' > "$tmp/cov/bin/ai/newhelper"
 printf '#!/bin/sh\ntrue\n' > "$tmp/cov/bin/ai/other.sh"
 printf '# a note\n' > "$tmp/cov/bin/ai/NOTES.md"
-assert_eq "a new bash file the configuration does not map is found" "$(uncovered "$tmp/cov" "" | tr '\n' ' ')" "bin/ai/newhelper "
-assert_eq "a named exception is not required to be parsed" "$(uncovered "$tmp/cov" "bin/ai/newhelper" | tr '\n' ' ')" ""
-assert_eq "every bash file under bin/ai is parsed or a named exception" "$(uncovered "$REPO_ROOT" "$NAMED_EXCEPTIONS")" ""
+assert_eq "a new bash file the configuration does not map is found" "$(uncovered "$tmp/cov" | tr '\n' ' ')" "bin/ai/newhelper "
+mkdir -p "$tmp/cov/$IMAGE_DIR"; printf '#!/usr/bin/env bash\ntrue\n' > "$tmp/cov/$IMAGE_DIR/inimage"
+assert_eq "a file under the in-image directory is not required to be parsed" "$(uncovered "$tmp/cov" | command grep -c "$IMAGE_DIR")" 0
+assert_eq "every bash file under bin/ai is parsed or under the in-image directory" "$(uncovered "$REPO_ROOT")" ""
 assert_ne "the bash files of bin/ai are found at all" "$(bash_files "$REPO_ROOT" | command grep -c .)" 0
 
-# --- the named exceptions are not host helpers
+# --- the in-image programs are not host helpers
 . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
-for e in $NAMED_EXCEPTIONS; do
-    assert_eq "${e##*/} is no installed helper" "$(ai_sandbox_helpers | command grep -cxF "${e##*/}")" 0
-    assert_file "${e##*/} exists, so the exception names a real file" "$REPO_ROOT/$e"
-done
+in_image=$(cd "$REPO_ROOT/$IMAGE_DIR" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+assert_ne "the in-image directory holds files, so the exception is not empty" "$(printf '%s\n' "$in_image" | command grep -c .)" 0
+assert_eq "no file of the in-image directory is an installed helper" \
+    "$(ai_sandbox_helpers | command grep -cxFf <(printf '%s\n' "$in_image"))" 0
+assert_eq "every installed helper is a file of bin/ai outside the in-image directory" \
+    "$(ai_sandbox_helpers | while IFS= read -r h; do [ -f "$REPO_ROOT/bin/ai/$h" ] || echo "$h"; done | command grep -c .)" 0
+assert_eq "no installed helper is also a file of the in-image directory" \
+    "$(ai_sandbox_helpers | while IFS= read -r h; do [ -e "$REPO_ROOT/$IMAGE_DIR/$h" ] && echo "$h"; done | command grep -c .)" 0
 for f in ai_sandbox_host_git ai_sandbox_confined_git; do
     assert_eq "the lib defines $f, the name the rule exempts" "$(command grep -cE "^$f\(\) \{" "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")" 1
     assert_eq "the rule file names $f" "$(command grep -cF "$f" "$SG/rules/host-git.yml")" 1
 done
 
-# --- the tree: no report outside the two bodies and the named exceptions
-tree=$(sg_reports "$REPO_ROOT/bin/ai" | while IFS= read -r r; do
-    case " $NAMED_EXCEPTIONS " in *" bin/ai/${r%:*} "*) continue ;; esac
-    echo "$r"
-done)
-assert_eq "no report outside the two bodies and the named exceptions" "$(printf '%s\n' "$tree" | command grep -vc '^$')" 0
+# --- the tree: no report outside the two bodies (the in-image directory is left out by the rule)
+tree=$(sg_reports "$REPO_ROOT/bin/ai")
+assert_eq "no report outside the two bodies" "$(printf '%s\n' "$tree" | command grep -vc '^$')" 0
 
 # a direct start planted in a copy of a real helper is reported by the same run that finds nothing in the real one
 mkdir -p "$tmp/planted"

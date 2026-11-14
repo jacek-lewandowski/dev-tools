@@ -28,7 +28,7 @@ assert_contains "headroom is pinned"                     "$df" 'ARG HEADROOM_VER
 assert_contains "python packages install with uv"        "$df" 'uv pip install --system'
 assert_contains "uv has a BuildKit cache mount"          "$df" '--mount=type=cache,target=/root/.cache/uv'
 assert_contains "headroom installs with the sandbox extra" "$df" 'headroom-ai[sandbox]==${HEADROOM_VERSION}'
-assert_contains "the image build runs under BuildKit"    "$(cat "$REPO_ROOT/bin/ai/create-ai-sandbox.sh")" 'DOCKER_BUILDKIT=1 docker build'
+assert_contains "the image build runs under BuildKit"    "$(cat "$REPO_ROOT/bin/ai/create.d/image.sh")" 'DOCKER_BUILDKIT=1 docker build'
 py_apt=$(printf '%s\n' "$df" | grep -n 'python3 python3-pip python3-venv' | head -1 | cut -d: -f1)
 big_apt=$(printf '%s\n' "$df" | grep -n 'claude-desktop antigravity' | head -1 | cut -d: -f1)
 uv_run=$(printf '%s\n' "$df" | grep -n 'uv pip install --system' | head -1 | cut -d: -f1)
@@ -61,7 +61,7 @@ assert_contains "the gitleaks tarball is verified against the pinned sha256" "$d
 assert_contains "the pinned sha256 is passed to the build" "$df" 'ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 assert_contains "gitleaks is extracted root-owned" "$df" 'tar -xzf /tmp/gitleaks.tar.gz --no-same-owner'
 # Every copy of the version outside the generator must equal GITLEAKS_VERSION.
-gl_ver=$(sed -n "s/^readonly GITLEAKS_VERSION='\(.*\)'$/\1/p" "$REPO_ROOT/bin/ai/create-ai-sandbox.sh")
+gl_ver=$(sed -n "s/^readonly GITLEAKS_VERSION='\(.*\)'$/\1/p" "$REPO_ROOT/bin/ai/create.d/image.sh")
 gl_copies=$(grep -ohE 'v?[0-9]+\.[0-9]+\.[0-9]+' "$REPO_ROOT"/.githooks/* "$REPO_ROOT/README.md" | sed 's/^v//' | sort -u | tr '\n' ' ')
 assert_eq "gitleaks version copies in .githooks and README.md equal GITLEAKS_VERSION" "$gl_copies" "$gl_ver "
 assert_contains "gitleaks is smoke-tested at build time" "$df" 'gitleaks version; '
