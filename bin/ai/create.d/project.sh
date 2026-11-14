@@ -145,12 +145,7 @@ unset _sub _ctr _sb
 mkdir -p "$XAUTH_DIR"
 while IFS= read -r _dir; do
     [ -n "$_dir" ] || continue
-    case $_dir in
-        # W7: below a bind source (.claude/projects inside .claude) through ai_sandbox_nofollow
-        */*) mkdir -p "$SANDBOX_DIR/${_dir%%/*}"
-             ai_sandbox_nofollow mkdir "$(readlink -f "$SANDBOX_DIR")/${_dir%%/*}" "${_dir#*/}" || true ;;
-        *) mkdir -p "$SANDBOX_DIR/$_dir" ;;
-    esac
+    ai_sandbox_make_state_dir "$SANDBOX_DIR" "$_dir" || true   # W7: a link below a bind source is refused, create goes on
 done < <(ai_sandbox_state_dirs)
 unset _dir
 # The clone's directory and the bare origin it fetches from (C-KNOW), made here for the

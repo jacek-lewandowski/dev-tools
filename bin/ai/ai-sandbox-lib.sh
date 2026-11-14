@@ -1125,6 +1125,16 @@ npm
 DIRS
 }
 
+# One entry of ai_sandbox_state_dirs, made in a sandbox directory: a top-level entry is a bind
+# source itself; a nested one (.claude/projects) lies below one, where a sandbox may have put a
+# link, so it is made without following it (a refusal is one stderr line and exit 1).
+ai_sandbox_make_state_dir() {   # <sandbox dir> <entry>
+    case $2 in
+        */*) mkdir -p "$1/${2%%/*}" && ai_sandbox_nofollow mkdir "$(readlink -f "$1")/${2%%/*}" "${2#*/}" ;;
+        *) mkdir -p "$1/$2" ;;
+    esac
+}
+
 # Host build-cache overlay volumes (docs/superpowers/specs/2026-10-02-ai-sandbox-build-caches-design.md).
 # Each row is '<key>|<path under $HOME>', the same path on the host (the
 # overlay lower) and in the container (host and container $HOME are equal).

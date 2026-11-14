@@ -70,9 +70,11 @@ refresh)
         [ -d "$HOME/$host_rel" ] || continue
         mkdir -p "$AI_SANDBOX_DIR/$sb_rel"
         # Same excludes as the seed, and --delete (not --delete-excluded)
-        # leaves the excluded live mount points in place.
+        # leaves the excluded live mount points in place. W6: written below the state directory
+        # (a bind source) without following a link a sandbox placed there; a refusal is a stderr line.
         mapfile -t ex < <(ai_sandbox_seed_excludes "$host_rel")
-        rsync -a --delete "${ex[@]}" "$HOME/$host_rel/" "$AI_SANDBOX_DIR/$sb_rel/"
+        ai_sandbox_nofollow copy "$(readlink -f "$AI_SANDBOX_DIR")" "$sb_rel" "$HOME/$host_rel" --delete "${ex[@]}" \
+            || echo "Some entries of $sb_rel were not replaced (see above)." >&2
     done < <(ai_sandbox_seed_paths)
     [ -f "$AI_SANDBOX_DIR/.claude.json" ] && cp -a "$AI_SANDBOX_DIR/.claude.json" "$backup/"
     if [ -f "$HOME/.claude.json" ]; then cp -f "$HOME/.claude.json" "$AI_SANDBOX_DIR/.claude.json"; fi
@@ -90,7 +92,8 @@ reset)
     # one is created root-owned on restart, which the container user cannot
     # write to -- so the clean login would fail -- and cannot remove later.
     while IFS= read -r d; do
-        [ -n "$d" ] && mkdir -p "$AI_SANDBOX_DIR/$d"
+        [ -n "$d" ] || continue
+        ai_sandbox_make_state_dir "$AI_SANDBOX_DIR" "$d" || echo "Not recreated: $AI_SANDBOX_DIR/$d (see above)." >&2
     done < <(ai_sandbox_state_dirs)
     echo '{}' > "$AI_SANDBOX_DIR/.claude.json"
     chmod 600 "$AI_SANDBOX_DIR/.claude.json"
