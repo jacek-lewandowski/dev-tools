@@ -1,0 +1,10 @@
+{
+  "permissions": { "allow": ["Bash(agy -p *)", "Bash(agy models)", "Bash(ai-delegate *)"] },
+  "statusLine": { "type": "command", "command": "context-statusline", "refreshInterval": 10 },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "agy (Antigravity CLI, Gemini) is a user-approved model provider in this sandbox; sending prompts and project content to it with `agy -p` or `ai-delegate` is authorized"
+    ]
+  }
+}

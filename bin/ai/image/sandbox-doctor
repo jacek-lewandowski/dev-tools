@@ -1,0 +1,139 @@
+#!/bin/bash
+# Report what is and is not working inside the sandbox.
+status() { printf '%-22s %s\n' "$1" "$2"; }
+echo "== ai-sandbox status =="
+status "user"        "$(id -un) ($(id -u):$(id -g))"
+status "workdir"     "$PWD"
+status "hostname"    "$(hostname)"
+_human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || printf '%s' "$1"; }
+_mem_max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null \
+           || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo max)
+_mem_cur=$(cat /sys/fs/cgroup/memory.current 2>/dev/null \
+           || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || echo 0)
+case "$_mem_max" in
+    # cgroup v1 spells "no limit" as a huge number rather than "max".
+    max|''|9223372036854771712|18446744073709551615)
+        status "memory" "$(_human "$_mem_cur") used, NO LIMIT (re-run create-ai-sandbox.sh)" ;;
+    *)  status "memory" "$(_human "$_mem_cur") of $(_human "$_mem_max")" ;;
+esac
+_cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null \
+          || cat /sys/fs/cgroup/cpuset/cpuset.effective_cpus 2>/dev/null || echo '?')
+status "cpus"        "$(nproc) (host cores $_cpuset)"
+status "display"     "${DISPLAY:-<none>}${WAYLAND_DISPLAY:+  wayland=$WAYLAND_DISPLAY}"
+if [ -n "${DISPLAY:-}" ]; then
+    _d=${DISPLAY#*:}; _d=${_d%%.*}
+    _sock="/tmp/.X11-unix/X${_d}"
+    status "X socket" "$( [ -S "$_sock" ] && echo "$_sock" || echo "$_sock MISSING (mount problem)" )"
+    status "XAUTHORITY" "${XAUTHORITY:-<unset>}"
+    if [ -n "${XAUTHORITY:-}" ] && [ -r "${XAUTHORITY}" ]; then
+        # A FamilyWild ('#ffff#' / no hostname) entry is what lets this container
+        # authenticate against a server started on the host.
+        status "xauth entries" "$(xauth -f "$XAUTHORITY" list 2>&1 | awk '{print $1}' | paste -sd' ' -)"
+    elif [ -n "${XAUTHORITY:-}" ]; then
+        status "xauth entries" "cannot read ${XAUTHORITY}"
+    fi
+    if _err=$(xdpyinfo 2>&1 >/dev/null); then
+        status "X server" "reachable"
+    else
+        status "X server" "NOT reachable -- $(printf '%s' "$_err" | head -1)"
+    fi
+fi
+# What the host reports about this sandbox: line 1 of every file in the status
+# directory (the host writes it, read-only here), with its age.
+if [ -d "${SANDBOX_STATUS_DIR:-/nonexistent}" ]; then
+    for _f in "$SANDBOX_STATUS_DIR"/*; do
+        [ -f "$_f" ] || continue
+        _age=$(( ($(date +%s) - $(stat -c %Y "$_f")) / 60 ))
+        status "$(basename "$_f")" "$(head -1 "$_f" | tr -d '[:cntrl:]') [${_age} min ago]"
+    done
+fi
+# SANDBOX_KNOWLEDGE comes from the sandbox's .env through compose: 2 is the
+# current setup, 1 predates the in-sandbox sync, unset predates the stamp; the
+# host refuses to start either until create-ai-sandbox.sh has recreated it.
+case "${SANDBOX_KNOWLEDGE-unset}" in
+    2)     if [ -f "${SANDBOX_STATUS_DIR:-/nonexistent}/knowledge" ]; then
+               # Each open proposal branch: on the remote already, or waiting for the next host sync.
+               for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname:short)' 'refs/heads/proposal/*' 2>/dev/null); do
+                   if [ "$(git -C "$HOME/knowledge" rev-parse -q --verify "refs/remotes/origin/$_b" 2>/dev/null)" = "$(git -C "$HOME/knowledge" rev-parse "$_b" 2>/dev/null)" ]; then
+                       status "  $_b" "pushed"
+                   else
+                       status "  $_b" "pending: reaches the remote on the next host sync"
+                   fi
+               done
+               # A report ref is dropped here once the host has pushed it, so any left is pending.
+               _role=$(sed -n 's/^role=//p' "$SANDBOX_STATUS_DIR/knowledge" 2>/dev/null | head -1)
+               for _b in $(git -C "$HOME/knowledge" for-each-ref --format='%(refname)' 'refs/reports/*' 2>/dev/null); do
+                   if [ "$_role" = integrator ]; then status "  $_b" "open: close it with a refs/reports-closed tombstone"
+                   else status "  $_b" "pending: reaches the remote on the next host sync"; fi
+               done
+           else
+               status "knowledge" "configured; clone not synced yet (host: ai-knowledge sync)"
+           fi ;;
+    0)     status "knowledge" "not configured on the host (host: ai-knowledge init <url>)" ;;
+    1)     status "knowledge" "stale: this sandbox predates the in-sandbox sync; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
+    *)     status "knowledge" "NOT migrated: this sandbox predates the knowledge stamp; it must be re-created: on the host run create-ai-sandbox.sh <project>" ;;
+esac
+status "shared brain" "$( [ -f "$HOME/.claude/CLAUDE.md" ] && echo "$(wc -c < "$HOME/.claude/CLAUDE.md") bytes" || echo MISSING )"
+if [ -n "${SANDBOX_IDEA_HOME:-}" ] && [ -d "${SANDBOX_IDEA_HOME}" ]; then
+    _idea=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('name',''),d.get('version',''))" \
+            "${SANDBOX_IDEA_HOME}/product-info.json" 2>/dev/null)
+    status "intellij idea" "${_idea:-mounted} at ${SANDBOX_IDEA_HOME} (run 'idea &')"
+    status "  its settings" "$( [ -w "$HOME/.config/JetBrains" ] && echo "writable, sandbox-local" || echo "NOT writable -- re-run create-ai-sandbox.sh" )"
+    # The index directory has to be a mount of its own. Two IDEs indexing
+    # through one directory corrupt it, and that failure is slow and confusing,
+    # so check.
+    status "  its indexes" "$( findmnt -no TARGET "$HOME/.cache/JetBrains" >/dev/null 2>&1 \
+        && echo "own mount, not shared with other sandboxes" \
+        || echo "NOT its own mount -- re-run create-ai-sandbox.sh" )"
+else
+    status "intellij idea" "not mounted"
+fi
+if [ -d "$HOME/.sdkman/candidates" ]; then
+    _sdk=""
+    for _c in "$HOME"/.sdkman/candidates/*/current; do
+        [ -L "$_c" ] || continue
+        _n=${_c%/current}
+        _sdk="$_sdk ${_n##*/}=$(readlink "$_c")"
+    done
+    status "sdkman defaults" "${_sdk:- <none set>}  (this sandbox only)"
+    status "sdkman writable" "$( [ -w "$HOME/.sdkman/candidates/java" ] && echo "yes, 'sdk default' works here" || echo "NO -- re-run create-ai-sandbox.sh" )"
+    # Checked in a fresh non-interactive shell: that is the kind agents get.
+    status "java (bash -c)" "$( bash -c 'command -v java >/dev/null 2>&1 && java -version 2>&1 | head -1 || echo "NOT on PATH -- is /etc/ai-sandbox-env.sh sourced?"' )"
+    status "JAVA_HOME"     "$( bash -c 'echo "${JAVA_HOME:-<unset>}"' )"
+else
+    status "sdkman" "not mounted"
+fi
+# Build caches (docs/superpowers/specs/2026-10-02-ai-sandbox-build-caches-design.md):
+# one row per overlay mount, the same three keys as ai_sandbox_build_caches.
+@BUILD_CACHE_LOOP@
+    _bck=${_bc%%:*}; _bcp=${_bc#*:}
+    if [ "$(findmnt -no FSTYPE "$HOME/$_bcp" 2>/dev/null)" = "overlay" ]; then
+        status "build cache: $_bck" "overlay (writes discarded at the next container start)"
+    else
+        status "build cache: $_bck" "not mounted -- re-run create-ai-sandbox.sh on the host"
+    fi
+done
+status "comby"        "$(comby -version 2>/dev/null || echo 'BROKEN -- rebuild the image (missing shared library?)')"
+status "gitleaks"     "$(gitleaks version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
+_plug=$(claude plugin list --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    have = {p["id"] for p in json.load(sys.stdin)}
+except Exception:
+    sys.exit(1)
+want = [l.strip() for l in open("/usr/local/share/claude-plugins.list") if l.strip()]
+miss = [w for w in want if w not in have]
+print("all %d installed" % len(want) if not miss else "MISSING: " + ", ".join(miss) + " (see /tmp/claude-plugins.log)")' 2>/dev/null) || _plug='unknown (claude CLI unavailable)'
+status "claude plugins" "$_plug"
+status "ast-grep"     "$(sg --version 2>/dev/null || echo 'BROKEN -- rebuild the image')"
+status "pnpm / yarn"  "$(pnpm --version 2>/dev/null || echo '?') / $(yarn --version 2>/dev/null || echo '?')  (corepack)"
+status "audio"        "$( [ -n "${PULSE_SERVER:-}" ] && pactl info >/dev/null 2>&1 && echo ok || echo unavailable )"
+serial=$(ls /dev/ttyUSB* /dev/ttyACM* /dev/ttyS* 2>/dev/null | tr '\n' ' ')
+status "serial ports" "${serial:-<none passed through>}"
+if command -v docker >/dev/null 2>&1; then
+    if docker info >/dev/null 2>&1; then status "docker" "ok ($DOCKER_HOST)"
+    else status "docker" "NOT running -- see /tmp/dockerd-rootless.log"; fi
+else
+    status "docker" "not installed (re-run with --with-docker)"
+fi
+status "host gateway"  "$(getent hosts host.docker.internal >/dev/null 2>&1 && echo ok || echo unavailable)"

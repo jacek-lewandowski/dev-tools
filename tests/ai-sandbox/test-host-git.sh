@@ -18,7 +18,7 @@ fi
 
 SG="$REPO_ROOT/tests/ai-sandbox/sg"
 # In-image programs are not host helpers (O22); the rule does not apply to them.
-NAMED_EXCEPTIONS="bin/ai/ai-delegate bin/ai/sandbox-knowledge-sync"
+NAMED_EXCEPTIONS="bin/ai/image/ai-delegate bin/ai/image/sandbox-knowledge-sync"
 # The inline rule the coverage check uses: every file the configuration parses as bash has one program node.
 COVERAGE_RULE=$'id: coverage\nlanguage: bash\nrule: {kind: program}\nseverity: hint\nmessage: parsed'
 

@@ -1,0 +1,199 @@
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl wget gnupg ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python and its packages sit before the big apt layer, and every version ARG
+# is declared right before the RUN that uses it (a changed ARG invalidates the
+# cache from its first use), so bumping Chrome, Antigravity or the big apt list
+# does not rebuild them. The uv cache mount keeps downloaded wheels between builds.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UV_VERSION=@UV_VERSION@
+RUN pip3 install --no-cache-dir uv==${UV_VERSION}
+
+ARG HEADROOM_VERSION=@HEADROOM_VERSION@
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy uv pip install --system "headroom-ai[sandbox]==${HEADROOM_VERSION}"
+
+ARG NODE_MAJOR=@NODE_MAJOR@
+# Third-party repositories.
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings /usr/share/keyrings; \
+    arch="$(dpkg --print-architecture)"; \
+    curl -fsSLo /usr/share/keyrings/claude-desktop-archive-keyring.asc \
+        https://downloads.claude.ai/claude-desktop/key.asc; \
+    echo "deb [arch=${arch} signed-by=/usr/share/keyrings/claude-desktop-archive-keyring.asc] https://downloads.claude.ai/claude-desktop/apt/stable stable main" \
+        > /etc/apt/sources.list.d/claude-desktop.list; \
+    curl -fsSL https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/antigravity-repo-key.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" \
+        > /etc/apt/sources.list.d/antigravity.list; \
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list; \
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+        > /usr/share/keyrings/cloudflare-main.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main" \
+        > /etc/apt/sources.list.d/cloudflared.list; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        > /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=${arch} signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git sudo less vim-tiny nano ca-certificates \
+        socat usbutils net-tools \
+        libwayland-client0 libwayland-egl1 libwayland-cursor0 xwayland \
+        openbox xterm x11-utils \
+        libnss3 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgtk-3-0 libgbm1 \
+        libasound2 libasound2-plugins pulseaudio-utils alsa-utils \
+        xdg-utils dbus-x11 xauth fonts-liberation \
+        claude-desktop antigravity google-cloud-cli cloudflared gh nodejs \
+        ffmpeg imagemagick sox libsox-fmt-all \
+        libev4 libpcre3 libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && dbus-uuidgen > /etc/machine-id
+
+ARG GOOGLE_CHROME_VERSION=@GOOGLE_CHROME_VERSION@
+# Google Chrome, in its own layer so the rest of the image caches independently.
+RUN set -eux; \
+    wget -q -O /tmp/chrome.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${GOOGLE_CHROME_VERSION}_amd64.deb"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends /tmp/chrome.deb; \
+    rm -rf /tmp/chrome.deb /var/lib/apt/lists/*
+
+RUN npm install -g --force \
+        @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
+    && npm cache clean --force
+
+# pnpm and yarn through corepack, so a project's 'packageManager' field is
+# honoured and nobody has to 'corepack enable' by hand. The cache is a shared
+# location (chowned to the sandbox user below) rather than root's ~/.cache, or
+# the versions warmed here would be invisible at run time.
+ENV COREPACK_HOME=/usr/local/share/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN set -eux; \
+    command -v corepack >/dev/null || npm install -g corepack; \
+    corepack enable; \
+    corepack prepare pnpm@latest yarn@stable --activate; \
+    npm cache clean --force
+
+# The release binary is dynamically linked: without libev4 (and libpcre3,
+# libsqlite3-0, all installed above) it dies with a loader error on first use.
+ARG COMBY_VERSION=@COMBY_VERSION@
+RUN set -eux; \
+    wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
+    chmod +x /usr/local/bin/comby; \
+    comby -version
+
+# Static binary; the git hooks in .githooks/ refuse to run without it.
+ARG GITLEAKS_VERSION=@GITLEAKS_VERSION@
+ARG GITLEAKS_LINUX_X64_SHA256=@GITLEAKS_LINUX_X64_SHA256@
+RUN set -eux; \
+    wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
+    echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gitleaks.tar.gz --no-same-owner -C /usr/local/bin gitleaks; \
+    rm /tmp/gitleaks.tar.gz; \
+    gitleaks version
+
+ARG ANTIGRAVITY_CLI_VERSION=@ANTIGRAVITY_CLI_VERSION@
+RUN set -eux; \
+    wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
+    tar -xzf /tmp/cli.tar.gz -C /tmp; \
+    mv /tmp/antigravity /usr/local/bin/agy; \
+    chmod +x /usr/local/bin/agy; \
+    rm -f /tmp/cli.tar.gz
+
+ARG ANTIGRAVITY_HUB_VERSION=@ANTIGRAVITY_HUB_VERSION@
+RUN set -eux; \
+    wget -q "https://storage.googleapis.com/antigravity-public/antigravity-hub/${ANTIGRAVITY_HUB_VERSION}/linux-x64/Antigravity.tar.gz" -O /tmp/hub.tar.gz; \
+    tar -xzf /tmp/hub.tar.gz -C /usr/local/; \
+    rm -f /tmp/hub.tar.gz
+
+ARG ANTIGRAVITY_IDE_VERSION=@ANTIGRAVITY_IDE_VERSION@
+RUN set -eux; \
+    wget -q "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/${ANTIGRAVITY_IDE_VERSION}/linux-x64/Antigravity%20IDE.tar.gz" -O /tmp/ide.tar.gz; \
+    tar -xzf /tmp/ide.tar.gz -C /usr/local/; \
+    rm -f /tmp/ide.tar.gz
+
+# Electron apps need --no-sandbox inside a container. These are real wrapper
+# scripts on PATH rather than shell aliases, so they also work for one-shot
+# invocations such as 'ai-sandbox antigravity2-ide' and from the IDE itself.
+RUN set -eux; \
+    gui_flags='--no-sandbox --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations'; \
+    for spec in \
+        'claude-desktop|/usr/bin/claude-desktop' \
+        'antigravity|/usr/bin/antigravity' \
+        'antigravity2|/usr/local/Antigravity-x64/antigravity' \
+        'antigravity2-ide|/usr/local/Antigravity IDE/bin/antigravity-ide'; do \
+        name="${spec%%|*}"; target="${spec#*|}"; \
+        printf '#!/bin/bash\nexec "%s" %s "$@"\n' "$target" "$gui_flags" > "/usr/local/bin/${name}"; \
+        chmod +x "/usr/local/bin/${name}"; \
+    done
+
+# Thin wrappers for the dev-tools Python utilities mounted at ~/tools.
+RUN set -eux; \
+    printf '#!/bin/bash\nexec python3 -m tools.agent_log_trimmer "$@"\n' > /usr/local/bin/agent-log-trimmer; \
+    chmod +x /usr/local/bin/agent-log-trimmer
+
+# Allow the agent to work with PDFs through ImageMagick.
+RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' \
+        /etc/ImageMagick-6/policy.xml
+
+# Chrome cannot use its own sandbox inside a container.
+RUN mv /usr/bin/google-chrome /usr/bin/google-chrome-original \
+    && printf '#!/bin/bash\nexec /usr/bin/google-chrome-original --no-sandbox --disable-dev-shm-usage "$@"\n' \
+        > /usr/bin/google-chrome \
+    && chmod +x /usr/bin/google-chrome
+
+COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
+COPY sandbox-doctor   /usr/local/bin/sandbox-doctor
+COPY claude-plugins.list /usr/local/share/claude-plugins.list
+COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
+COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
+COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
+COPY sandbox-sdk      /usr/local/bin/sdk
+COPY ai-delegate       /usr/local/bin/ai-delegate
+COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync
+COPY context-statusline /usr/local/bin/context-statusline
+COPY xdg-open         /usr/local/bin/xdg-open
+COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
+# IntelliJ IDEA is not installed in the image: this only launches the host's
+# read-only mount, so it is inert on a host that has none.
+COPY sandbox-idea     /usr/local/bin/idea
+RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
+    && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
+                /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
+                /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+                /usr/local/bin/sandbox-knowledge-sync \
+                /usr/local/bin/context-statusline \
+    && chmod 0644 /etc/claude-code/managed-settings.json \
+    && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
+    && install -d -m 1777 /tmp/.X11-unix \
+    && echo "ai-sandbox" > /etc/ai-sandbox-release
+
+# Non-interactive 'bash -c' reads nothing but BASH_ENV; login shells get the
+# same file through /etc/profile.d, interactive ones through .bashrc. See the
+# comment on sandbox-env.sh in create-ai-sandbox.sh.
+ENV BASH_ENV=/etc/ai-sandbox-env.sh
+
+# Fail the build, not the agent, when a tool is broken -- comby's binary
+# missing a shared library, or the corepack shims not resolving.
+RUN set -eux; \
+    comby -version; \
+    gitleaks version; \
+    sg --version; \
+    node --version; \
+    pnpm --version; \
+    yarn --version; \
+    firebase --version; \
+    python3 -c 'import headroom'

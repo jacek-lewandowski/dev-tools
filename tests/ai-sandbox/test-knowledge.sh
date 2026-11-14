@@ -54,7 +54,7 @@ assert_status_shape() {   # <name> <clone> <word>: line 1 of the status file is 
 sbsync() {
     local d; d=$(ai_sandbox_dir_for "$1")
     SANDBOX_STATUS_DIR="$d/status" SANDBOX_KNOWLEDGE_ORIGIN="$d/knowledge-origin.git" SANDBOX_KNOWLEDGE_CLONE="$d/knowledge" \
-        bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1
+        bash "$REPO_ROOT/bin/ai/image/sandbox-knowledge-sync" 2>&1
 }
 
 ks() { knowledge sync "$1" >/dev/null 2>&1; sbsync "$1" >/dev/null; }   # <project dir>: the host's sync, then the container's
@@ -743,7 +743,7 @@ p7="$tmp/work/seven"; mkdir -p "$p7"; git -C "$p7" init -q
 d7="$home7/.ai-sandbox/$(ai_sandbox_project_id "$p7")-agent"; mkdir -p "$d7"
 HOME="$home7" AI_SANDBOX_ROOT="$home7/.ai-sandbox" knowledge sync "$p7" >"$tmp/seven.out" 2>&1 || cat "$tmp/seven.out"
 SANDBOX_STATUS_DIR="$d7/status" SANDBOX_KNOWLEDGE_ORIGIN="$d7/knowledge-origin.git" SANDBOX_KNOWLEDGE_CLONE="$d7/knowledge" \
-    bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" >"$tmp/seven-sks.out" 2>&1 || cat "$tmp/seven-sks.out"
+    bash "$REPO_ROOT/bin/ai/image/sandbox-knowledge-sync" >"$tmp/seven-sks.out" 2>&1 || cat "$tmp/seven-sks.out"
 assert_eq "master-headed remote: clone on main" "$(git -C "$d7/knowledge" branch --show-current)" main
 assert_file "master-headed remote: rules present in the clone" "$d7/knowledge/rules/global.md"
 assert_status "master-headed remote: status ok" "$d7/knowledge" "ok:"
@@ -1371,7 +1371,7 @@ ostatus() {   # <name> <role> <project id> [status lines...]: the status file of
     local d="$o11/status/$1"; mkdir -p "$d"; { printf '2026-01-01T00:00:00 ok seen\nrole=%s\nproject-id=%s\n' "$2" "$3"; shift 3; [ $# -eq 0 ] || printf '%s\n' "$@"; } > "$d/knowledge"
 }
 osync() {   # <name>: run the command for the fixture sandbox <name>; its clone is $o11/<name>
-    SANDBOX_KNOWLEDGE_CLONE="$o11/$1" SANDBOX_STATUS_DIR="$o11/status/$1" SANDBOX_KNOWLEDGE_ORIGIN="$oo" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1
+    SANDBOX_KNOWLEDGE_CLONE="$o11/$1" SANDBOX_STATUS_DIR="$o11/status/$1" SANDBOX_KNOWLEDGE_ORIGIN="$oo" bash "$REPO_ROOT/bin/ai/image/sandbox-knowledge-sync" 2>&1
 }
 ogit() { local n=$1; shift; git -C "$o11/$n" "$@"; }
 today11=$(date +%F); pb1="proposal/$today11-ofirst-aaaa"; rp1="$today11-ofirst-bbbb"
@@ -1489,15 +1489,15 @@ assert_eq "an unlisted one is kept, both refs" "$(has_r i1 "refs/reports/$today1
 mkdir -p "$o11/status/n1"; out=$(osync n1); r=$?
 assert_eq "no status file: exit 0, the clone is made" "$r$(ogit n1 branch --show-current)" "0main"
 assert_eq "no status file: no role file is written" "$(ls "$o11/n1/.git/ai-knowledge-role" 2>/dev/null | wc -l | tr -d ' ')" 0
-out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n2" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/no-such-origin" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1); r=$?
+out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n2" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/no-such-origin" bash "$REPO_ROOT/bin/ai/image/sandbox-knowledge-sync" 2>&1); r=$?
 assert_eq "no origin: exit 0" "$r" 0
 assert_contains "no origin: said" "$out" "no knowledge origin"
 mkdir "$o11/not-a-repo"
-out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n3" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/not-a-repo" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1); r=$?
+out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n3" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/not-a-repo" bash "$REPO_ROOT/bin/ai/image/sandbox-knowledge-sync" 2>&1); r=$?
 assert_eq "an origin that is no repository: exit 0" "$r" 0
 assert_contains "an origin that is no repository: said" "$out" "cannot clone"
 git init -q --bare "$o11/empty.git"; git -C "$o11/empty.git" symbolic-ref HEAD refs/heads/main
-out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n4" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/empty.git" bash "$REPO_ROOT/bin/ai/sandbox-knowledge-sync" 2>&1); r=$?
+out=$(SANDBOX_KNOWLEDGE_CLONE="$o11/n4" SANDBOX_STATUS_DIR="$o11/status/n1" SANDBOX_KNOWLEDGE_ORIGIN="$o11/empty.git" bash "$REPO_ROOT/bin/ai/image/sandbox-knowledge-sync" 2>&1); r=$?
 assert_eq "an empty origin: exit 0, the clone follows main" "$r$(git -C "$o11/n4" symbolic-ref HEAD)" "0refs/heads/main"
 # hostile status content cannot make it delete outside the listed kinds
 ostatus n1 integrator pid-n1 "closed-report=../heads/main" "closed-report=" "closed-proposal=" "closed-proposal=proposal/x"; osync n1 >/dev/null

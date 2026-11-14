@@ -1,0 +1,14 @@
+#!/bin/bash
+# Start a minimal window manager on the sandbox display, so GUI apps get
+# decorations and can be moved around inside the nested screen.
+set -e
+if [ -z "${DISPLAY:-}" ]; then
+    echo "No DISPLAY set. This sandbox was created with --display=none." >&2
+    exit 1
+fi
+if pgrep -u "$(id -u)" openbox >/dev/null 2>&1; then
+    echo "Window manager already running on $DISPLAY."
+    exit 0
+fi
+openbox >/tmp/openbox.log 2>&1 &
+echo "Started openbox on $DISPLAY."

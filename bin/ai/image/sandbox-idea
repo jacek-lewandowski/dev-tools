@@ -1,0 +1,35 @@
+#!/bin/bash
+# Run the host's IntelliJ IDEA installation, which is mounted read-only.
+# The path is passed in by compose so this wrapper, which lives in the image
+# every project shares, does not hard-code it.
+set -u
+IDEA_HOME="${SANDBOX_IDEA_HOME:-/opt/idea-IU}"
+
+if [ ! -d "$IDEA_HOME" ]; then
+    echo "IntelliJ IDEA is not mounted at $IDEA_HOME." >&2
+    echo "The sandbox mounts it only when that path exists on the host." >&2
+    echo "Install it there, then re-run create-ai-sandbox.sh." >&2
+    exit 1
+fi
+
+# 2024.2 and later ship a native 'idea' launcher; older builds only idea.sh.
+launcher=""
+for candidate in "$IDEA_HOME/bin/idea" "$IDEA_HOME/bin/idea.sh"; do
+    [ -x "$candidate" ] && { launcher="$candidate"; break; }
+done
+if [ -z "$launcher" ]; then
+    echo "No launcher in $IDEA_HOME/bin -- looked for 'idea' and 'idea.sh'. Found:" >&2
+    ls "$IDEA_HOME/bin" 2>&1 | sed 's/^/    /' >&2
+    exit 1
+fi
+
+if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    echo "sandbox: no display -- the GUI will not start (headless commands still work)." >&2
+    echo "         Recreate the sandbox with a display: create-ai-sandbox.sh --display=xpra" >&2
+fi
+
+# The installation is read-only, so everything IDEA writes has to land in these.
+# They are bind mounts, so settings, plugins and indexes outlive the container.
+mkdir -p "$HOME/.config/JetBrains" "$HOME/.local/share/JetBrains" "$HOME/.cache/JetBrains"
+
+exec "$launcher" "$@"

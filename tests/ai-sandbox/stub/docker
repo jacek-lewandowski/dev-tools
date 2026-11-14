@@ -201,7 +201,7 @@ JSON
         [ -z "${DOCKER_STUB_EXEC_EXIT:-}" ] || exit "$DOCKER_STUB_EXEC_EXIT"
         d="${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}/$name"
         exec env -i HOME="$HOME" PATH="$PATH" SANDBOX_STATUS_DIR="$d/status" SANDBOX_KNOWLEDGE_ORIGIN="$d/knowledge-origin.git" \
-            SANDBOX_KNOWLEDGE_CLONE="$d/knowledge" bash "$(dirname "$(readlink -f "$0")")/../../../bin/ai/sandbox-knowledge-sync"
+            SANDBOX_KNOWLEDGE_CLONE="$d/knowledge" bash "$(dirname "$(readlink -f "$0")")/../../../bin/ai/image/sandbox-knowledge-sync"
         ;;
     build|rename|rm|rmi|images|inspect) exit 0 ;;
 esac

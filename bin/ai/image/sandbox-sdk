@@ -1,0 +1,20 @@
+#!/bin/bash
+# Non-interactive stand-in for SDKMAN's 'sdk' shell function.
+export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"
+if [ ! -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]; then
+    echo "sdk: SDKMAN is not available in this sandbox (the host has no ~/.sdkman)." >&2
+    exit 1
+fi
+# These only change the shell they run in, which here would be this wrapper.
+case "${1:-}" in
+    use) echo "sdk: 'sdk use' only affects the current interactive shell." >&2
+         echo "     To change this sandbox's default: sdk default ${2:-<candidate>} ${3:-<version>}" >&2
+         exit 1 ;;
+    env) if [ $# -eq 1 ]; then
+             echo "sdk: 'sdk env' only affects the current interactive shell; 'sdk env install' works here." >&2
+             exit 1
+         fi ;;
+esac
+# shellcheck disable=SC1091
+. "$SDKMAN_DIR/bin/sdkman-init.sh"
+sdk "$@"
