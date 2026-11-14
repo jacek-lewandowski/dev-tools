@@ -18,5 +18,7 @@ rule:
       - all:
           - has: { kind: command_name, regex: '^command$' }
           - has: { kind: word, regex: '^-v$' }
+# Programs that run only inside the container live in bin/ai/image/ (C-MODULES); they are not host scripts.
+ignores: ["**/bin/ai/image/**"]
 severity: error
 message: a command with the word git as its name or an argument

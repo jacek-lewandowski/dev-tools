@@ -1,0 +1,16 @@
+#!/bin/bash
+# Electron apps detach from the TTY before printing OAuth URLs. Surface the URL
+# on this container's own terminals so it can be copied to a host browser.
+url=$1
+for term in /dev/pts/*; do
+    [ -w "$term" ] || continue
+    {
+        echo
+        echo "============================================================"
+        echo "ACTION REQUIRED: open this link in your host browser:"
+        echo "$url"
+        echo "============================================================"
+        echo
+    } > "$term" 2>/dev/null || true
+done
+exit 0

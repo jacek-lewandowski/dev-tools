@@ -1,0 +1,22 @@
+
+# Rootless Docker. Ubuntu's docker.io package does not ship dockerd-rootless.sh,
+# so the upstream repository is used instead.
+RUN set -eux; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg; \
+    chmod a+r /etc/apt/keyrings/docker.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" \
+        > /etc/apt/sources.list.d/docker.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin \
+        docker-compose-plugin docker-ce-rootless-extras \
+        rootlesskit slirp4netns fuse-overlayfs uidmap iptables dbus-user-session; \
+    rm -rf /var/lib/apt/lists/*; \
+    systemctl disable docker.service containerd.service 2>/dev/null || true
+
+ARG EARTHLY_VERSION=@EARTHLY_VERSION@
+RUN wget -q "https://github.com/earthly/earthly/releases/download/${EARTHLY_VERSION}/earthly-linux-amd64" \
+        -O /usr/local/bin/earthly \
+    && chmod +x /usr/local/bin/earthly

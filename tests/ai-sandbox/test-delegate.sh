@@ -4,7 +4,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
-DELEGATE="$REPO_ROOT/bin/ai/ai-delegate"
+DELEGATE="$REPO_ROOT/bin/ai/image/ai-delegate"
 
 mkdir -p "$tmp/stubbin" "$HOME/.gemini/agents" "$tmp/repo"
 cat > "$tmp/stubbin/agy" <<'STUB'
