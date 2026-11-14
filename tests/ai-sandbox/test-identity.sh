@@ -111,12 +111,12 @@ rm -rf "$tmp"
 # missed a third copy at planning time, S22). The pattern is a tag built from a
 # variable or a literal variant, or a '-u<uid>' suffix, under bin/ai. Known
 # case first: a scratch file with each of the forms the base had must be reported.
-tagpat='ai-sandbox:(\$|base-|docker-)|-u\$\{?[A-Za-z_]*[Uu][Ii][Dd]'
+tagpat='ai-sandbox:(\$|base-|docker-|base-gui-|docker-gui-)|-u\$\{?[A-Za-z_]*[Uu][Ii][Dd]'
 tagdir=$(mktemp -d)
 printf '%s\n' 'IMAGE_NAME="ai-sandbox:${IMAGE_VARIANT}-u${HOST_UID}"' \
     'IMAGE_STAMP="$D/${IMAGE_VARIANT}-u${HOST_UID}.stamp"' \
-    'tag="ai-sandbox:${variant}-u${uid}"' 'tag=ai-sandbox:base-u1000' > "$tagdir/known"
-assert_eq "tag search reports every composed form in its known case" "$(command grep -cE "$tagpat" "$tagdir/known")" 4
+    'tag="ai-sandbox:${variant}-u${uid}"' 'tag=ai-sandbox:base-u1000' 'tag=ai-sandbox:docker-gui-u1000' > "$tagdir/known"
+assert_eq "tag search reports every composed form in its known case" "$(command grep -cE "$tagpat" "$tagdir/known")" 5
 rm -rf "$tagdir"
 assert_eq "no image tag is composed under bin/ai outside ai_sandbox_image_name" \
     "$(command grep -rnaE "$tagpat" "$REPO_ROOT/bin/ai" | wc -l | tr -d ' ')" 0

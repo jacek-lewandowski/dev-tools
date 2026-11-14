@@ -32,9 +32,12 @@ done
 populated "$shared_ide" && exit 0
 
 # 2. Otherwise install them with a throwaway container.
+# The IDE is only in the -gui images.
+found_gui=no
 for variant in docker base; do
-    tag=$(ai_sandbox_image_name "$variant")
+    tag=$(ai_sandbox_image_name "$variant" gui)
     docker image inspect "$tag" >/dev/null 2>&1 || continue
+    found_gui=yes
     echo "Installing IDE extensions into $shared_ide using $tag..."
     for ext in $EXTENSIONS; do
         docker run --rm \
@@ -45,6 +48,7 @@ for variant in docker base; do
     populated "$shared_ide" && exit 0
 done
 
+[ "$found_gui" = yes ] || echo "ERROR: no -gui sandbox image exists: the IDE is only in the images of sandboxes with a display (create-ai-sandbox.sh --display=xpra builds one)." >&2
 echo "ERROR: could not populate $shared_ide." >&2
 echo "       The IDE will start without extensions." >&2
 echo "       Retry with: ai-sandbox-extensions refresh" >&2
