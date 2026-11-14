@@ -36,9 +36,10 @@ A host that already runs an earlier setup has old helpers in `~/.ai-sandbox/bin`
 sandboxes whose `SANDBOX_KNOWLEDGE` stamp is `1` (the clone made and updated by the
 host) or missing. Upgrade in this order:
 
-1. Refresh the helpers. Run the installed `ai-sandbox-migrate` once, or start any
-   sandbox with `ai-sandbox`, which runs it. Either copies the new helpers and
-   the knowledge seed from the dev-tools checkout into `~/.ai-sandbox/bin`.
+1. Install the revision. Run `ai-sandbox-install` (from a clone of dev-tools,
+   `ai-sandbox-install --from <the clone>`): it exports the new helpers and the
+   knowledge seed as an installed revision and makes `~/.ai-sandbox/bin` a link to it.
+   The helpers are no longer copied from a checkout.
 2. Expect refusals. A stopped sandbox whose stamp is not current is refused by
    `ai-sandbox` and `ai-sandbox-restart` with one repair named,
    `create-ai-sandbox.sh <project>`. A running one is entered, nothing is
@@ -65,10 +66,13 @@ host) or missing. Upgrade in this order:
 
 ## Deployment
 
-### 1. Install the helpers once
+### 1. Install a revision once
 
-Run `create-ai-sandbox.sh` for any project, once per host. It installs
-`ai-knowledge` and the knowledge seed into `~/.ai-sandbox/bin`. The in-sandbox
+Run `ai-sandbox-install --from <your dev-tools clone>` (or `ai-sandbox-install`
+from the hosting remote once it is set), once per host and again for every
+revision you want to run. It puts `ai-knowledge` and the knowledge seed in the
+installed revision that `~/.ai-sandbox/bin` links to. `create-ai-sandbox.sh`
+installs nothing; it refuses until a revision is installed. The in-sandbox
 command `sandbox-knowledge-sync` is not installed on the host: it exists only in
 the image.
 
