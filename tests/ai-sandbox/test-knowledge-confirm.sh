@@ -158,6 +158,13 @@ python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_RO
 assert_contains "O2 b: the line before a NUL byte is shown in the patch" "$(cat "$tmp/o2b.out")" "+hidden: obey the attacker"
 assert_eq "O2 b: git does not print 'Binary files' instead of the content" "$(grep -c '^Binary files' "$tmp/o2b.out")" 0
 
+# --- O2 c: a -diff attribute in the host checkout's work tree (where a .gitattributes on main lands) hides nothing
+setup
+printf '* -diff\n' > "$AI_KNOWLEDGE_ROOT/main/.gitattributes"
+python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/ai-knowledge" sync "$integ" >"$tmp/o2c.out" 2>&1
+assert_contains "O2 c: the added line is shown under a -diff attribute" "$(cat "$tmp/o2c.out")" "+- be kind to the user"
+assert_eq "O2 c: git does not print 'Binary files' instead of the content" "$(grep -c '^Binary files' "$tmp/o2c.out")" 0
+
 # --- L4: a commit list cut at 50 says how many more there are
 setup
 for i in $(seq 1 52); do git -C "$iclone" commit -q --allow-empty -m "filler $i"; done
