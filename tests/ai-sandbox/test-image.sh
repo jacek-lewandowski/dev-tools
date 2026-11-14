@@ -70,6 +70,7 @@ c="$tmp/work/c"; mkdir -p "$c"
 # The stamp is written by the build, which --no-start skips: these two runs build (stub docker).
 stampdir="$AI_SANDBOX_ROOT/image"
 NOSTART= create --display=none "$c"
+none_out=$(cat "$tmp/o3")
 stamp_none=$(ls "$stampdir" | grep '\.stamp$' | tr '\n' ' ')
 # (A Wayland socket stands in for the display: xpra would start a real display launcher.)
 wl="$tmp/xdg"; mkdir -p "$wl"; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$wl/wayland-t"
@@ -92,6 +93,12 @@ assert_eq "xpra: the -gui tag" "$(image_of "$c")" "image: \"ai-sandbox:base-gui-
 assert_eq "none leaves base-u<uid>.stamp"             "$stamp_none" "base-u${uid}.stamp "
 assert_contains "a display build adds its own stamp, not the same" "$stamp_both" "base-gui-u${uid}.stamp"
 assert_contains "and the headless stamp stays"          "$stamp_both" "base-u${uid}.stamp"
+
+# No display, no IDE: a create that gets as far as the extension step neither runs it nor prints its advice.
+for w in "no -gui sandbox image" "could not populate" "IDE extensions are not installed"; do
+    TESTS_RUN=$((TESTS_RUN+1))
+    case "$none_out" in *"$w"*) _fail "none: create does not print '$w'" "found it" ;; *) _pass "none: create does not print '$w'" ;; esac
+done
 
 # O2: the remembered mode picks the tag when no flag is given; an explicit none overrides a remembered xpra.
 create "$c"
