@@ -90,6 +90,9 @@ assert_eq "O11: stop-display.sh through a link at the directory leaves the trap 
 PATH="$stubs:$PATH" bash "$(dir "$pn")/start-display.sh" >"$tmp/start2.out" 2>&1; rc=$?
 assert_eq "O11: start-display.sh through a link at the directory fails" "$([ "$rc" -ne 0 ] && echo yes)" yes
 assert_eq "O11: and leaves the trap unchanged" "$(snapt "$tmp/trap")" "$t0"
+# L8: the message does not guess the cause; the function's own line above it names it
+assert_contains "L8: the failure text says it could not make the directory and points at the line above" \
+    "$(cat "$tmp/start2.out")" "could not make $sockdir (see the line above)"
 rm -f "$sockdir"
 
 rm -rf "$tmp"

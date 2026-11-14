@@ -296,7 +296,7 @@ fi
 
 mkdir -p "$SOCK_ROOT"
 nofollow mkdir "$SOCK_ROOT" "$SOCK_REL" 700 || {
-    echo "ERROR: could not make $SOCK_DIR: a link or a file is in the way." >&2
+    echo "ERROR: could not make $SOCK_DIR (see the line above)." >&2
     exit 1
 }
 
