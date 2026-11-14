@@ -410,7 +410,9 @@ assert_contains "subagent cache TTL passed into the container" "$compose" 'CLAUD
 # --- knowledge stamps classify a sandbox from its .env (phase 1)
 fab() {   # <name> [env lines...]: a fabricated sandbox directory with a compose file
     local d="$AI_SANDBOX_ROOT/$1-agent"; shift
-    mkdir -p "$d"; printf 'services: {}\n' > "$d/docker-compose.yml"
+    mkdir -p "$d"
+    # mounts the installed revision's tools, as a sandbox created under an install does
+    printf 'services:\n  s:\n    volumes:\n      - "%s/installed/current/tools:/home/dev/tools:ro"\n' "$AI_SANDBOX_ROOT" > "$d/docker-compose.yml"
     printf '%s\n' "$@" > "$d/.env"
 }
 fab fab-a "SANDBOX_KNOWLEDGE=2" "SANDBOX_PROJECT_DIR=$tmp/work/fab-a"

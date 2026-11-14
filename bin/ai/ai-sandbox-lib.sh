@@ -182,18 +182,28 @@ ai_sandbox_recreate_command() {   # <sandbox dir>
     echo "create-ai-sandbox.sh ${project:-<project dir>}"
 }
 
+# What makes a sandbox not current, said once: the knowledge stamp disagrees with the host's
+# knowledge configuration (stale, unstamped), or its compose file mounts a tools directory
+# that is not the installed revision's (C-INSTALL: a sandbox created before the install
+# root existed, or from another tree). Prints nothing for a current sandbox.
+ai_sandbox_stale_reason() {   # <sandbox dir>
+    local state
+    state=$(ai_sandbox_knowledge_state "$1")
+    case $state in
+        stale)     echo "stale: its compose file disagrees with the host's knowledge configuration" ;;
+        unstamped) echo "unstamped: it was created before the knowledge stamp existed" ;;
+        *) ai_sandbox_mounts_install_root "$1" || echo "stale: its compose file does not mount the installed revision's tools ($AI_SANDBOX_INSTALLED/current/tools)" ;;
+    esac
+}
+
 # The start path only checks; it never rewrites a sandbox. The repair is a
 # plain create-ai-sandbox.sh run for this sandbox.
 ai_sandbox_require_current() {   # <sandbox dir>
-    local state
-    state=$(ai_sandbox_knowledge_state "$1")
-    [ "$state" = current ] && return 0
+    local why
+    why=$(ai_sandbox_stale_reason "$1")
+    [ -n "$why" ] || return 0
     {
-        if [ "$state" = stale ]; then
-            echo "Sandbox $(basename "$1") is stale: its compose file disagrees with the host's knowledge configuration."
-        else
-            echo "Sandbox $(basename "$1") is unstamped: it was created before the knowledge stamp existed."
-        fi
+        echo "Sandbox $(basename "$1") is $why."
         echo "It cannot be started until it has been recreated. Run on the host:"
         echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
@@ -203,11 +213,11 @@ ai_sandbox_require_current() {   # <sandbox dir>
 # A running sandbox is entered whatever its stamp; this is what the host says
 # about one that is not current (nothing is executed in it).
 ai_sandbox_say_recreate() {   # <sandbox dir>
-    local state
-    state=$(ai_sandbox_knowledge_state "$1")
-    [ "$state" = current ] && return 0
+    local why
+    why=$(ai_sandbox_stale_reason "$1")
+    [ -n "$why" ] || return 0
     {
-        echo "Sandbox $(basename "$1") is running and $state: it keeps working, but it predates the host's current knowledge setup and the host runs nothing in it."
+        echo "Sandbox $(basename "$1") is running and ${why%%:*}: it keeps working, but it predates the host's current setup (${why#*: }) and the host runs nothing in it."
         echo "It must be re-created (this restarts it). Run on the host when it suits you:"
         echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
