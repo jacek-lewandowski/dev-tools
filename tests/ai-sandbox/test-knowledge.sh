@@ -1078,6 +1078,11 @@ assert_eq "close: tombstone deleted" "$(has_ref "$iclone" "refs/reports-closed/$
 assert_eq "close: other reports untouched" "$(has_ref "$remote" "$rr2")" yes
 knowledge sync "$integ" >/dev/null 2>&1
 assert_eq "close: a later sync lists nothing and pushes nothing back" "$(grep -c '^closed-report=' "$(status_file "$iclone")")$(has_ref "$remote" "$rr1")" 0no
+# O5: a closed report is archived on the remote at refs/reports-archive/<name> (the commit the host fetched), then deleted
+assert_eq "O5: the remote holds the closed report at refs/reports-archive/<name>, at its commit" "$(git -C "$remote" rev-parse "refs/reports-archive/$rn1" 2>/dev/null)" "$rr1_tip"
+assert_eq "O5: a later sync leaves the archive as it was" "$(git -C "$remote" rev-parse "refs/reports-archive/$rn1" 2>/dev/null)" "$rr1_tip"
+assert_eq "O5: no refs/reports-archive in the integrator's origin, its clone, a proposing sandbox's origin or clone" \
+    "$(for r in "$idir/knowledge-origin.git" "$iclone" "$pdir/knowledge-origin.git" "$clone"; do git -C "$r" for-each-ref 'refs/reports-archive/*'; done | wc -l | tr -d ' ')" 0
 
 # R4: a stale lease deletes nothing and says so
 rn2=${rr2#refs/reports/}
@@ -1091,7 +1096,24 @@ assert_eq "stale lease: local ref kept" "$(has_ref "$iclone" "$rr2")" yes
 assert_eq "stale lease: tombstone kept" "$(has_ref "$iclone" "refs/reports-closed/$rn2")" yes
 assert_contains "stale lease reported" "$(status_of "$iclone")" "$rn2"
 assert_eq "stale lease: no closed-report=" "$(grep -c '^closed-report=' "$(status_file "$iclone")")" 0
+assert_eq "O5: a tombstone naming another commit archives nothing" "$(has_ref "$remote" "refs/reports-archive/$rn2")" no
 git -C "$iclone" update-ref -d "refs/reports-closed/$rn2"; git -C "$iclone" update-ref -d "$rr2"; git -C "$remote" update-ref -d "$rr2"
+knowledge sync "$integ" >/dev/null 2>&1
+
+# O5: an archive that already holds another commit keeps the report, and the status says why
+rr9=$(report_in "$clone" p 2026-11-03_2026-11-04 ""); rn9=${rr9#refs/reports/}
+knowledge sync "$proj" >/dev/null 2>&1
+ks "$integ"
+git -C "$iclone" update-ref "refs/reports-closed/$rn9" "$rr9"
+git -C "$remote" update-ref "refs/reports-archive/$rn9" "$(git -C "$remote" rev-parse main)"
+knowledge sync "$integ" >/dev/null 2>&1
+sbsync "$integ" >/dev/null
+assert_eq "O5: archive at another commit: the report is not deleted" "$(has_ref "$remote" "$rr9")" yes
+assert_eq "O5: archive at another commit: the archive is unchanged" "$(git -C "$remote" rev-parse "refs/reports-archive/$rn9")" "$(git -C "$remote" rev-parse main)"
+assert_eq "O5: archive at another commit: no closed-report=" "$(grep -c '^closed-report=' "$(status_file "$iclone")")" 0
+assert_contains "O5: the status says why" "$(status_of "$iclone")" "refs/reports-archive/$rn9"
+git -C "$iclone" update-ref -d "refs/reports-closed/$rn9"; git -C "$iclone" update-ref -d "$rr9"
+git -C "$remote" update-ref -d "$rr9"; git -C "$remote" update-ref -d "refs/reports-archive/$rn9"
 knowledge sync "$integ" >/dev/null 2>&1
 
 # R4: a tombstone whose name is off the pattern is ignored, even in the integrator clone

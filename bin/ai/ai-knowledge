@@ -775,9 +775,10 @@ tip_state() {   # <commit>
 }
 
 PROPOSAL_RE='^proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
-# reads-outside: refs/reports/<name> and refs/reports-closed/<name> of the private
-# remote, read by the process-report skill and the integrator's knowledge-integrate
-# skill. A name is matched after the refs/reports/ prefix.
+# reads-outside: refs/reports/<name>, refs/reports-closed/<name> and refs/reports-archive/<name>
+# of the private remote, read by the process-report skill and the integrator's
+# knowledge-integrate skill (the archive is written by the host alone, create only, and read by
+# hand). A name is matched after the refs/reports/ prefix.
 REPORT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
 
 # After a sync, a running container whose stamp is current runs the in-sandbox command
@@ -1042,7 +1043,7 @@ sync_clone() {
 
     if [ "$role" = integrator ] && [ "$net" = yes ]; then
         local -a rtombs=()
-        local rfail=" " rstale=" "
+        local rfail=" " rstale=" " rorig rarch
         while IFS= read -r rref; do
             [ -n "$rref" ] || continue
             rname=${rref#"$mirror/reports-closed/"}
@@ -1050,6 +1051,22 @@ sync_clone() {
             rtip=$(hostgit rev-parse -q --verify "$rref" 2>/dev/null || true)
             [ -n "$rtip" ] || continue
             rtombs+=("$rname")
+            # M6: a closed report is archived before it is deleted, the commit being the host's own fetch
+            # of the remote's report, which the tombstone must name; the archive ref is created, never
+            # moved, and the report stays unless the archive holds that commit.
+            rorig=$(hostgit rev-parse -q --verify "refs/origin-reports/$rname^{commit}" 2>/dev/null || true)
+            if [ -n "$rorig" ]; then
+                if [ "$rorig" != "$rtip" ]; then rstale="$rstale$rname "; continue; fi
+                rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/reports-archive/$rname:" origin "$rtip:refs/reports-archive/$rname" 2>&1) || rc=$?
+                if [ "$rc" -ne 0 ]; then
+                    rc=0; rarch=$(git_net -C "$KNOWLEDGE_MAIN" ls-remote origin "refs/reports-archive/$rname" 2>&1) || rc=$?
+                    if [ "$rc" -ne 0 ]; then net_failed "$rc" "$rarch"; warn "cannot archive report $rname on the remote: $out"; rfail="$rfail$rname "; continue; fi
+                    if [ "${rarch%%[[:space:]]*}" != "$rtip" ]; then
+                        STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: refs/reports-archive/$rname holds another commit or could not be created"
+                        rfail="$rfail$rname "; continue
+                    fi
+                fi
+            fi
             rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
             [ "$rc" -ne 0 ] || continue
             case $out in
