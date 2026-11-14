@@ -310,7 +310,7 @@ record_integrator() {
             if [ -n "$imain" ] && [ "$imain" != "$hmain" ] \
                && ai_sandbox_host_git "$KNOWLEDGE_MAIN" merge-base --is-ancestor "$hmain" "$imain" 2>/dev/null; then
                 warn "the integrator clone $idir/knowledge has commits on main that are not on origin/main yet; the record is skipped so that main does not diverge."
-                warn "Run: ai-knowledge sync --all (it pushes that main), then this init again."
+                warn "Run: ai-knowledge sync --all (at a terminal it shows that main and pushes it on your yes), then this init again."
                 return 0
             fi
         fi

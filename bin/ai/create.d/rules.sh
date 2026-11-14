@@ -62,7 +62,8 @@ fi
 
 # Shared knowledge repository: when configured, the rendered main branch is what
 # the tools read, and the sandbox gets its own clone. All network git runs here,
-# on the host, and never blocks the start.
+# on the host; a failure never blocks the start. For the integrator's project at a
+# terminal it waits for the user's answer on pushing main (U12), before the image build.
 KNOWLEDGE="no"
 if ai_knowledge_configured; then
     step "Shared knowledge repository"
