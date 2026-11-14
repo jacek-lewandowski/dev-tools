@@ -250,6 +250,9 @@ printf '{"theme":"x","autoCompactEnabled":true}' > "$cs"; python3 "$cmerge" "$cs
 assert_eq "a user's choice is kept, the other key defaulted, others untouched" "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["theme"],d["idleCompaction"],d["autoCompactEnabled"])' "$cs")" "x False True"
 printf 'not json' > "$cs"; python3 "$cmerge" "$cs" 2>/dev/null
 assert_eq "unparsable file left alone" "$(cat "$cs")" 'not json'
+printf '{"theme":"x"}' > "$cs"; chmod 0640 "$cs"; python3 "$cmerge" "$cs"
+assert_eq "the merge keeps the file's mode" "$(stat -c %a "$cs")" '640'
+assert_no_file "the merge leaves no temporary file" "$cs.tmp"
 assert_contains "compaction merge cannot fail the start" "$(grep '^python3 - .*\.claude/settings.json' "$ep")" "|| true"
 
 rm -rf "$tmp"

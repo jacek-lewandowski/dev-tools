@@ -137,9 +137,15 @@ for key in ("idleCompaction", "autoCompactEnabled"):
         data[key] = False
         changed = True
 if changed:
-    with open(path, "w", encoding="utf-8") as f:
+    # Temporary file in the same directory, then a rename: a kill mid-write
+    # must not leave an empty settings.json.
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+    if os.path.isfile(path):
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    os.replace(tmp, path)
 PYEOF
 
 # --- Claude Code plugins -----------------------------------------------------
