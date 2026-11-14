@@ -45,6 +45,7 @@ x11_made=no; [ -d /tmp/.X11-unix ] || { mkdir -p /tmp/.X11-unix && x11_made=yes;
 cleanup_x() {
     pkill -f "$stubs/Xephyr" 2>/dev/null || true
     [ -z "${sockdir:-}" ] || { rm -f "${sockdir:?}/X${xnum:-0}"; rmdir "$sockdir" 2>/dev/null || true; }
+    [ -z "${xsockdir:-}" ] || rmdir "$xsockdir" 2>/dev/null || true
     [ -z "${xnum:-}" ] || rm -f "/tmp/.X11-unix/X$xnum"
     [ "$x11_made" = yes ] && rmdir /tmp/.X11-unix 2>/dev/null || true
 }
@@ -54,6 +55,7 @@ createx() {   # <mode> <project>
 }
 pn="$tmp/work/nested"; mkdir -p "$pn"; createx nested "$pn"
 px="$tmp/work/xpra"; mkdir -p "$px"; createx xpra "$px"
+xsockdir=$(sed -n 's/^SOCK_DIR="\(.*\)"$/\1/p' "$(dir "$px")/start-display.sh")
 for pj in "$pn" "$px"; do
     d=$(dir "$pj")
     for f in "$d/start-display.sh" "$d/stop-display.sh"; do
