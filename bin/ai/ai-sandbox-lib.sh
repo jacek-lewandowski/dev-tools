@@ -406,6 +406,375 @@ sys.stdout.buffer.write(keep.encode("utf-8"))' \
         || LC_ALL=C tr -cd '\11\12\40-\176'   # no usable python3: only printable ASCII, never the raw text
 }
 
+# I3c: a host write below a directory a sandbox can write, made without following a link
+# the sandbox may have placed there (the contract is in the phase 9 plan: ops mkdir, write,
+# link, hardlink, remove, copy). <root> is absolute and cannot be renamed from inside (a bind
+# source, or a host directory none contains), given resolved; every component of <path> is
+# entered with O_NOFOLLOW through its parent's descriptor and the last is acted on through
+# its parent, a file or link by creating a temporary name and renaming over it. Exit 0 done,
+# 1 refused or failed (one stderr line per refusal), 2 usage. The program is a python3 -I -c
+# argument, not standard input: standard input carries what write stores.
+ai_sandbox_nofollow() {   # <op> <root> <path> [<arg>...]
+    local prog
+    prog=$(cat <<'PY'
+import fnmatch, os, re, stat, sys
+
+PROG = "ai_sandbox_nofollow"
+DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+OPS = ("mkdir", "write", "link", "hardlink", "remove", "copy")
+RC = 0
+SEQ = 0
+
+
+def usage(msg):
+    sys.stderr.write("%s: %s\n" % (PROG, msg))
+    sys.exit(2)
+
+
+args = sys.argv[1:]
+if len(args) < 3:
+    usage("usage: <op> <root> <path> [<arg>...]")
+op, root, path, rest = args[0], args[1], args[2], args[3:]
+if op not in OPS:
+    usage("unknown op %s" % op)
+if not root.startswith("/"):
+    usage("root must be absolute")
+comps = path.split("/")
+if any(c in ("", ".", "..") for c in comps):
+    usage("path must be relative, with no empty, . or .. component")
+for a in args:
+    if "\0" in a:
+        usage("an argument holds a NUL")
+
+mode = None
+target = None
+copy_src = None
+delete = ignore_existing = False
+excludes = []
+if op in ("mkdir", "write"):
+    if len(rest) > 1:
+        usage("too many arguments")
+    if rest:
+        if not re.fullmatch("[0-7]{1,4}", rest[0]):
+            usage("mode must be octal")
+        mode = int(rest[0], 8)
+elif op in ("link", "hardlink"):
+    if len(rest) != 1 or not rest[0]:
+        usage("%s takes one argument" % op)
+    target = rest[0]
+    if op == "hardlink" and not target.startswith("/"):
+        usage("hardlink takes an absolute file")
+elif op == "remove":
+    if rest:
+        usage("remove takes no argument")
+else:
+    if not rest or not rest[0]:
+        usage("copy takes a directory")
+    copy_src = rest[0]
+    for o in rest[1:]:
+        if o == "--delete":
+            delete = True
+        elif o == "--ignore-existing":
+            ignore_existing = True
+        elif o.startswith("--exclude="):
+            excludes.append(o[len("--exclude="):])
+        else:
+            usage("unknown option %s" % o)
+    if delete and ignore_existing:
+        usage("--delete and --ignore-existing exclude each other")
+    if excludes and not delete:
+        usage("--exclude belongs to --delete")
+    if any(p == "" or "/" in p for p in excludes):
+        usage("an --exclude holds no slash and is not empty")
+
+
+def refuse(where, why):
+    global RC
+    RC = 1
+    sys.stderr.write("%s: refused %s %s: %s\n" % (PROG, root, where, why))
+
+
+def why(e):
+    return e.strerror or str(e)
+
+
+def lstat(name, fd):
+    try:
+        return os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def excluded(name):
+    return any(fnmatch.fnmatchcase(name, p) for p in excludes)
+
+
+def tmpname():
+    global SEQ
+    SEQ += 1
+    return ".ai-sandbox-nofollow.%d.%d" % (os.getpid(), SEQ)
+
+
+def walk(rootfd, parts, create):
+    """The directory descriptor of the parent: every component entered without following a
+    link. None after a refusal; "absent" when a component is missing and may stay so."""
+    fd = os.dup(rootfd)
+    for i, c in enumerate(parts):
+        where = "/".join(parts[: i + 1])
+        try:
+            nfd = os.open(c, DIRFLAGS, dir_fd=fd)
+        except FileNotFoundError:
+            if not create:
+                os.close(fd)
+                return "absent"
+            try:
+                os.mkdir(c, 0o777, dir_fd=fd)
+                nfd = os.open(c, DIRFLAGS, dir_fd=fd)
+            except OSError as e:
+                refuse(where, why(e))
+                os.close(fd)
+                return None
+        except OSError:
+            refuse(where, "not a directory or a link")
+            os.close(fd)
+            return None
+        os.close(fd)
+        fd = nfd
+    return fd
+
+
+def place(pfd, name, make, where):
+    """Replace a file or link at name by what make(tmp) creates there: never a write
+    through the old entry. A real directory is left alone and refused."""
+    st = lstat(name, pfd)
+    if st is not None and stat.S_ISDIR(st.st_mode):
+        refuse(where, "a directory is there")
+        return False
+    tmp = tmpname()
+    try:
+        make(tmp)
+        os.rename(tmp, name, src_dir_fd=pfd, dst_dir_fd=pfd)
+    except OSError as e:
+        refuse(where, why(e))
+        return False
+    finally:
+        # rename leaves the temporary name when both names are links to one file
+        try:
+            os.unlink(tmp, dir_fd=pfd)
+        except OSError:
+            pass
+    return True
+
+
+def rmtree(pfd, name):
+    fd = os.open(name, DIRFLAGS, dir_fd=pfd)
+    try:
+        for e in list(os.scandir(fd)):
+            if e.is_dir(follow_symlinks=False):
+                rmtree(fd, e.name)
+            else:
+                os.unlink(e.name, dir_fd=fd)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=pfd)
+
+
+def remove_any(pfd, name):
+    st = lstat(name, pfd)
+    if st is None:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        rmtree(pfd, name)
+    else:
+        os.unlink(name, dir_fd=pfd)
+
+
+def set_attrs(fd, st):
+    os.fchmod(fd, stat.S_IMODE(st.st_mode) & 0o777)
+    os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
+def copy_file(srcpath, st, pfd, name, where):
+    def make(tmp):
+        sfd = os.open(srcpath, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            dfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=pfd)
+            try:
+                while True:
+                    buf = os.read(sfd, 1 << 20)
+                    if not buf:
+                        break
+                    view = memoryview(buf)
+                    while view:
+                        view = view[os.write(dfd, view):]
+                set_attrs(dfd, st)
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
+    return place(pfd, name, make, where)
+
+
+def copy_link(srcpath, pfd, name, where):
+    link_target = os.readlink(srcpath)
+    return place(pfd, name, lambda tmp: os.symlink(link_target, tmp, dir_fd=pfd), where)
+
+
+def copy_tree(srcdir, dfd, rel):
+    try:
+        entries = sorted(os.scandir(srcdir), key=lambda e: e.name)
+    except OSError as e:
+        refuse(rel, "cannot read the source: " + why(e))
+        return
+    held = set()
+    for e in entries:
+        n = e.name
+        if n.startswith(".ai-sandbox-nofollow."):
+            continue
+        if excluded(n):
+            continue
+        held.add(n)
+        where = rel + "/" + n
+        try:
+            sst = e.stat(follow_symlinks=False)
+            is_dir = stat.S_ISDIR(sst.st_mode)
+            is_reg = stat.S_ISREG(sst.st_mode)
+            is_lnk = stat.S_ISLNK(sst.st_mode)
+            if not (is_dir or is_reg or is_lnk):
+                continue
+            dst = lstat(n, dfd)
+            dst_dir = dst is not None and stat.S_ISDIR(dst.st_mode)
+            if ignore_existing and dst is not None and not (is_dir and dst_dir):
+                continue
+            if is_dir:
+                created = False
+                if not dst_dir:
+                    if dst is not None:
+                        os.unlink(n, dir_fd=dfd)
+                    os.mkdir(n, 0o700, dir_fd=dfd)
+                    created = True
+                sub = os.open(n, DIRFLAGS, dir_fd=dfd)
+                try:
+                    copy_tree(e.path, sub, where)
+                    if created or not ignore_existing:
+                        set_attrs(sub, sst)
+                finally:
+                    os.close(sub)
+            else:
+                if dst_dir:
+                    if not delete:
+                        refuse(where, "a directory is there")
+                        continue
+                    rmtree(dfd, n)
+                if is_reg:
+                    copy_file(e.path, sst, dfd, n, where)
+                else:
+                    copy_link(e.path, dfd, n, where)
+        except OSError as err:
+            refuse(where, why(err))
+    if delete:
+        try:
+            stale = [d.name for d in os.scandir(dfd)]
+        except OSError as err:
+            refuse(rel, why(err))
+            return
+        for n in sorted(stale):
+            if n in held or excluded(n):
+                continue
+            try:
+                remove_any(dfd, n)
+            except OSError as err:
+                refuse(rel + "/" + n, why(err))
+
+
+def main():
+    try:
+        rootfd = os.open(root, DIRFLAGS)
+    except OSError as e:
+        refuse(path, "the root is not a directory or is a link: " + why(e))
+        return
+    parent_parts, last = comps[:-1], comps[-1]
+    if op == "write":
+        data = sys.stdin.buffer.read()
+    pfd = walk(rootfd, parent_parts, create=(op == "mkdir"))
+    if pfd == "absent":
+        if op == "remove":
+            return
+        refuse(path, "a directory on the way is missing")
+        return
+    if pfd is None:
+        return
+    try:
+        if op == "mkdir":
+            st = lstat(last, pfd)
+            if st is None:
+                os.mkdir(last, 0o777, dir_fd=pfd)
+            elif not stat.S_ISDIR(st.st_mode):
+                refuse(path, "not a directory (a link or a file)")
+                return
+            fd = os.open(last, DIRFLAGS, dir_fd=pfd)
+            try:
+                if mode is not None:
+                    os.fchmod(fd, mode)
+            finally:
+                os.close(fd)
+        elif op == "write":
+            def make(tmp):
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o666 if mode is None else 0o600, dir_fd=pfd)
+                try:
+                    view = memoryview(data)
+                    while view:
+                        view = view[os.write(fd, view):]
+                    if mode is not None:
+                        os.fchmod(fd, mode)
+                finally:
+                    os.close(fd)
+            place(pfd, last, make, path)
+        elif op == "link":
+            place(pfd, last, lambda tmp: os.symlink(target, tmp, dir_fd=pfd), path)
+        elif op == "hardlink":
+            place(pfd, last, lambda tmp: os.link(target, tmp, dst_dir_fd=pfd, follow_symlinks=False), path)
+        elif op == "remove":
+            st = lstat(last, pfd)
+            if st is None:
+                return
+            if stat.S_ISDIR(st.st_mode):
+                refuse(path, "a directory is there")
+                return
+            os.unlink(last, dir_fd=pfd)
+        else:
+            st = lstat(last, pfd)
+            if ignore_existing and st is not None and not stat.S_ISDIR(st.st_mode):
+                return
+            sst = os.stat(copy_src)
+            created = False
+            if st is None or not stat.S_ISDIR(st.st_mode):
+                if st is not None:
+                    os.unlink(last, dir_fd=pfd)
+                os.mkdir(last, 0o700, dir_fd=pfd)
+                created = True
+            fd = os.open(last, DIRFLAGS, dir_fd=pfd)
+            try:
+                copy_tree(copy_src, fd, path)
+                if created or not ignore_existing:
+                    set_attrs(fd, sst)
+            finally:
+                os.close(fd)
+    except OSError as e:
+        refuse(path, why(e))
+
+
+try:
+    main()
+except BrokenPipeError:
+    RC = 1
+sys.exit(RC)
+PY
+)
+    python3 -I -c "$prog" "$@"
+}
+
 # C-INSTALL: a host entry point calls this first, with its own path. 0 when the directory
 # holding it, links resolved, is not one a sandbox can write (ai_sandbox_writable_path);
 # else says so with the install command and returns 3, the status ai_sandbox_host_git gives
