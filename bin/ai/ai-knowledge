@@ -652,7 +652,7 @@ wire_host() {
 # A tool whose directory does not exist is left alone, and so is a real
 # directory of the same name: that is a local skill, not ours to replace.
 link_skills_into() {
-    local base=$1 f name d p
+    local base=$1 f name d p root
     for f in "$AI_KNOWLEDGE_RENDER"/skills/*/; do
         [ -d "$f" ] || continue
         name=$(basename "$f")
@@ -660,19 +660,36 @@ link_skills_into() {
             [ -d "$base/$d" ] || continue
             p="$base/$d/skills/$name"
             if [ -d "$p" ] && [ ! -L "$p" ]; then continue; fi
-            mkdir -p "$base/$d/skills"
-            ln -sfn "../../.agents/skills/$name" "$p"
+            if [ "$base" = "$HOME" ]; then
+                # D17: $HOME is no bind source (a host may keep ~/.claude as a link); plain commands as before
+                mkdir -p "$base/$d/skills"
+                ln -sfn "../../.agents/skills/$name" "$p"
+            else
+                # W1: a sandbox directory's tool directories are bind sources; below them a sandbox
+                # may have placed a link, which no host write follows (a refusal names the path on stderr)
+                root="$(readlink -f "$base")/$d"
+                ai_sandbox_nofollow mkdir "$root" skills || continue
+                ai_sandbox_nofollow link "$root" "skills/$name" "../../.agents/skills/$name" || true
+            fi
         done
     done
 }
 
 # Every knowledge mount target inside the sandbox directory must exist before
-# 'compose up', or Docker creates it root-owned.
+# 'compose up', or Docker creates it root-owned. W2: through ai_sandbox_nofollow, rooted at the
+# tool directories (bind sources); a link where a target belongs is left as it is and named.
 prepare_targets() {
-    local sb=$1 f
-    mkdir -p "$sb/.gemini/agents" "$sb/.claude/agents" "$sb/.codex/agents"
+    local sb=$1 d f root
+    for d in .gemini .claude .codex; do
+        mkdir -p "$sb/$d"
+        root="$(readlink -f "$sb")/$d"
+        ai_sandbox_nofollow mkdir "$root" agents || true
+    done
     for f in .gemini/GEMINI.md .claude/CLAUDE.md .codex/AGENTS.md; do
-        [ -e "$sb/$f" ] || : > "$sb/$f" 2>/dev/null || true
+        d=${f%%/*}; root="$(readlink -f "$sb")/$d"
+        if [ -L "$sb/$f" ]; then warn "$sb/$f is a link; left as it is, not written through"
+        elif [ ! -e "$sb/$f" ]; then ai_sandbox_nofollow write "$root" "${f#*/}" </dev/null || true
+        fi
     done
 }
 
