@@ -39,7 +39,7 @@ for f, n in sorted(rows):
     print("%s:%d" % (f, n))
 ' "$dir"
 }
-sg_reports() { sg_findings "$1"; }
+sg_reports() { sg_findings "$1" --filter '^host-git'; }
 # The bash files under <root>/bin/ai: name ends .sh, or the first line names bash or sh.
 bash_files() {   # <root>: paths relative to <root>
     local f

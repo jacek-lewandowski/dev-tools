@@ -18,4 +18,5 @@ elif [ -d "$HOME/tools/context_statusline" ];       then tools="$HOME/tools"
 else echo "context-statusline: no 'tools' directory (looked beside this script and in ~/tools)" >&2; exit 2
 fi
 cd "$(dirname "$tools")"
-exec python3 -m tools.context_statusline "$@"
+# -I leaves the working directory off sys.path, so the directory holding tools/ is put there here.
+exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from tools.context_statusline.statusline import main; sys.exit(main())' "$PWD" "$@"

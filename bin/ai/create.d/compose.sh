@@ -35,7 +35,7 @@ DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
 MEM_GB="$MEMORY_GB" \
 KNOWLEDGE_STAMP="$AI_SANDBOX_KNOWLEDGE_STAMP" \
-python3 - "$ENV_FILE" <<'PYEOF'
+python3 -I - "$ENV_FILE" <<'PYEOF'
 import os, sys
 path = sys.argv[1]
 managed = {

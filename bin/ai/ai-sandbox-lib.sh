@@ -760,7 +760,7 @@ ai_sandbox_caches_prepare() {
 ai_sandbox_caches_current_triple() {   # <volume name>
     local out
     out=$(docker volume inspect "$1" 2>/dev/null) || return 1
-    printf '%s' "$out" | python3 -c '
+    printf '%s' "$out" | python3 -I -c '
 import json, sys
 try:
     opts = json.load(sys.stdin)[0]["Options"]

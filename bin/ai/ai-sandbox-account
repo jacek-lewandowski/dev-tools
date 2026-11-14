@@ -24,7 +24,7 @@ confirm() {
 
 claude_account_of() {
     [ -f "$1" ] || { echo "no state file"; return 0; }
-    python3 - "$1" <<'PY' 2>/dev/null || echo unknown
+    python3 -I - "$1" <<'PY' 2>/dev/null || echo unknown
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))

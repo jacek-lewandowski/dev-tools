@@ -271,7 +271,7 @@ cmd_init() {
 # The host's GEMINI.md without the block create-ai-sandbox.sh generates, which
 # the render appends again from its own file.
 strip_env_block() {   # <src> <dst>
-    SRC="$1" DST="$2" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 - <<'PYSTRIP'
+    SRC="$1" DST="$2" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 -I - <<'PYSTRIP'
 import os, re
 text = open(os.environ["SRC"], encoding="utf-8").read()
 pattern = re.compile(r"\n*" + re.escape(os.environ["ENV_BEGIN"]) + r".*?" + re.escape(os.environ["ENV_END"]) + r"\n*", re.DOTALL)
@@ -483,7 +483,7 @@ cmd_render() {
     mkdir -p "$AI_SANDBOX_ROOT/shared" "$AI_KNOWLEDGE_RENDER" || return 1
     local tmp
     tmp=$(mktemp -d "$AI_SANDBOX_ROOT/shared/.knowledge-render.XXXXXX") || return 1
-    if ! python3 - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
+    if ! python3 -I - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
 import os, re, shutil, sys
 main, out, env_block = sys.argv[1:4]
 
@@ -1299,7 +1299,7 @@ cmd_propose() {
     # Frontmatter keys the caller knows (project_id, machine, project) are added
     # when the file lacks them; an existing key wins. Cleanup is explicit: a
     # RETURN trap would stay armed in the caller.
-    SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 - <<'PYFM'
+    SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 -I - <<'PYFM'
 import os
 text = open(os.environ["SRC"], encoding="utf-8").read()
 extra = [(k, os.environ[v]) for k, v in (("project_id", "PID"), ("machine", "MACHINE"), ("project", "PROJECT")) if os.environ.get(v)]

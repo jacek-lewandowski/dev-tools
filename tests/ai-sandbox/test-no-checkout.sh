@@ -51,6 +51,20 @@ cp -a "$REPO_ROOT/tools" "$T/bare/tools"; chmod -R u+w "$T/bare/tools"
 mkdir -p "$HOME/.claude/projects/p"; : > "$HOME/.claude/projects/p/p4-test.jsonl"   # the session handover-ready marks
 assert_eq "context-statusline with tools/ beside it runs" "$(run "$T/bare/bin/ai/context-statusline" --plain)" 0
 assert_eq "handover-ready with tools/ beside it runs" "$(run "$T/bare/bin/ai/handover-ready" --clear)" 0
+# O19: neither wrapper runs a module planted in PYTHONPATH or in the working directory
+mkdir -p "$T/plant/tools/context_statusline"
+planted='import os\nopen(os.environ["MARKER"], "w").close()\n'
+printf "$planted" > "$T/plant/json.py"; printf "$planted" > "$T/plant/tools/context_statusline/__init__.py"
+for prog in context-statusline handover-ready; do
+    arg=--plain; [ "$prog" = handover-ready ] && arg=--clear
+    rm -f "$T/pymarker"
+    rc=$(cd "$T/plant" && MARKER="$T/pymarker" PYTHONPATH="$T/plant" run "$T/bare/bin/ai/$prog" "$arg")
+    assert_eq "$prog with a planted PYTHONPATH and working directory runs" "$rc" 0
+    assert_no_file "$prog ran no planted module" "$T/pymarker"
+done
+printf 'import os\nopen(os.environ["MARKER"], "w").close()\n' > "$T/plant/probe.py"
+(cd "$T/plant" && MARKER="$T/pymarker" PYTHONPATH="$T/plant" python3 -c 'import json')
+assert_file "known case: a Python without -I imports the planted json.py, so the marker can appear" "$T/pymarker"
 # the image's copy: in the build context, nothing beside it, the sandbox mounts ~/tools
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
 mkdir -p "$T/ctx"; cp "$REPO_ROOT/bin/ai/context-statusline" "$T/ctx/"
