@@ -572,6 +572,10 @@ assert_contains "the restart refusal names the re-create command" "$msg" "create
 msg=$(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox" 2>&1) && r=0 || r=$?
 assert_eq "ai-sandbox enters a running current sandbox" "$r" 0
 assert_eq "a running current sandbox gets no re-create notice" "$(printf '%s\n' "$msg" | grep -c 're-created')" 0
+# restarting a sandbox does not sync knowledge either
+rm -f "$pdir/status/knowledge"
+(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" >/dev/null 2>&1) || true
+assert_no_file "ai-sandbox-restart does not sync knowledge" "$pdir/status/knowledge"
 rm -rf "$odir"
 : > "$DOCKER_STUB_LOG"
 out=$(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1) && r=0 || r=$?
