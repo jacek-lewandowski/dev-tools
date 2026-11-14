@@ -260,5 +260,152 @@ rc=$(IMAGES="" frominst main)
 assert_eq "no sandbox image: exit 125" "$rc" 125
 assert_eq "current unchanged" "$(readlink "$INST/current")" "$cur"
 
+# ===========================================================================
+# O19 (install half): no Python of the install reads the working directory (D27)
+# ===========================================================================
+new_home; INST="$AI_SANDBOX_ROOT/installed"
+git init -q --bare "$INST/src.git"; git --git-dir="$INST/src.git" remote add origin "$ORIGIN"
+mkdir -p "$T/cwd"; printf 'import os\nopen(os.environ["MARKER"], "w").close()\n' > "$T/cwd/re.py"
+printf 'export A=1\n' > "$HOME/.bashrc"
+rm -f "$T/pymarker"
+rc=$(cd "$T/cwd" && MARKER="$T/pymarker" inst "$c1")
+assert_eq "first install from a directory holding re.py: exit 0" "$rc" 0
+assert_contains "the block was written" "$(cat "$HOME/.bashrc")" "dev-tools ai-sandbox helpers"
+assert_no_file "re.py of the working directory did not run (block written)" "$T/pymarker"
+rc=$(cd "$T/cwd" && MARKER="$T/pymarker" inst "$c2")
+assert_eq "second install, block present: exit 0" "$rc" 0
+assert_no_file "re.py of the working directory did not run (block present)" "$T/pymarker"
+# known case for the method: the same script run without -I does import it
+printf 'import re\n' > "$T/imp.py"
+(cd "$T/cwd" && MARKER="$T/pymarker" python3 - < "$T/imp.py")
+assert_file "a Python run without -I from that directory runs re.py, so the marker can appear" "$T/pymarker"
+
+# ===========================================================================
+# Hostile trees and the display filter (design review I1, I2, L2)
+# ===========================================================================
+rawtree() {   # <gitdir> <mode> <name> <oid> ...: a tree object with the entries as given, no validation
+    python3 -I -c '
+import subprocess, sys
+gd, a = sys.argv[1], sys.argv[2:]
+data = b""
+for i in range(0, len(a), 3):
+    data += a[i].encode() + b" " + a[i+1].encode("utf-8", "surrogateescape") + b"\0" + bytes.fromhex(a[i+2])
+print(subprocess.run(["git", "--git-dir=" + gd, "hash-object", "--literally", "-t", "tree", "-w", "--stdin"],
+    input=data, capture_output=True, check=True).stdout.decode().strip())' "$@"
+}
+O2="$T/origin2.git"; git clone -q --bare "$W" "$O2"
+gi() { git --git-dir="$O2" "$@"; }
+blobw() { printf '%b' "$1" | gi hash-object -w --stdin; }
+lib2=$(gi rev-parse "$c1:bin/ai/ai-sandbox-lib.sh"); tools2=$(gi rev-parse "$c1:tools")
+benign=$(blobw 'echo benign\n'); evil=$(blobw 'echo EVIL\n')
+dup_ai=$(rawtree "$O2" 100644 ai-sandbox-lib.sh "$lib2" 100755 tool "$benign" 100755 tool "$evil")
+dup_bin=$(rawtree "$O2" 40000 ai "$dup_ai"); dup_root=$(rawtree "$O2" 40000 bin "$dup_bin" 40000 tools "$tools2")
+cdup=$(gi commit-tree "$dup_root" -p "$c1" -m "dup entry")   # a branch names it only after c1 is installed
+new_inst2() {   # a fresh HOME, c1 installed from O2
+    new_home; INST="$AI_SANDBOX_ROOT/installed"
+    inst "$c1" >/dev/null   # no hosting remote yet: the install makes src.git and refuses
+    git --git-dir="$INST/src.git" remote add origin "$O2"
+    inst "$c1" >/dev/null
+}
+new_inst2
+gi update-ref refs/heads/dup "$cdup"
+assert_eq "a new src.git has transfer.fsckObjects on" "$(git --git-dir="$INST/src.git" config transfer.fsckObjects)" true
+rc=$(inst dup)
+assert_eq "a commit whose tree lists a path twice: the fetch fails, exit 1" "$rc" 1
+assert_eq "current unchanged" "$(readlink "$INST/current")" "rev/$c1"
+assert_no_file "no rev/<commit>" "$INST/rev/$cdup"
+assert_eq "the objects were not accepted into src.git" "$(git --git-dir="$INST/src.git" cat-file -e "$cdup" 2>/dev/null && echo present || echo absent)" absent
+# with the setting off, the export itself refuses the second entry
+git --git-dir="$INST/src.git" config transfer.fsckObjects false
+rc=$(inst dup)
+assert_eq "with fsckObjects off the export fails on the second entry, exit 1" "$rc" 1
+assert_contains "naming the repeated path" "$(cat "$T/err")" "bin/ai/tool"
+assert_eq "current unchanged" "$(readlink "$INST/current")" "rev/$c1"
+assert_no_file "no rev/<commit>" "$INST/rev/$cdup"
+assert_no_file "no partial directory" "$INST/rev/.partial-$cdup"
+# known case for the method: the same tree without the repeat installs
+ok_ai=$(rawtree "$O2" 100644 ai-sandbox-lib.sh "$lib2" 100755 tool "$benign")
+ok_bin=$(rawtree "$O2" 40000 ai "$ok_ai"); ok_root=$(rawtree "$O2" 40000 bin "$ok_bin" 40000 tools "$tools2")
+cok=$(gi commit-tree "$ok_root" -p "$c1" -m "single entry"); gi update-ref refs/heads/single "$cok"; gi update-ref -d refs/heads/dup
+rc=$(inst single)
+assert_eq "the same tree with the path once installs" "$rc" 0
+assert_eq "with git's view of the file" "$(cat "$INST/rev/$cok/bin/ai/tool")" "echo benign"
+
+# the display filter: C0, DEL, C1 (as UTF-8 and as a raw byte) and bidi controls are dropped
+subj=$(printf 'subj \xc2\x9b2J c1 \xe2\x80\xaeRTL\xe2\x80\xac iso\xe2\x81\xa6 raw\x9bJ del\x7f end\tTAB')
+cc=$(gi commit-tree "$(gi rev-parse "$c1^{tree}")" -p "$c1" -m "$subj"); gi update-ref refs/heads/ctl "$cc"
+rc=$(ANS=n inst ctl)
+out=$(cat "$T/out")
+filtered=$(python3 -I -c '
+import sys, unicodedata
+t = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+bad = [hex(ord(c)) for c in t if (unicodedata.category(c) == "Cc" and c not in "\n\t") or "‪" <= c <= "‮" or "⁦" <= c <= "⁩" or c == "�"]
+print(" ".join(bad))' "$T/out")
+assert_eq "no control, bidi or undecodable code point reaches stdout" "$filtered" ""
+assert_contains "the subject's text is kept" "$out" "subj 2J c1 RTL iso rawJ del end"
+assert_contains "and its tab" "$out" $'end\tTAB'
+# known case: the C0-only filter the install had passes the same subject's U+009B and U+202E
+old=$(printf '%s' "$subj" | LC_ALL=C tr -d '\000-\010\013-\037\177')
+assert_contains "the C0-only filter let U+009B through" "$old" $'\xc2\x9b'
+assert_contains "and U+202E" "$old" $'\xe2\x80\xae'
+
+# more than 50 commits: the summary says how many it left out
+p=$c1; for i in $(seq 1 60); do p=$(gi commit-tree "$(gi rev-parse "$c1^{tree}")" -p "$p" -m "bulk $i"); done
+gi update-ref refs/heads/many "$p"
+rc=$(ANS=n inst many)
+assert_eq "50 commits shown" "$(grep -c ' bulk [0-9]' "$T/out")" 50
+assert_contains "and the 10 left out are counted" "$(cat "$T/out")" "10 older commits not shown"
+rc=$(ANS=n inst ctl)
+assert_eq "a short summary carries no such notice" "$(grep -c 'not shown' "$T/out")" 0
+
+# ===========================================================================
+# O6 (D32): ~/.bashrc that is not UTF-8, or cannot be written
+# ===========================================================================
+new_home; INST="$AI_SANDBOX_ROOT/installed"
+git init -q --bare "$INST/src.git"; git --git-dir="$INST/src.git" remote add origin "$ORIGIN"
+printf 'export A=1\n# za\xbf\xf3\xb3\xe6 (latin-2)\n' > "$HOME/.bashrc"; cp "$HOME/.bashrc" "$T/b.before"
+rc=$(inst "$c1")
+assert_eq "a ~/.bashrc with bytes that are not UTF-8: exit 0" "$rc" 0
+assert_eq "current switched" "$(readlink "$INST/current")" "rev/$c1"
+assert_eq "every byte outside the block is unchanged" "$(head -c "$(wc -c < "$T/b.before")" "$HOME/.bashrc" | cmp - "$T/b.before" && echo same)" same
+assert_contains "the block was written" "$(cat "$HOME/.bashrc")" "dev-tools ai-sandbox helpers"
+# unreadable: refused before anything is switched or moved
+new_home; INST="$AI_SANDBOX_ROOT/installed"
+git init -q --bare "$INST/src.git"; git --git-dir="$INST/src.git" remote add origin "$ORIGIN"
+mkdir -p "$AI_SANDBOX_ROOT/bin"; printf 'old\n' > "$AI_SANDBOX_ROOT/bin/ai-sandbox"
+printf 'export A=1\n' > "$HOME/.bashrc"; chmod 000 "$HOME/.bashrc"
+rc=$(inst "$c1")
+assert_eq "a ~/.bashrc that cannot be read: exit 1" "$rc" 1
+assert_no_file "current was not created" "$INST/current"
+assert_eq "~/.ai-sandbox/bin is still the directory of copies" "$([ -d "$AI_SANDBOX_ROOT/bin" ] && [ ! -L "$AI_SANDBOX_ROOT/bin" ] && echo dir)" dir
+assert_no_file "nothing was moved aside" "$AI_SANDBOX_ROOT/bin.pre-install"
+assert_no_file "and no revision was exported" "$INST/rev/$c1"
+chmod 644 "$HOME/.bashrc"
+rc=$(inst "$c1")
+assert_eq "known case: the same install with a readable file succeeds" "$rc" 0
+
+# ===========================================================================
+# D31: --from takes a repository's top level and no link below its stamped project
+# ===========================================================================
+new_home; INST="$AI_SANDBOX_ROOT/installed"
+S2="$T/proj"; mkwork "$S2"; sc1=$(commit "$S2" "proj one")
+qd=$(ai_sandbox_dir_for "$(readlink -f "$S2")"); mkdir -p "$qd"; printf '%s\n' "$(readlink -f "$S2")" > "$qd/project-path"
+img=$(ai_sandbox_image_name base)
+fromrun() { DOCKER_STUB_IMAGES="$img" inst --from "$@"; }
+nodocker() { assert_eq "$1: the docker log holds no run" "$(grep -c '^run ' "$DOCKER_STUB_LOG")" 0; }
+: > "$DOCKER_STUB_LOG"
+rc=$(fromrun "$S2/tools" main)
+assert_eq "--from a subdirectory of the repository: exit 1" "$rc" 1
+nodocker "a subdirectory"
+assert_no_file "nothing installed" "$INST/current"
+ln -s "$S2" "$S2/tools/self"
+rc=$(fromrun "$S2/tools/self" main)
+assert_eq "--from a path through a link below its stamped project: exit 1" "$rc" 1
+nodocker "a link below the project"
+mkdir -p "$T/hostlinks"; ln -s "$S2" "$T/hostlinks/proj"
+rc=$(fromrun "$T/hostlinks/proj" main)
+assert_eq "--from the repository through a link above the stamped project: exit 0" "$rc" 0
+assert_eq "it installed the repository's commit" "$(readlink "$INST/current")" "rev/$sc1"
+
 rm -rf "$T"
 finish

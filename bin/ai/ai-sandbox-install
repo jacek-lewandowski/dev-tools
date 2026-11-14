@@ -5,8 +5,9 @@
 #
 # <revision> is a full object id or a branch name (default: main). Without --from the
 # revision comes from the hosting remote ('origin' of ~/.ai-sandbox/installed/src.git);
-# with --from, from the repository in <directory>, which a sandbox may be able to write:
-# its branches are fetched through the confined git (C-GIT) and nothing else of it is.
+# with --from, from the repository whose top level is <directory> (no link at or below its
+# stamped project), which a sandbox may be able to write: its branches are fetched through
+# the confined git (C-GIT) and nothing else of it is.
 # The command shows the commits and the changed paths, asks, exports the commit's files
 # under bin/ai, tools, tests/ai-sandbox and verify-ai-sandbox-on-host.sh without applying
 # any attribute of the commit, makes them read-only as installed/rev/<commit>, and
@@ -48,19 +49,55 @@ export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 export AI_SANDBOX_GIT_TIMEOUT="${AI_SANDBOX_GIT_TIMEOUT:-120}"
 g() { ai_sandbox_host_git "$SRC" --no-pager --no-replace-objects "$@"; }
-# Text that came from a repository a sandbox can write is printed without control characters.
-clean() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
+# Text that came from a repository a sandbox can write is printed without control characters:
+# every code point of category Cc (C0, DEL, C1) except newline and tab, the bidi embeddings,
+# overrides and isolates, and every byte that is not UTF-8 (C-GIT's display rule).
+clean() {
+    python3 -I -c '
+import sys, unicodedata
+text = sys.stdin.buffer.read().decode("utf-8", "ignore")
+keep = "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
+        and not "\u202a" <= c <= "\u202e" and not "\u2066" <= c <= "\u2069"))
+sys.stdout.buffer.write(keep.encode("utf-8"))'
+}
 
 mkdir -p "$INSTALLED"
-[ -f "$SRC/HEAD" ] || ai_sandbox_host_git - init -q --bare "$SRC" || die "cannot create $SRC"
+# A new src.git checks every object it takes in: a tree that lists one name twice is refused
+# at the fetch (the export refuses it again, for a src.git made before this setting).
+if [ ! -f "$SRC/HEAD" ]; then
+    ai_sandbox_host_git - init -q --bare "$SRC" || die "cannot create $SRC"
+    g config transfer.fsckObjects true || die "cannot configure $SRC"
+fi
 
 # ---------------------------------------------------------------------------
 # Fetch and resolve
 # ---------------------------------------------------------------------------
+# --from names a repository's top level, and no component of its path at or below the
+# stamped project that holds it is a link: a sandbox can write there, and a link it made
+# would have the host mount another directory the user can read. Links above the project
+# are the user's own.
+check_from() {   # <directory as given> <directory, links resolved>
+    local abs cur="" comp in_project=no
+    local -a parts
+    [ -e "$2/.git" ] || die "--from takes a repository's top level (the directory holding .git): $1"
+    abs=$(realpath -sm -- "$1")
+    [ "$(readlink -f -- "$abs")" = "$2" ] || die "--from: a path with a link before a '..' is not accepted: $1"
+    IFS=/ read -ra parts <<<"${abs#/}"
+    for comp in "${parts[@]}"; do
+        cur="$cur/$comp"
+        if [ "$in_project" = yes ]; then
+            [ ! -L "$cur" ] || die "--from: $cur is a link below a sandbox project; give the repository's own path"
+        elif ai_sandbox_stamped "$(readlink -f -- "$cur")"; then
+            in_project=yes
+        fi
+    done
+}
+
 rc=0
 if [ -n "$from" ]; then
     [ -d "$from" ] || die "no such directory: $from"
     from_real=$(readlink -f -- "$from")
+    check_from "$from" "$from_real"
     id=$(ai_sandbox_project_id "$from_real")
     ai_sandbox_confined_fetch "$SRC" "refs/from/$id" "$from_real" . 'refs/heads/*' || rc=$?
     prefix="refs/from/$id/heads"
@@ -96,6 +133,8 @@ if [ "$current_rev" = "rev/$COMMIT" ]; then
     echo "Revision $COMMIT is already installed."
     exit 0
 fi
+# The block is written after the switch, so a file it cannot write is found before it.
+ai_sandbox_bashrc_usable "$HOME/.bashrc" || die "cannot read and write $HOME/.bashrc; nothing was installed"
 
 # ---------------------------------------------------------------------------
 # Show what changes, ask
@@ -110,6 +149,8 @@ esac
         echo "Installed now:       $installed_commit"
         echo "Commits:"
         g log --no-decorate --no-notes -n 50 --format='  %h %s' "$installed_commit..$COMMIT" || true
+        total=$(g rev-list --count "$installed_commit..$COMMIT" 2>/dev/null) || total=0
+        [ "$total" -le 50 ] || echo "  ... and $((total - 50)) older commits not shown"
         echo "Changed paths:"
         g diff --no-ext-diff --no-textconv --name-status "$installed_commit" "$COMMIT" -- "${EXPORT_ROOTS[@]}" | sed 's/^/  /' || true
     else
@@ -145,12 +186,13 @@ export_commit() {   # <commit> <destination>
         esac
     done < "$tmp/entries"
     mkdir -p "$dest"
-    g cat-file --batch < "$tmp/oids" | python3 -c '
+    g cat-file --batch < "$tmp/oids" | python3 -I -c '
 import os, sys
 dest, entries_file = sys.argv[1], sys.argv[2]
 os.umask(0o022)
 entries = [e for e in open(entries_file, "rb").read().split(b"\0") if e]
 src = sys.stdin.buffer
+seen = set()
 for e in entries:
     meta, path = e.split(b"\t", 1)
     mode, _type, oid = meta.decode().split()
@@ -163,6 +205,9 @@ for e in entries:
     parts = path.decode("utf-8", "surrogateescape").split("/")
     if any(p in ("", ".", "..") for p in parts):
         sys.exit("unsafe path in the tree: " + path.decode("utf-8", "replace"))
+    if path in seen:
+        sys.exit("the tree lists a path twice: " + path.decode("utf-8", "replace"))
+    seen.add(path)
     target = os.path.join(dest, *parts)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "wb") as f:

@@ -423,6 +423,10 @@ ai_sandbox_mounts_install_root() {   # <sandbox dir>
 # text, and the unmarked block of earlier versions, are replaced by this one at the end.
 AI_SANDBOX_BASHRC_BEGIN='# >>> dev-tools ai-sandbox helpers >>>'
 AI_SANDBOX_BASHRC_END='# <<< dev-tools ai-sandbox helpers <<<'
+# Whether the writer below can read and rewrite <bashrc file>, or create it.
+ai_sandbox_bashrc_usable() {   # <bashrc file>
+    if [ -e "$1" ]; then [ -r "$1" ] && [ -w "$1" ]; else [ -w "$(dirname -- "$1")" ]; fi
+}
 ai_sandbox_write_bashrc_block() {   # <bashrc file>
     local helpers='# Helpers for dev-tools/bin/ai/create-ai-sandbox.sh live in ~/.ai-sandbox/bin.
 case ":$PATH:" in
@@ -431,14 +435,15 @@ case ":$PATH:" in
 esac'
     touch -- "$1"
     SB_BEGIN="$AI_SANDBOX_BASHRC_BEGIN" SB_END="$AI_SANDBOX_BASHRC_END" SB_HELPERS="$helpers" \
-    python3 - "$1" <<'PYEOF'
+    python3 -I - "$1" <<'PYEOF'
 import os, re, sys
 path  = sys.argv[1]
 begin = os.environ["SB_BEGIN"]
 end   = os.environ["SB_END"]
 block = begin + "\n" + os.environ["SB_HELPERS"] + "\n" + end
 
-content = open(path, encoding="utf-8").read()
+# surrogateescape: a byte that is not UTF-8 outside the block is read and written back as it was
+content = open(path, encoding="utf-8", errors="surrogateescape").read()
 if block in content:
     sys.exit(0)
 # Remove this script's marked block, and the unmarked block written by earlier
@@ -448,7 +453,7 @@ content = re.sub(r"\n*" + re.escape(begin) + r".*?" + re.escape(end) + r"\n*",
 content = re.sub(r"\n*# Antigravity Sandbox Helper\n.*?\nfunction ai-sandbox-stop\(\)\s*\{.*?\n\}\n",
                  "\n", content, flags=re.DOTALL)
 content = content.rstrip("\n")
-open(path, "w", encoding="utf-8").write(content + "\n\n" + block + "\n")
+open(path, "w", encoding="utf-8", errors="surrogateescape").write(content + "\n\n" + block + "\n")
 PYEOF
 }
 
