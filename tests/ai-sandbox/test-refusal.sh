@@ -37,7 +37,7 @@ done
 # migrates a host), so it is covered by the refusal half only.
 early_args() {
     case $1 in
-        bin/ai/create-ai-sandbox.sh|bin/ai/ai-knowledge|bin/ai/update-antigravity-ide.sh) echo --help ;;
+        bin/ai/create-ai-sandbox.sh|bin/ai/ai-knowledge|bin/ai/update-antigravity-ide.sh|bin/ai/ai-sandbox-install) echo --help ;;
         bin/ai/handover-ready) echo --clear ;;
         *) echo ;;
     esac

@@ -114,6 +114,7 @@ bin/ai/ai-sandbox-account
 bin/ai/ai-sandbox-attach
 bin/ai/ai-sandbox-extensions
 bin/ai/ai-sandbox-gc
+bin/ai/ai-sandbox-install
 bin/ai/ai-sandbox-migrate
 bin/ai/ai-sandbox-restart
 bin/ai/ai-sandbox-rm
@@ -125,8 +126,8 @@ bin/ai/update-antigravity-ide.sh
 tests/ai-sandbox/run-tests.sh
 verify-ai-sandbox-on-host.sh'
 got_entries=$(awk '$1 == "entry" {print $2}' "$REPO_ROOT/bin/ai/MANIFEST")
-assert_eq "the entry lines are the host programs of bin/ai but ai-sync" \
-    "$(printf '%s\n' "$got_entries" | LC_ALL=C sort | grep -v 'ai-sandbox-install$')" \
+assert_eq "the entry lines are the host programs of bin/ai but ai-sync, the install among them" \
+    "$(printf '%s\n' "$got_entries" | LC_ALL=C sort)" \
     "$(printf '%s\n' "$expect_entries" | LC_ALL=C sort)"
 assert_eq "every entry is an executable file" \
     "$(printf '%s\n' "$got_entries" | while IFS= read -r e; do [ -f "$REPO_ROOT/$e" ] && [ -x "$REPO_ROOT/$e" ] || echo "$e"; done)" ""

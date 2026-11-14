@@ -13,6 +13,7 @@ entry bin/ai/ai-sandbox-account
 entry bin/ai/ai-sandbox-attach
 entry bin/ai/ai-sandbox-extensions
 entry bin/ai/ai-sandbox-gc
+entry bin/ai/ai-sandbox-install
 entry bin/ai/ai-sandbox-migrate
 entry bin/ai/ai-sandbox-restart
 entry bin/ai/ai-sandbox-rm
