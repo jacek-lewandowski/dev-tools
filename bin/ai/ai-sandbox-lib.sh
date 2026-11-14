@@ -14,7 +14,7 @@ AI_SANDBOX_SCHEMA_VERSION=2
 # ~/.ai-sandbox/installed/current: the user's ~/.bashrc block puts the first on PATH, the host's
 # Claude Code statusLine setting names context-statusline there, and every sandbox's compose
 # file mounts installed/current/tools; change them only with ai-sandbox-install.
-AI_SANDBOX_INSTALLED="$AI_SANDBOX_ROOT/installed"
+AI_SANDBOX_INSTALLED="$AI_SANDBOX_ROOT/installed"   # C-INSTALL's root, defined once
 # Host-wide settings, shell-style KEY=VALUE lines. AI_SANDBOX_MEMORY_BUDGET_GB, the RAM
 # in GB that all running sandboxes together may use, is written by the user by hand (the
 # file's only reader outside this repository is the user) and has no default.
