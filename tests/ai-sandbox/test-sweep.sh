@@ -9,8 +9,8 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 export AI_KNOWLEDGE_GIT_TIMEOUT=20
 kn() { DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
-snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do
-    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s\n' "$f" "$(sha256sum < "$f")"; else printf '%s\n' "$f"; fi; done ); }
+snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do   # modes too: a chmod through a link is a write
+    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s %s\n' "$f" "$(stat -c %a "$f")" "$(sha256sum < "$f")"; else printf '%s %s\n' "$f" "$(stat -c %a "$f")"; fi; done ); }
 mkproj() { mkdir -p "$1"; git -C "$1" init -q; }
 
 # A host: knowledge configured, a host SDKMAN, a host Claude account, a project; one sandbox created, then a
