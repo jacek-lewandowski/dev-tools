@@ -71,9 +71,11 @@ done
 for r in "$AI_SANDBOX_INSTALLED"/rev/.partial-*; do
     [ -d "$r" ] && partial_revs+=("$r")
 done
-if [ $(( ${#old_revs[@]} + ${#partial_revs[@]} )) -gt 0 ] && command -v docker >/dev/null 2>&1 \
-   && docker ps --format '{{.Names}}' 2>/dev/null | grep -q -- '-agent$'; then
-    revs_kept=yes
+if [ $(( ${#old_revs[@]} + ${#partial_revs[@]} )) -gt 0 ] && command -v docker >/dev/null 2>&1; then
+    # The listing is read whole before grep sees it: 'docker ps | grep -q' under pipefail fails
+    # with SIGPIPE when grep stops at the first match, and that would read as "none running".
+    running=$(docker ps --format '{{.Names}}' 2>/dev/null || true)
+    if grep -q -- '-agent$' <<<"$running"; then revs_kept=yes; fi
 fi
 
 legacy_images=()

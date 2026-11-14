@@ -24,6 +24,13 @@ assert_eq "the current revision is not listed" "$(printf '%s\n' "$out" | grep -c
 assert_file "running: rev/c1 stays" "$inst/rev/c1/bin/ai/f"
 assert_file "running: the partial export stays" "$inst/rev/.partial-c3/bin/f"
 
+# a long listing after the first match: grep -q must not cut docker off under pipefail (SIGPIPE
+# would read as "none running" and let a revision a container mounts be removed)
+out=$(printf 'y\n' | DOCKER_STUB_PS=abc-agent DOCKER_STUB_PS_FLOOD=400000 gc 2>&1)
+assert_contains "a long docker ps listing: still kept" "$out" "Kept: installed revisions"
+assert_file "and rev/c1 stays" "$inst/rev/c1/bin/ai/f"
+assert_file "and the partial export stays" "$inst/rev/.partial-c3/bin/f"
+
 # no sandbox container running: listed, asked, removed after a yes
 out=$(printf 'n\n' | DOCKER_STUB_PS= gc 2>&1)
 assert_contains "idle: the old revision is listed" "$out" "$inst/rev/c1"
