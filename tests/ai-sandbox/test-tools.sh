@@ -235,8 +235,10 @@ assert_no_file "missing file is never created" "$sf"
 assert_contains "failure cannot fail the start" "$(cat "$ep")" "|| true"
 
 # --- ~/.local/share and ~/.local/bin exist, user-owned, before the JetBrains mount
-assert_contains "image creates ~/.local/share owned by the user" "$df" '"${USER_HOME}/.local/share"'
-assert_contains "image creates ~/.local/bin owned by the user"   "$df" '"${USER_HOME}/.local/bin"'
+# Searched only in the mkdir that the recursive chown of the home directory follows.
+home_mkdir=$(printf '%s\n' "$df" | sed -n '/mkdir -p "${USER_HOME}\/.config"/,/chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}"/p')
+assert_contains "image creates ~/.local/share owned by the user" "$home_mkdir" '"${USER_HOME}/.local/share"'
+assert_contains "image creates ~/.local/bin owned by the user"   "$home_mkdir" '"${USER_HOME}/.local/bin"'
 
 # --- entrypoint defaults Claude Code's compaction off, without overriding a choice
 cmerge="$tmp/cmerge.py"
@@ -248,6 +250,7 @@ printf '{"theme":"x","autoCompactEnabled":true}' > "$cs"; python3 "$cmerge" "$cs
 assert_eq "a user's choice is kept, the other key defaulted, others untouched" "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["theme"],d["idleCompaction"],d["autoCompactEnabled"])' "$cs")" "x False True"
 printf 'not json' > "$cs"; python3 "$cmerge" "$cs" 2>/dev/null
 assert_eq "unparsable file left alone" "$(cat "$cs")" 'not json'
+assert_contains "compaction merge cannot fail the start" "$(grep '^python3 - .*\.claude/settings.json' "$ep")" "|| true"
 
 rm -rf "$tmp"
 finish
