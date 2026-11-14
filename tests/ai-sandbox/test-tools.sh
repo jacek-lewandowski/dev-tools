@@ -234,6 +234,10 @@ rm -f "$sf"; python3 "$merge" "$sf" 2>/dev/null
 assert_no_file "missing file is never created" "$sf"
 assert_contains "failure cannot fail the start" "$(cat "$ep")" "|| true"
 
+# --- ~/.local/share and ~/.local/bin exist, user-owned, before the JetBrains mount
+assert_contains "image creates ~/.local/share owned by the user" "$df" '"${USER_HOME}/.local/share"'
+assert_contains "image creates ~/.local/bin owned by the user"   "$df" '"${USER_HOME}/.local/bin"'
+
 # --- entrypoint defaults Claude Code's compaction off, without overriding a choice
 cmerge="$tmp/cmerge.py"
 sed -n "/^python3 - .*\.claude\/settings.json/,/^PYEOF/p" "$ep" | sed '1d;$d' > "$cmerge"

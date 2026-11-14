@@ -18,6 +18,7 @@ RUN set -eux; \
     mkdir -p "${USER_HOME}/.config" "${USER_HOME}/.antigravity" "${USER_HOME}/.antigravity-ide" \
              "${USER_HOME}/.gemini" "${USER_HOME}/.claude" \
              "${USER_HOME}/.gradle" "${USER_HOME}/.gradle/wrapper" "${USER_HOME}/.m2" \
+             "${USER_HOME}/.local/share" "${USER_HOME}/.local/bin" \
              "${USER_HOME}/tools" "/run/user/${USER_ID}"; \
     chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}" "/run/user/${USER_ID}" "${COREPACK_HOME}"; \
     chmod 700 "/run/user/${USER_ID}"; \
