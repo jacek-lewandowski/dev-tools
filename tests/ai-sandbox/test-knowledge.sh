@@ -80,6 +80,8 @@ assert_file "gemini role rendered" "$AI_KNOWLEDGE_RENDER/gemini/agents/planner.m
 assert_contains "antigravity role rendered with model_decision" \
     "$(cat "$AI_KNOWLEDGE_RENDER/antigravity/rules/planner.md")" "trigger: model_decision"
 assert_contains "codex role rendered as toml" "$(cat "$AI_KNOWLEDGE_RENDER/codex/agents/planner.toml")" 'developer_instructions = '
+assert_contains "codex role says the lead's persona is not its own" "$(cat "$AI_KNOWLEDGE_RENDER/codex/agents/planner.toml")" "You are not the lead; the lead's persona in the global rules does not apply to you."
+assert_eq "claude copy of the role is unchanged by that line" "$(grep -c 'persona' "$AI_KNOWLEDGE_RENDER/claude/agents/planner.md")" 0
 
 # --- D10: `tools:` reaches the Claude copy only; Gemini's tool names differ
 # (fixture role in the test's own checkout, removed again right after)

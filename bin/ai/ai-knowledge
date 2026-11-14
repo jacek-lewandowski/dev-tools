@@ -553,9 +553,12 @@ if os.path.isdir(roles):
             f.write("---\ntrigger: model_decision\ndescription: %s\n---\n\n%s" % (description, body))
         # Codex custom agents are TOML; registering them in config.toml is left
         # to the user until the format is verified against an installed Codex.
+        # Codex also reads the global rules (~/.codex/AGENTS.md) in an agent's
+        # session, so the role says it is not the lead: the persona is the lead's.
+        not_lead = "You are not the lead; the lead's persona in the global rules does not apply to you.\n\n"
         with open(os.path.join(out, "codex/agents", name + ".toml"), "w", encoding="utf-8") as f:
-            f.write("name = %s\ndescription = %s\ndeveloper_instructions = '''\n%s'''\n"
-                    % (toml_string(name), toml_string(description), body.replace("'''", "'' '")))
+            f.write("name = %s\ndescription = %s\ndeveloper_instructions = '''\n%s%s'''\n"
+                    % (toml_string(name), toml_string(description), not_lead, body.replace("'''", "'' '")))
 
 skills = os.path.join(main, "skills")
 if os.path.isdir(skills):
