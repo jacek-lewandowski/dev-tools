@@ -1071,9 +1071,9 @@ sync_clone() {
     refresh_origin_noted "$sb" "$role"
 
     if [ -n "$refused" ]; then
-        set_status "refused: not pushed:$refused; fix or delete those branches"
+        set_status "refused: not pushed:$refused; fix or delete those branches${main_note:+; $main_note}"
     elif [ -n "$conflicts" ]; then
-        set_status "conflict: remote has commits these branches lack:$conflicts; merge origin/<branch> inside the sandbox"
+        set_status "conflict: remote has commits these branches lack:$conflicts; merge origin/<branch> inside the sandbox${main_note:+; $main_note}"
     elif [ "$main_state" = diverged ]; then
         # The integrator's own commits on main are wanted: merged, never reset
         # away. A proposing clone's belong on a proposal branch first.

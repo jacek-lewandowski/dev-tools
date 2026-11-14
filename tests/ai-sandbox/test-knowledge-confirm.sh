@@ -166,6 +166,14 @@ python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_RO
 assert_contains "L4: the cut list says how many commits it leaves out" "$(cat "$tmp/l4.out")" "  and $((total - 50)) more"
 assert_eq "L4: 50 commits are listed" "$(grep -c '^  [0-9a-f]\{7,\} ' "$tmp/l4.out")" 50
 
+# --- L3: line 1 says that main waits also when a refused branch or a conflict leads the status
+setup
+git -C "$iclone" checkout -q -b "proposal/$today-bad-abcd" main
+printf 'x\n' >> "$iclone/rules/global.md"; git -C "$iclone" commit -qam "touches rules"; git -C "$iclone" checkout -q main
+kn sync "$integ" >"$tmp/l3.out" 2>"$tmp/l3.err" </dev/null
+assert_contains "L3: a refused branch leads line 1" "$(l1)" "refused not pushed:"
+assert_contains "L3: line 1 still says main waits" "$(l1)" "main waits for your confirmation"
+
 # --- read: no bypass, and the shown change comes from the id resolved before it
 cd "$REPO_ROOT" || exit 1
 assert_eq "O1 read: no variable, option or key skips the question" "$(git grep -nE 'CONFIRM|ASSUME_YES|--yes|-y\)' -- bin/ai/ai-knowledge | wc -l | tr -d ' ')" 0
