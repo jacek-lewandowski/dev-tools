@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Minimal assert library. No framework is available in this environment.
+# C-INSTALL: a test file is a host entry point and refuses, before fake_home replaces HOME,
+# to run from a tree a sandbox can write. In a subshell: the lib's variables stay out of
+# the test's shell.
+( . "$(dirname "${BASH_SOURCE[0]}")/../../bin/ai/ai-sandbox-lib.sh" \
+    && ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" ) || exit 3
 TESTS_RUN=0
 TESTS_FAILED=0
 
@@ -74,6 +79,16 @@ fake_home() {
     # The host's memory budget, which the user writes by hand on a real host;
     # without it create-ai-sandbox.sh and every start are refused.
     printf 'AI_SANDBOX_MEMORY_BUDGET_GB=18\n' > "$AI_SANDBOX_ROOT/config"
+    # The installed revision create needs (C-INSTALL): revision "test" is a copy of this
+    # repository's bin/ai and tools, writable for the test (a test may overwrite what it
+    # runs), and ~/.ai-sandbox/bin is the link ai-sandbox-install makes, so the commands a
+    # test runs from $AI_SANDBOX_ROOT/bin are the repository's own text.
+    mkdir -p "$AI_SANDBOX_ROOT/installed/rev/test/bin"
+    cp -a "$REPO_ROOT/bin/ai" "$AI_SANDBOX_ROOT/installed/rev/test/bin/ai"
+    cp -a "$REPO_ROOT/tools" "$AI_SANDBOX_ROOT/installed/rev/test/tools"
+    chmod -R u+w "$AI_SANDBOX_ROOT/installed/rev/test"
+    ln -s rev/test "$AI_SANDBOX_ROOT/installed/current"
+    ln -s installed/current/bin/ai "$AI_SANDBOX_ROOT/bin"
     FAKE_HOME_DIR="$tmp"
     printf '%s' "$tmp"
 }

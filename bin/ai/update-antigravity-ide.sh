@@ -9,6 +9,15 @@
 
 set -euo pipefail
 
+# Run through sudo, HOME is root's: the stamps that say which trees a sandbox can write are
+# the invoking user's, so the refusal reads those.
+if [ -n "${SUDO_USER:-}" ]; then
+    invoker_home=$(getent passwd "$SUDO_USER" | cut -d: -f6) || invoker_home=""
+    [ -z "$invoker_home" ] || AI_SANDBOX_ROOT="$invoker_home/.ai-sandbox"
+fi
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
+
 # Default installation directory and symlink directory
 INSTALL_DIR="/usr/local"
 BIN_DIR="/usr/local/bin"

@@ -8,6 +8,7 @@
 # them so the next start prompts for a fresh login.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 ai_sandbox_require_ctx || exit 1
 
 cmd=${1:-status}
@@ -23,7 +24,7 @@ confirm() {
 
 claude_account_of() {
     [ -f "$1" ] || { echo "no state file"; return 0; }
-    python3 - "$1" <<'PY' 2>/dev/null || echo unknown
+    python3 -I - "$1" <<'PY' 2>/dev/null || echo unknown
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))

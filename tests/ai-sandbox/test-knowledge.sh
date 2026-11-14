@@ -13,7 +13,7 @@ assert_eq "knowledge root derives from the sandbox root" "$AI_KNOWLEDGE_ROOT" "$
 assert_eq "render lives in the shared store" "$AI_KNOWLEDGE_RENDER" "$AI_SANDBOX_ROOT/shared/knowledge"
 ai_knowledge_configured && r=yes || r=no
 assert_eq "not configured without the config file" "$r" no
-assert_contains "ai-knowledge is an installed helper" "$(ai_sandbox_helpers)" "ai-knowledge"
+assert_contains "ai-knowledge is a host entry point of the manifest" "$(awk '$1 == "entry" {print $2}' "$REPO_ROOT/bin/ai/MANIFEST")" "bin/ai/ai-knowledge"
 
 git config --global user.email t@example.com; git config --global user.name t
 git config --global init.defaultBranch main
@@ -399,7 +399,7 @@ assert_contains "doctor lists pending reports" "$(cat "$AI_SANDBOX_ROOT/image/bu
 assert_contains "sandbox block names the report ref and its invariant" "$(tr '\n' ' ' < "$AI_KNOWLEDGE_RENDER/GLOBAL.md" | tr -s ' ')" "refs/reports/<date>-<project>-<hex>, outside main and every branch"
 assert_eq "sandbox block no longer names a per-sandbox branch" "$(grep -c 'proposals/<project-id>' "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" 0
 assert_contains "sandbox block names the proposal branch pattern" "$(cat "$AI_KNOWLEDGE_RENDER/GLOBAL.md")" "proposal/<date>-<slug>-<hex>"
-assert_file "seed installed beside the helper" "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"
+assert_file "the installed revision holds the seed beside the helper" "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"
 assert_contains "summary names the knowledge render" "$(cat "$tmp/create.out")" "Shared knowledge repository"
 
 assert_contains "create stamps SANDBOX_KNOWLEDGE=2" "$(cat "$pdir/.env")" 'SANDBOX_KNOWLEDGE=2'
@@ -410,7 +410,9 @@ assert_contains "subagent cache TTL passed into the container" "$compose" 'CLAUD
 # --- knowledge stamps classify a sandbox from its .env (phase 1)
 fab() {   # <name> [env lines...]: a fabricated sandbox directory with a compose file
     local d="$AI_SANDBOX_ROOT/$1-agent"; shift
-    mkdir -p "$d"; printf 'services: {}\n' > "$d/docker-compose.yml"
+    mkdir -p "$d"
+    # mounts the installed revision's tools, as a sandbox created under an install does
+    printf 'services:\n  s:\n    volumes:\n      - "%s/installed/current/tools:/home/dev/tools:ro"\n' "$AI_SANDBOX_ROOT" > "$d/docker-compose.yml"
     printf '%s\n' "$@" > "$d/.env"
 }
 fab fab-a "SANDBOX_KNOWLEDGE=2" "SANDBOX_PROJECT_DIR=$tmp/work/fab-a"
@@ -1329,7 +1331,7 @@ assert_status "the next sync with a sound origin is ok again" "$clone" "ok:"
 
 # create: knowledge/ and the origin exist before the sync step runs, and before any start
 o10p="$tmp/work/o10p"; mkdir -p "$o10p"
-rec="$tmp/o10-tree"; mkdir -p "$rec/bin/ai"; cp -a "$REPO_ROOT/bin/ai/." "$rec/bin/ai/"; ln -s "$REPO_ROOT/tools" "$rec/tools"
+rec="$tmp/o10-tree"; mkdir -p "$rec/bin/ai"; cp -a "$REPO_ROOT/bin/ai/." "$rec/bin/ai/"; chmod -R u+w "$rec"; ln -s "$REPO_ROOT/tools" "$rec/tools"
 o10dir=$(ai_sandbox_dir_for "$o10p")
 cat > "$rec/bin/ai/ai-knowledge" <<REC
 #!/usr/bin/env bash
@@ -1537,7 +1539,7 @@ dfile=$(cat "$AI_SANDBOX_ROOT/image/build/Dockerfile")
 assert_contains "the image copies the command" "$dfile" "COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync"
 assert_contains "and makes it executable" "$dfile" "/usr/local/bin/sandbox-knowledge-sync"
 assert_file "the build context holds the command" "$AI_SANDBOX_ROOT/image/build/sandbox-knowledge-sync"
-assert_eq "the command is not a host helper" "$(ai_sandbox_helpers | grep -c 'sandbox-knowledge-sync')" 0
+assert_eq "the command is not a host entry point" "$(awk '$1 == "entry" {print $2}' "$REPO_ROOT/bin/ai/MANIFEST" | grep -c 'sandbox-knowledge-sync')" 0
 assert_contains "the compose file passes the origin's mount path on" "$(cat "$pdir/docker-compose.yml")" "SANDBOX_KNOWLEDGE_ORIGIN=/run/ai-sandbox/knowledge-origin.git"
 
 # --- O7, O8, O19 (the gateway): a clone prepared as in X1 that also carries what a sandbox can write in its

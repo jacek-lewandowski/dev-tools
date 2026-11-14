@@ -2,16 +2,21 @@
 # Claude Code status line: model, main context, live subagents, coloured by the
 # context thresholds (tools/context_statusline). Reads the status line JSON on
 # stdin; "--plain" or NO_COLOR drops the colours.
-# Finds tools/ as create-ai-sandbox.sh does: this checkout, ~/dev/public/dev-tools,
-# then the sandbox's read-only mount ~/tools.
+# Finds tools/ beside the revision it runs from (bin/ai/../../tools), else, for the copy in
+# the sandbox image, the read-only mount ~/tools.
 # Exit: 0 line printed, 2 no tools directory found.
 set -euo pipefail
 
 self=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-if   [ -d "$self/../../tools/context_statusline" ];            then tools="$self/../../tools"
-elif [ -d "$HOME/dev/public/dev-tools/tools/context_statusline" ]; then tools="$HOME/dev/public/dev-tools/tools"
-elif [ -d "$HOME/tools/context_statusline" ];                  then tools="$HOME/tools"
-else echo "context-statusline: no dev-tools 'tools' directory (looked beside this script, in ~/dev/public/dev-tools, and in ~/tools)" >&2; exit 2
+# The refusal needs the lib beside this script; the image's copy has none.
+if [ -f "$self/ai-sandbox-lib.sh" ]; then
+    . "$self/ai-sandbox-lib.sh"
+    ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
+fi
+if   [ -d "$self/../../tools/context_statusline" ]; then tools="$self/../../tools"
+elif [ -d "$HOME/tools/context_statusline" ];       then tools="$HOME/tools"
+else echo "context-statusline: no 'tools' directory (looked beside this script and in ~/tools)" >&2; exit 2
 fi
 cd "$(dirname "$tools")"
-exec python3 -m tools.context_statusline "$@"
+# -I leaves the working directory off sys.path, so the directory holding tools/ is added there here, after the standard library (the image's copy runs with ~ as that directory).
+exec python3 -I -c 'import sys; sys.path.append(sys.argv.pop(1)); from tools.context_statusline.statusline import main; sys.exit(main())' "$PWD" "$@"

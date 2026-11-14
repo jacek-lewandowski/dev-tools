@@ -43,6 +43,7 @@ trap 'printf "!! ai-knowledge: unexpected error at line %s\n" "$LINENO" >&2' ERR
 AGENT_STARTED=""   # pid of the agent this process started, else empty
 trap '[ -z "$AGENT_STARTED" ] || SSH_AGENT_PID=$AGENT_STARTED ssh-agent -k >/dev/null 2>&1 || true' EXIT
 . "$HERE/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 
 KNOWLEDGE_MAIN="$AI_KNOWLEDGE_ROOT/main"
 # create-ai-sandbox.sh writes the generated "AI sandbox environment" block here
@@ -168,20 +169,13 @@ load_config() {
     [ -n "$REMOTE" ] || die "no REMOTE in $AI_KNOWLEDGE_CONFIG"
 }
 
-# The seed sits beside this helper: in the checkout, or installed next to the
-# copy in ~/.ai-sandbox/bin by create-ai-sandbox.sh. A recorded dev-tools
-# checkout is the fallback for an installation that predates that.
+# The seed sits beside this program, in whichever tree it runs from (an installed
+# revision, or a checkout): nothing else is consulted.
 seed_dir() {
-    local dev_tools=""
     if [ -d "$HERE/knowledge-seed" ]; then
         printf '%s\n' "$HERE/knowledge-seed"; return 0
     fi
-    [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
-    if [ -n "$dev_tools" ] && [ -d "$dev_tools/bin/ai/knowledge-seed" ]; then
-        printf '%s\n' "$dev_tools/bin/ai/knowledge-seed"
-    else
-        return 1
-    fi
+    return 1
 }
 
 # Whatever sits where a checkout belongs is the user's: moved beside it,
@@ -277,7 +271,7 @@ cmd_init() {
 # The host's GEMINI.md without the block create-ai-sandbox.sh generates, which
 # the render appends again from its own file.
 strip_env_block() {   # <src> <dst>
-    SRC="$1" DST="$2" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 - <<'PYSTRIP'
+    SRC="$1" DST="$2" ENV_BEGIN="$ENV_BEGIN" ENV_END="$ENV_END" python3 -I - <<'PYSTRIP'
 import os, re
 text = open(os.environ["SRC"], encoding="utf-8").read()
 pattern = re.compile(r"\n*" + re.escape(os.environ["ENV_BEGIN"]) + r".*?" + re.escape(os.environ["ENV_END"]) + r"\n*", re.DOTALL)
@@ -384,9 +378,12 @@ offer_gemini_drift() {
 # render appends again from its own file.
 seed_main() {
     local seed src identity=()
-    seed=$(seed_dir) || die "cannot find bin/ai/knowledge-seed (is DEV_TOOLS_DIR recorded in $AI_SANDBOX_ROOT/config?)"
+    seed=$(seed_dir) || die "cannot find knowledge-seed beside $HERE: run ai-knowledge from an installed revision (ai-sandbox-install)"
     log "seeding the empty repository from $seed"
     rsync -a --exclude=.gitkeep "$seed/" "$KNOWLEDGE_MAIN/"
+    # An installed revision is read-only, and rsync -a keeps modes: what lands in this host-owned
+    # checkout is writable for its owner, as the later fast-forwards need.
+    find "$KNOWLEDGE_MAIN" -path "$KNOWLEDGE_MAIN/.git" -prune -o -exec chmod u+w {} +
     mkdir -p "$KNOWLEDGE_MAIN/rules"
     src="$HOME/.gemini/GEMINI.md"
     [ -L "$src" ] && src=$(readlink -f "$src")
@@ -486,7 +483,7 @@ cmd_render() {
     mkdir -p "$AI_SANDBOX_ROOT/shared" "$AI_KNOWLEDGE_RENDER" || return 1
     local tmp
     tmp=$(mktemp -d "$AI_SANDBOX_ROOT/shared/.knowledge-render.XXXXXX") || return 1
-    if ! python3 - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
+    if ! python3 -I - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
 import os, re, shutil, sys
 main, out, env_block = sys.argv[1:4]
 
@@ -1302,7 +1299,7 @@ cmd_propose() {
     # Frontmatter keys the caller knows (project_id, machine, project) are added
     # when the file lacks them; an existing key wins. Cleanup is explicit: a
     # RETURN trap would stay armed in the caller.
-    SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 - <<'PYFM'
+    SRC="$file" DST="$tmp" PID="$project_id" MACHINE="$machine" PROJECT="$project" python3 -I - <<'PYFM'
 import os
 text = open(os.environ["SRC"], encoding="utf-8").read()
 extra = [(k, os.environ[v]) for k, v in (("project_id", "PID"), ("machine", "MACHINE"), ("project", "PROJECT")) if os.environ.get(v)]

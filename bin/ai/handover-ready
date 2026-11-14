@@ -2,15 +2,19 @@
 # Marks this Claude Code session's handover ready so the status line shows it
 # (tools/context_statusline/mark.py). Usage: handover-ready <handover-path> | --clear
 # The session is CLAUDE_CODE_SESSION_ID; no caller directory is used.
-# Finds tools/ as context-statusline does.
+# Finds tools/ beside the revision it runs from (bin/ai/../../tools).
 # Exit: 0 done, 2 no tools directory or no session found.
 set -euo pipefail
 
 self=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-if   [ -d "$self/../../tools/context_statusline" ];            then tools="$self/../../tools"
-elif [ -d "$HOME/dev/public/dev-tools/tools/context_statusline" ]; then tools="$HOME/dev/public/dev-tools/tools"
-elif [ -d "$HOME/tools/context_statusline" ];                  then tools="$HOME/tools"
-else echo "handover-ready: no dev-tools 'tools' directory (looked beside this script, in ~/dev/public/dev-tools, and in ~/tools)" >&2; exit 2
+# The refusal needs the lib beside this script; the image's copy has none.
+if [ -f "$self/ai-sandbox-lib.sh" ]; then
+    . "$self/ai-sandbox-lib.sh"
+    ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
+fi
+if [ -d "$self/../../tools/context_statusline" ]; then tools="$self/../../tools"
+else echo "handover-ready: no 'tools' directory beside this script (run it from an installed revision)" >&2; exit 2
 fi
 cd "$(dirname "$tools")"
-exec python3 -c 'import sys; from tools.context_statusline.mark import main; sys.exit(main(sys.argv[1:]))' "$@"
+# -I leaves the working directory off sys.path, so the directory holding tools/ is added there here, after the standard library (the image's copy runs with ~ as that directory).
+exec python3 -I -c 'import sys; sys.path.append(sys.argv.pop(1)); from tools.context_statusline.mark import main; sys.exit(main(sys.argv[1:]))' "$PWD" "$@"

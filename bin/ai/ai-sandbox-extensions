@@ -7,6 +7,7 @@
 # half-populated so the next run retries cleanly.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 
 EXTENSIONS="anthropic.claude-code redhat.java"
 

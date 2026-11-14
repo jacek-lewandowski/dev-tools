@@ -39,7 +39,7 @@ for f, n in sorted(rows):
     print("%s:%d" % (f, n))
 ' "$dir"
 }
-sg_reports() { sg_findings "$1"; }
+sg_reports() { sg_findings "$1" --filter '^host-git'; }
 # The bash files under <root>/bin/ai: name ends .sh, or the first line names bash or sh.
 bash_files() {   # <root>: paths relative to <root>
     local f
@@ -121,16 +121,17 @@ assert_eq "a file under the in-image directory is not required to be parsed" "$(
 assert_eq "every bash file under bin/ai is parsed or under the in-image directory" "$(uncovered "$REPO_ROOT")" ""
 assert_ne "the bash files of bin/ai are found at all" "$(bash_files "$REPO_ROOT" | command grep -c .)" 0
 
-# --- the in-image programs are not host helpers
+# --- the in-image programs are not host entry points (the manifest lists the entry points)
 . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 in_image=$(cd "$REPO_ROOT/$IMAGE_DIR" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+entries=$(awk '$1 == "entry" {print $2}' "$REPO_ROOT/bin/ai/MANIFEST")
 assert_ne "the in-image directory holds files, so the exception is not empty" "$(printf '%s\n' "$in_image" | command grep -c .)" 0
-assert_eq "no file of the in-image directory is an installed helper" \
-    "$(ai_sandbox_helpers | command grep -cxFf <(printf '%s\n' "$in_image"))" 0
-assert_eq "every installed helper is a file of bin/ai outside the in-image directory" \
-    "$(ai_sandbox_helpers | while IFS= read -r h; do [ -f "$REPO_ROOT/bin/ai/$h" ] || echo "$h"; done | command grep -c .)" 0
-assert_eq "no installed helper is also a file of the in-image directory" \
-    "$(ai_sandbox_helpers | while IFS= read -r h; do [ -e "$REPO_ROOT/$IMAGE_DIR/$h" ] && echo "$h"; done | command grep -c .)" 0
+assert_eq "no file of the in-image directory is an entry point" \
+    "$(printf '%s\n' "$entries" | sed 's|.*/||' | command grep -cxFf <(printf '%s\n' "$in_image"))" 0
+assert_eq "every entry point is a file of the tree" \
+    "$(printf '%s\n' "$entries" | while IFS= read -r h; do [ -f "$REPO_ROOT/$h" ] || echo "$h"; done | command grep -c .)" 0
+assert_eq "no entry point is under the in-image directory" \
+    "$(printf '%s\n' "$entries" | command grep -c "^$IMAGE_DIR/")" 0
 for f in ai_sandbox_host_git ai_sandbox_confined_git; do
     assert_eq "the lib defines $f, the name the rule exempts" "$(command grep -cE "^$f\(\) \{" "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")" 1
     assert_eq "the rule file names $f" "$(command grep -cF "$f" "$SG/rules/host-git.yml")" 1
@@ -143,13 +144,14 @@ assert_eq "no report outside the two bodies" "$(printf '%s\n' "$tree" | command 
 # a direct start planted in a copy of a real helper is reported by the same run that finds nothing in the real one
 mkdir -p "$tmp/planted"
 cp "$REPO_ROOT/bin/ai/ai-sandbox-restart" "$tmp/planted/ai-sandbox-restart"
+chmod u+w "$tmp/planted/ai-sandbox-restart"   # the copy of a read-only export is appended to below
 assert_eq "the real helper gives no report" "$(sg_reports "$tmp/planted" | command grep -c .)" 0
 printf 'git -C "$AI_SANDBOX_PROJECT" status\n' >> "$tmp/planted/ai-sandbox-restart"
 assert_eq "a planted direct start in it is reported" "$(sg_reports "$tmp/planted" | sed 's/.*://' | command grep -c .)" 1
 
 # --- a missing ast-grep fails the file: run it with a PATH that has no ast-grep
 mkdir -p "$tmp/nobin"
-for c in dirname mktemp rm; do ln -s "$(command -v $c)" "$tmp/nobin/$c"; done
+for c in dirname mktemp rm readlink basename awk sed tail cat; do ln -s "$(command -v $c)" "$tmp/nobin/$c"; done
 out=$(PATH="$tmp/nobin" /bin/bash "${BASH_SOURCE[0]}" 2>&1); r=$?
 assert_eq "a missing ast-grep fails the file" "$r" 1
 assert_contains "a missing ast-grep is reported, not skipped" "$out" "not ok 1 - ast-grep is installed"

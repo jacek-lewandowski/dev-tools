@@ -80,5 +80,11 @@ assert_contains "the message says gitleaks failed" "$(cat "$tmp/out")" "gitleaks
 assert_contains "the tool's output is shown" "$(cat "$tmp/out")" "boom from stub"
 assert_eq "a tool error is not reported as a secret" "$(grep -c 'secret found' "$tmp/out")" 0
 
+# --- the gitleaks version the hooks and README name is the one the image installs
+# Every copy of the version outside the generator must equal GITLEAKS_VERSION.
+gl_ver=$(sed -n "s/^readonly GITLEAKS_VERSION='\(.*\)'$/\1/p" "$REPO_ROOT/bin/ai/create.d/image.sh")
+gl_copies=$(grep -ohE 'v?[0-9]+\.[0-9]+\.[0-9]+' "$REPO_ROOT"/.githooks/* "$REPO_ROOT/README.md" | sed 's/^v//' | sort -u | tr '\n' ' ')
+assert_eq "gitleaks version copies in .githooks and README.md equal GITLEAKS_VERSION" "$gl_copies" "$gl_ver "
+
 cd /; rm -rf "$tmp"
 finish

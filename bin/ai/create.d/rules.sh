@@ -34,7 +34,7 @@ if [ -e "$CLAUDE_MD" ] && [ ! -L "$CLAUDE_MD" ]; then
         backup="${CLAUDE_MD}.pre-ai-sandbox.$(date +%Y%m%d%H%M%S)"
         cp -a "$CLAUDE_MD" "$backup"
         log "Backed up existing ~/.claude/CLAUDE.md -> ${backup##*/}"
-        MERGE_SRC="$CLAUDE_MD" python3 - "$SHARED_BRAIN" <<'PYEOF'
+        MERGE_SRC="$CLAUDE_MD" python3 -I - "$SHARED_BRAIN" <<'PYEOF'
 import os, sys
 target = sys.argv[1]
 addition = open(os.environ["MERGE_SRC"], encoding="utf-8").read().strip()
@@ -212,7 +212,7 @@ if [ "$KNOWLEDGE" = "yes" ]; then
     "$SCRIPT_DIR/ai-knowledge" render >/dev/null || warn "knowledge render failed; see above"
     log "Updated the ai-sandbox block in $AI_KNOWLEDGE_ROOT/sandbox-environment.md (rendered into GLOBAL.md)"
 else
-SANDBOX_BLOCK="$SANDBOX_BLOCK" python3 - "$SHARED_BRAIN" "$MARKER_BEGIN" "$MARKER_END" <<'PYEOF'
+SANDBOX_BLOCK="$SANDBOX_BLOCK" python3 -I - "$SHARED_BRAIN" "$MARKER_BEGIN" "$MARKER_END" <<'PYEOF'
 import os, re, sys
 path, begin, end = sys.argv[1], sys.argv[2], sys.argv[3]
 block = os.environ["SANDBOX_BLOCK"]

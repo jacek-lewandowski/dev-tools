@@ -2,12 +2,14 @@
 # Reclaim space that migration deliberately left alone: per-sandbox duplicates
 # of assets that now live once under shared/, shared stores that no sandbox
 # mounts any more, build-cache trash leftovers a reset could not delete, and
-# images from the old per-project naming scheme.
+# images from the old per-project naming scheme, and installed revisions that are no
+# longer current, with the partial exports an interrupted install left behind.
 #
 # Migration never deletes. This does -- so it lists everything first and removes
 # nothing without confirmation.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 
 assume_yes="no"
 [ "${1:-}" = "--yes" ] && assume_yes="yes"
@@ -56,6 +58,26 @@ for dir in "$AI_SANDBOX_ROOT"/*-agent; do
     done
 done
 
+# Installed revisions (ai-sandbox-install): every rev/<commit> but the current one, and
+# the partial exports. A running container holds the revision it started with and what it
+# mounts is not read from here, so none is removed while a sandbox container runs.
+old_revs=(); partial_revs=(); revs_kept=no
+current_rev=$(readlink "$AI_SANDBOX_INSTALLED/current" 2>/dev/null || true)
+for r in "$AI_SANDBOX_INSTALLED"/rev/*; do
+    [ -d "$r" ] || continue
+    [ "rev/$(basename "$r")" != "$current_rev" ] || continue
+    old_revs+=("$r")
+done
+for r in "$AI_SANDBOX_INSTALLED"/rev/.partial-*; do
+    [ -d "$r" ] && partial_revs+=("$r")
+done
+if [ $(( ${#old_revs[@]} + ${#partial_revs[@]} )) -gt 0 ] && command -v docker >/dev/null 2>&1; then
+    # The listing is read whole before grep sees it: 'docker ps | grep -q' under pipefail fails
+    # with SIGPIPE when grep stops at the first match, and that would read as "none running".
+    running=$(docker ps --format '{{.Names}}' 2>/dev/null || true)
+    if grep -q -- '-agent$' <<<"$running"; then revs_kept=yes; fi
+fi
+
 legacy_images=()
 if command -v docker >/dev/null 2>&1; then
     while IFS= read -r img; do
@@ -63,7 +85,18 @@ if command -v docker >/dev/null 2>&1; then
     done < <(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^ai-sandbox-' || true)
 fi
 
-if [ "${#targets[@]}" -eq 0 ] && [ "${#stale[@]}" -eq 0 ] && [ "${#trash[@]}" -eq 0 ] && [ "${#legacy_images[@]}" -eq 0 ]; then
+print_revs_kept() {
+    [ "$revs_kept" = yes ] || return 0
+    echo "Kept: installed revisions that are no longer current, and partial exports (a sandbox is running; stop the running sandboxes first):"
+    for t in "${old_revs[@]+"${old_revs[@]}"}" "${partial_revs[@]+"${partial_revs[@]}"}"; do
+        printf '  %-6s %s\n' "$(du -sh "$t" 2>/dev/null | cut -f1)" "$t"
+    done
+}
+revs_listed=$(( ${#old_revs[@]} + ${#partial_revs[@]} ))
+[ "$revs_kept" = no ] || revs_listed=0
+if [ "${#targets[@]}" -eq 0 ] && [ "${#stale[@]}" -eq 0 ] && [ "${#trash[@]}" -eq 0 ] && [ "${#legacy_images[@]}" -eq 0 ] \
+   && [ "$revs_listed" -eq 0 ]; then
+    print_revs_kept
     echo "Nothing to reclaim."
     exit 0
 fi
@@ -97,9 +130,16 @@ if [ "${#legacy_images[@]}" -gt 0 ]; then
     echo "Images from the old per-project naming scheme:"
     printf '  %s\n' "${legacy_images[@]}"
 fi
+if [ "$revs_listed" -gt 0 ]; then
+    echo "Installed revisions that are no longer current, and partial exports:"
+    for t in "${old_revs[@]+"${old_revs[@]}"}" "${partial_revs[@]+"${partial_revs[@]}"}"; do
+        printf '  %-6s %s\n' "$(du -sh "$t" 2>/dev/null | cut -f1)" "$t"
+    done
+fi
+print_revs_kept
 
 if [ "$assume_yes" != "yes" ]; then
-    printf 'Remove the duplicates, stale stores, trash leftovers and images listed above (kept stores stay)? [y/N] '
+    printf 'Remove the duplicates, stale stores, trash leftovers, images and old revisions listed above (kept stores and revisions stay)? [y/N] '
     read -r reply || reply=n
     case "$reply" in y|Y) ;; *) echo "Cancelled. Nothing was removed."; exit 0 ;; esac
 fi
@@ -114,6 +154,13 @@ done
 for t in "${trash[@]+"${trash[@]}"}"; do
     rm -rf "$t" 2>/dev/null || echo "  could not remove $t; finish with: sudo rm -rf $t" >&2
 done
+if [ "$revs_listed" -gt 0 ]; then
+    for t in "${old_revs[@]+"${old_revs[@]}"}" "${partial_revs[@]+"${partial_revs[@]}"}"; do
+        # revisions are read-only directories
+        chmod -R u+w -- "$t" 2>/dev/null || true
+        rm -rf -- "$t" || echo "  could not remove $t" >&2
+    done
+fi
 for img in "${legacy_images[@]+"${legacy_images[@]}"}"; do
     docker rmi "$img" >/dev/null 2>&1 || echo "  could not remove $img (still in use?)" >&2
 done

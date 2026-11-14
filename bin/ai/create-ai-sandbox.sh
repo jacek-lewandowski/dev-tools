@@ -60,7 +60,16 @@ while [ -L "$SCRIPT_PATH" ]; do
         *)  SCRIPT_PATH="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)/$link" ;;
     esac
 done
-SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+# Physical: a directory reached through a link names the tree its files are in, so one
+# run never mixes two revisions.
+SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)
+
+# Identity and path helpers, shared with the ai-sandbox-* commands so the two
+# can never compute a different id for the same project. Sourced first because the
+# refusal to run from a tree a sandbox can write comes before anything else.
+# shellcheck source=bin/ai/ai-sandbox-lib.sh
+. "$SCRIPT_DIR/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 
 . "$SCRIPT_DIR/create.d/options.sh"
 . "$SCRIPT_DIR/create.d/project.sh"
@@ -76,11 +85,8 @@ SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
 
 # The modules define; the stages run here, in this order.
 options_parse "$@"
+install_require_revision
 project_prerequisites
-# Identity and path helpers, shared with the ai-sandbox-* commands so the two
-# can never compute a different id for the same project.
-# shellcheck source=bin/ai/ai-sandbox-lib.sh
-. "$SCRIPT_DIR/ai-sandbox-lib.sh"
 options_check_memory
 resources_budget_gate
 project_resolve
@@ -103,7 +109,6 @@ image_context
 compose_env
 compose_file
 display_launchers
-install_helpers
 start_gate
 image_build
 project_extensions

@@ -101,9 +101,12 @@ cat "$SCRIPT_DIR/image/sandbox-sdk" > "$BUILD_DIR/sandbox-sdk"
 # `agy -p` as exfiltration to Google.
 cat "$SCRIPT_DIR/image/claude-managed-settings.json" > "$BUILD_DIR/claude-managed-settings.json"
 
-cp "$SCRIPT_DIR/image/ai-delegate" "$BUILD_DIR/ai-delegate"
-cp "$SCRIPT_DIR/image/sandbox-knowledge-sync" "$BUILD_DIR/sandbox-knowledge-sync"
-cp "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
+# cp gives a new file its source's mode, which is read-only when the tree is an installed
+# revision, and the next create could not overwrite it: the owner can always write these.
+cp -f "$SCRIPT_DIR/image/ai-delegate" "$BUILD_DIR/ai-delegate"
+cp -f "$SCRIPT_DIR/image/sandbox-knowledge-sync" "$BUILD_DIR/sandbox-knowledge-sync"
+cp -f "$SCRIPT_DIR/context-statusline" "$BUILD_DIR/context-statusline"
+chmod u+w "$BUILD_DIR/ai-delegate" "$BUILD_DIR/sandbox-knowledge-sync" "$BUILD_DIR/context-statusline"
 
 # --- Dockerfile ------------------------------------------------------------
 

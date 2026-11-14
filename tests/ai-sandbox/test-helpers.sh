@@ -9,47 +9,24 @@ set -uo pipefail
 fake_home >/dev/null
 tmp="$FAKE_HOME_DIR"
 proj="$tmp/work/proj"; mkdir -p "$proj"
-touch "$HOME/.bashrc"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 \
     || { echo "script failed:"; cat "$tmp/out"; }
 
-for h in ai-sandbox ai-sandbox-stop ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm; do
-    assert_file "installed $h" "$AI_SANDBOX_ROOT/bin/$h"
+# create installs nothing: the commands, their library and the PATH entry belong to the
+# installed revision (ai-sandbox-install), and the config keeps only what the user wrote.
+for h in ai-sandbox ai-sandbox-stop ai-sandbox-restart ai-sandbox-attach ai-sandbox-rm ai-sandbox-lib.sh; do
+    assert_file "the installed revision holds $h" "$AI_SANDBOX_ROOT/bin/$h"
 done
-assert_file "installed the library" "$AI_SANDBOX_ROOT/bin/ai-sandbox-lib.sh"
-assert_file "recorded the source dir" "$AI_SANDBOX_ROOT/config"
-assert_contains "config points at the repo" "$(cat "$AI_SANDBOX_ROOT/config")" \
-                "DEV_TOOLS_DIR=$REPO_ROOT"
-# The config is the user's file too (the memory budget is hand-written), so a
-# create rewrites its own line and keeps the rest, once each, run after run.
 config_lines() { grep -c "^$1=" "$AI_SANDBOX_ROOT/config"; }
-assert_eq "config keeps the hand-written budget" "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
-assert_eq "config records the source dir once"   "$(config_lines DEV_TOOLS_DIR)" 1
-bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out2" 2>&1 \
-    || { echo "script failed:"; cat "$tmp/out2"; }
-assert_eq "a second create does not duplicate the budget"    "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
-assert_eq "a second create does not duplicate the source dir" "$(config_lines DEV_TOOLS_DIR)" 1
-assert_contains "the budget value survives" "$(cat "$AI_SANDBOX_ROOT/config")" 'AI_SANDBOX_MEMORY_BUDGET_GB=18'
-# A hand-written config may lack its final newline (an editor that strips it,
-# printf, a copied file): the rewrite must still put DEV_TOOLS_DIR on a line of
-# its own, or the budget reads as '18DEV_TOOLS_DIR=...' and every start is refused.
+assert_eq "create leaves the budget line alone, once" "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
+assert_eq "the budget still reads as a whole number" \
+    "$(AI_SANDBOX_ROOT="$AI_SANDBOX_ROOT" bash -c '. "$1/bin/ai/ai-sandbox-lib.sh" && ai_sandbox_memory_budget_gb' _ "$REPO_ROOT" 2>&1)" 18
+# A hand-written config may lack its final newline: a create leaves it byte for byte.
 printf 'AI_SANDBOX_MEMORY_BUDGET_GB=18' > "$AI_SANDBOX_ROOT/config"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out3" 2>&1 \
     || { echo "script failed:"; cat "$tmp/out3"; }
-assert_eq "a config without a final newline keeps its budget line" "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
-assert_eq "and gets the source dir on a line of its own"           "$(config_lines DEV_TOOLS_DIR)" 1
-assert_eq "the budget still reads as a whole number" \
-    "$(AI_SANDBOX_ROOT="$AI_SANDBOX_ROOT" bash -c '. "$1/bin/ai/ai-sandbox-lib.sh" && ai_sandbox_memory_budget_gb' _ "$REPO_ROOT" 2>&1)" 18
-
-# The bashrc block must be the stable one-liner, not a pile of functions.
-block=$(sed -n '/>>> dev-tools ai-sandbox helpers >>>/,/<<< dev-tools ai-sandbox helpers <<</p' "$HOME/.bashrc")
-assert_contains "bashrc adds bin to PATH" "$block" '.ai-sandbox/bin'
-# Match any function definition, not one remembered name: the point is that the
-# block stays a stable PATH stub, whatever a future helper might be called.
-case "$block" in
-    *'() {'*) TESTS_RUN=$((TESTS_RUN+1)); _fail "bashrc defines no functions" "block still defines a function" ;;
-    *)        TESTS_RUN=$((TESTS_RUN+1)); _pass "bashrc defines no functions" ;;
-esac
+assert_eq "a config without a final newline is left as it is" "$(cat "$AI_SANDBOX_ROOT/config")" "AI_SANDBOX_MEMORY_BUDGET_GB=18"
+assert_no_file "create wrote no ~/.bashrc" "$HOME/.bashrc"
 
 # The helper must resolve the same project the script did.
 id=$(ai_sandbox_project_id "$proj")
@@ -57,25 +34,12 @@ out=$( cd "$proj" && AI_SANDBOX_ROOT="$AI_SANDBOX_ROOT" \
        bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" --print-context 2>&1 )
 assert_contains "helper resolves the same sandbox" "$out" "${id}-agent"
 
-# O22: ai-delegate and sandbox-knowledge-sync run in the image only, so neither is a host helper.
-assert_eq "ai-delegate is not in the helper list"            "$(ai_sandbox_helpers | grep -cx 'ai-delegate')" 0
-assert_eq "sandbox-knowledge-sync is not in the helper list" "$(ai_sandbox_helpers | grep -cx 'sandbox-knowledge-sync')" 0
-assert_no_file "a first create installs no ai-delegate"      "$AI_SANDBOX_ROOT/bin/ai-delegate"
-assert_eq "a first create has nothing to remove and says nothing" "$(grep -c 'ai-delegate' "$tmp/out")" 0
-# A copy an earlier run installed is removed by the next create, with one line saying so.
-echo '# an earlier install' > "$AI_SANDBOX_ROOT/bin/ai-delegate"
-bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-delegate" 2>&1 || true
-assert_no_file "a create removes the host copy of ai-delegate" "$AI_SANDBOX_ROOT/bin/ai-delegate"
-assert_eq "and prints one line saying so" "$(grep -c "removed $AI_SANDBOX_ROOT/bin/ai-delegate" "$tmp/out-delegate")" 1
-bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-delegate2" 2>&1 || true
-assert_eq "the next create prints nothing about it" "$(grep -c 'ai-delegate' "$tmp/out-delegate2")" 0
-# Every other helper is still installed.
-for h in $(ai_sandbox_helpers); do assert_file "helper still installed: $h" "$AI_SANDBOX_ROOT/bin/$h"; done
-
-# Re-running create refreshes stale installed copies.
-echo '# stale' > "$AI_SANDBOX_ROOT/bin/ai-sandbox-stop"
-bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true
-assert_contains "stale helper refreshed" "$(cat "$AI_SANDBOX_ROOT/bin/ai-sandbox-stop")" 'compose stop'
+# O22: ai-delegate and sandbox-knowledge-sync run in the image only, so neither is a host entry point.
+entries=$(awk '$1 == "entry" {print $2}' "$REPO_ROOT/bin/ai/MANIFEST")
+assert_eq "ai-delegate is not an entry point"            "$(printf '%s\n' "$entries" | grep -c 'ai-delegate')" 0
+assert_eq "sandbox-knowledge-sync is not an entry point" "$(printf '%s\n' "$entries" | grep -c 'sandbox-knowledge-sync')" 0
+assert_no_file "create puts no ai-delegate on the host" "$AI_SANDBOX_ROOT/bin/ai-delegate"
+assert_eq "and says nothing about one" "$(grep -c 'ai-delegate' "$tmp/out")" 0
 
 rm -rf "$tmp"
 finish

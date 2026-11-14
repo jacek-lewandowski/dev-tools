@@ -8,10 +8,16 @@
 
 AI_SANDBOX_ROOT="${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}"
 AI_SANDBOX_SCHEMA_VERSION=2
-# Host-wide settings, shell-style KEY=VALUE lines. create-ai-sandbox.sh writes
-# DEV_TOOLS_DIR; AI_SANDBOX_MEMORY_BUDGET_GB, the RAM in GB that all running
-# sandboxes together may use, is written by the user by hand (the file's only
-# reader outside this repository is the user) and has no default.
+# C-INSTALL's root: the revisions the host runs (rev/<commit>), `current` naming one.
+# Defined once, here; everything that names it uses this.
+# reads-outside: ~/.ai-sandbox/bin (a link to installed/current/bin/ai) and
+# ~/.ai-sandbox/installed/current: the user's ~/.bashrc block puts the first on PATH, the host's
+# Claude Code statusLine setting names context-statusline there, and every sandbox's compose
+# file mounts installed/current/tools; change them only with ai-sandbox-install.
+AI_SANDBOX_INSTALLED="$AI_SANDBOX_ROOT/installed"   # C-INSTALL's root, defined once
+# Host-wide settings, shell-style KEY=VALUE lines. AI_SANDBOX_MEMORY_BUDGET_GB, the RAM
+# in GB that all running sandboxes together may use, is written by the user by hand (the
+# file's only reader outside this repository is the user) and has no default.
 AI_SANDBOX_CONFIG="$AI_SANDBOX_ROOT/config"     # defined once, in the lib
 
 # The shared knowledge repository (see ai-knowledge). Configured when the config
@@ -179,18 +185,28 @@ ai_sandbox_recreate_command() {   # <sandbox dir>
     echo "create-ai-sandbox.sh ${project:-<project dir>}"
 }
 
+# What makes a sandbox not current, said once: the knowledge stamp disagrees with the host's
+# knowledge configuration (stale, unstamped), or its compose file mounts a tools directory
+# that is not the installed revision's (C-INSTALL: a sandbox created before the install
+# root existed, or from another tree). Prints nothing for a current sandbox.
+ai_sandbox_stale_reason() {   # <sandbox dir>
+    local state
+    state=$(ai_sandbox_knowledge_state "$1")
+    case $state in
+        stale)     echo "stale: its compose file disagrees with the host's knowledge configuration" ;;
+        unstamped) echo "unstamped: it was created before the knowledge stamp existed" ;;
+        *) ai_sandbox_mounts_install_root "$1" || echo "stale: its compose file does not mount the installed revision's tools ($AI_SANDBOX_INSTALLED/current/tools)" ;;
+    esac
+}
+
 # The start path only checks; it never rewrites a sandbox. The repair is a
 # plain create-ai-sandbox.sh run for this sandbox.
 ai_sandbox_require_current() {   # <sandbox dir>
-    local state
-    state=$(ai_sandbox_knowledge_state "$1")
-    [ "$state" = current ] && return 0
+    local why
+    why=$(ai_sandbox_stale_reason "$1")
+    [ -n "$why" ] || return 0
     {
-        if [ "$state" = stale ]; then
-            echo "Sandbox $(basename "$1") is stale: its compose file disagrees with the host's knowledge configuration."
-        else
-            echo "Sandbox $(basename "$1") is unstamped: it was created before the knowledge stamp existed."
-        fi
+        echo "Sandbox $(basename "$1") is $why."
         echo "It cannot be started until it has been recreated. Run on the host:"
         echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
@@ -200,11 +216,11 @@ ai_sandbox_require_current() {   # <sandbox dir>
 # A running sandbox is entered whatever its stamp; this is what the host says
 # about one that is not current (nothing is executed in it).
 ai_sandbox_say_recreate() {   # <sandbox dir>
-    local state
-    state=$(ai_sandbox_knowledge_state "$1")
-    [ "$state" = current ] && return 0
+    local why
+    why=$(ai_sandbox_stale_reason "$1")
+    [ -n "$why" ] || return 0
     {
-        echo "Sandbox $(basename "$1") is running and $state: it keeps working, but it predates the host's current knowledge setup and the host runs nothing in it."
+        echo "Sandbox $(basename "$1") is running and ${why%%:*}: it keeps working, but it predates the host's current setup (${why#*: }) and the host runs nothing in it."
         echo "It must be re-created (this restarts it). Run on the host when it suits you:"
         echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
@@ -286,26 +302,11 @@ jetbrains-plugins|.local/share/JetBrains|
 SHARED
 }
 
-# Every helper installed into $AI_SANDBOX_ROOT/bin. create-ai-sandbox.sh
-# installs from this list and ai-sandbox-migrate refreshes from it, so a helper
-# added here is picked up by both without either being edited. Programs that
-# run only inside the image (ai-delegate) are deliberately not listed: the host
-# has no use for them and a host copy is one more file to keep current.
-ai_sandbox_helpers() {
-    cat <<'HELPERS'
-ai-sandbox-lib.sh
-ai-sandbox
-ai-sandbox-stop
-ai-sandbox-restart
-ai-sandbox-attach
-ai-sandbox-rm
-ai-sandbox-migrate
-ai-sandbox-account
-ai-sandbox-gc
-ai-knowledge
-ai-sandbox-extensions
-HELPERS
-}
+# Kept as an empty list on purpose. A host that still has the pre-install ai-sandbox-migrate
+# runs it with its own lib sourced first, then this one, and copies every file this list names
+# over its installed helpers; the name must stay defined (empty) so that nothing is copied until
+# the host has installed a revision. Removable once every host has (spec's deferred list).
+ai_sandbox_helpers() { :; }
 
 # The image tag of one variant. The uid suffix keeps two host users sharing one
 # Docker daemon from fighting over a single tag, since the image bakes in USER_ID.
@@ -387,6 +388,73 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
         if [ -n "${AI_SANDBOX_GIT_TIMEOUT:-}" ]; then exec timeout "$AI_SANDBOX_GIT_TIMEOUT" git "$@"; fi
         exec git "$@"
     )
+}
+
+# C-INSTALL: a host entry point calls this first, with its own path. 0 when the directory
+# holding it, links resolved, is not one a sandbox can write (ai_sandbox_writable_path);
+# else says so with the install command and returns 3, the status ai_sandbox_host_git gives
+# for the same reason. <top> is the directory holding bin/ai, where --from points.
+ai_sandbox_refuse_writable_self() {   # <own path>
+    local own dir top
+    own=$(readlink -f -- "$1" 2>/dev/null) && [ -n "$own" ] || own=$1
+    dir=${own%/*}; [ -n "$dir" ] || dir=/
+    ai_sandbox_writable_path "$dir" || return 0
+    top=$dir
+    while [ "$top" != / ] && [ ! -d "$top/bin/ai" ]; do
+        case $top in */*) top=${top%/*}; [ -n "$top" ] || top=/ ;; *) break ;; esac
+    done
+    [ -d "$top/bin/ai" ] || top=$dir
+    {
+        echo "$(basename "$own"): refusing to run from $dir: a sandbox can write it"
+        echo "Install a revision and run it from ~/.ai-sandbox/bin: ai-sandbox-install --from $top"
+    } >&2
+    return 3
+}
+
+# Whether <sandbox dir>'s compose file mounts the installed revision's tools, as
+# create-ai-sandbox.sh writes it: C-INSTALL's `current`, not a path of any one tree.
+ai_sandbox_mounts_install_root() {   # <sandbox dir>
+    grep -qF -- "\"$AI_SANDBOX_INSTALLED/current/tools:" "$1/docker-compose.yml" 2>/dev/null
+}
+
+# The user's ~/.bashrc block that puts ~/.ai-sandbox/bin on PATH. Its markers and text
+# are fixed on purpose (an existing block is left exactly as it is, wherever it sits in
+# the file); written by ai-sandbox-install, the one writer. An older block of another
+# text, and the unmarked block of earlier versions, are replaced by this one at the end.
+AI_SANDBOX_BASHRC_BEGIN='# >>> dev-tools ai-sandbox helpers >>>'
+AI_SANDBOX_BASHRC_END='# <<< dev-tools ai-sandbox helpers <<<'
+# Whether the writer below can read and rewrite <bashrc file>, or create it.
+ai_sandbox_bashrc_usable() {   # <bashrc file>
+    if [ -e "$1" ]; then [ -r "$1" ] && [ -w "$1" ]; else [ -w "$(dirname -- "$1")" ]; fi
+}
+ai_sandbox_write_bashrc_block() {   # <bashrc file>
+    local helpers='# Helpers for dev-tools/bin/ai/create-ai-sandbox.sh live in ~/.ai-sandbox/bin.
+case ":$PATH:" in
+    *":$HOME/.ai-sandbox/bin:"*) ;;
+    *) PATH="$HOME/.ai-sandbox/bin:$PATH" ;;
+esac'
+    touch -- "$1"
+    SB_BEGIN="$AI_SANDBOX_BASHRC_BEGIN" SB_END="$AI_SANDBOX_BASHRC_END" SB_HELPERS="$helpers" \
+    python3 -I - "$1" <<'PYEOF'
+import os, re, sys
+path  = sys.argv[1]
+begin = os.environ["SB_BEGIN"]
+end   = os.environ["SB_END"]
+block = begin + "\n" + os.environ["SB_HELPERS"] + "\n" + end
+
+# surrogateescape: a byte that is not UTF-8 outside the block is read and written back as it was
+content = open(path, encoding="utf-8", errors="surrogateescape").read()
+if block in content:
+    sys.exit(0)
+# Remove this script's marked block, and the unmarked block written by earlier
+# versions of the script.
+content = re.sub(r"\n*" + re.escape(begin) + r".*?" + re.escape(end) + r"\n*",
+                 "\n", content, flags=re.DOTALL)
+content = re.sub(r"\n*# Antigravity Sandbox Helper\n.*?\nfunction ai-sandbox-stop\(\)\s*\{.*?\n\}\n",
+                 "\n", content, flags=re.DOTALL)
+content = content.rstrip("\n")
+open(path, "w", encoding="utf-8", errors="surrogateescape").write(content + "\n\n" + block + "\n")
+PYEOF
 }
 
 # C-GIT, confined side: git run on a tree a sandbox can write, inside a
@@ -692,7 +760,7 @@ ai_sandbox_caches_prepare() {
 ai_sandbox_caches_current_triple() {   # <volume name>
     local out
     out=$(docker volume inspect "$1" 2>/dev/null) || return 1
-    printf '%s' "$out" | python3 -c '
+    printf '%s' "$out" | python3 -I -c '
 import json, sys
 try:
     opts = json.load(sys.stdin)[0]["Options"]

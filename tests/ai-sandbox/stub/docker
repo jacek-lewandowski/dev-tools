@@ -128,7 +128,13 @@ JSON
         ;;
     ps)
         # 'docker ps --format {{.Names}}': the running containers, one per line.
-        [ -z "${DOCKER_STUB_PS:-}" ] || printf '%s\n' "$DOCKER_STUB_PS"; exit 0
+        # A reader that closes the pipe early kills the real docker (SIGPIPE, status 141); so does this.
+        [ -z "${DOCKER_STUB_PS:-}" ] || printf '%s\n' "$DOCKER_STUB_PS" || exit 141
+        # DOCKER_STUB_PS_FLOOD=<n>: then n more lines, more than a pipe holds, as a long listing.
+        if [ -n "${DOCKER_STUB_PS_FLOOD:-}" ]; then
+            yes filler-container | head -n "$DOCKER_STUB_PS_FLOOD" || exit 141
+        fi
+        exit 0
         ;;
     compose)
         # Every caller goes through 'docker compose -f <file> --env-file <env>
