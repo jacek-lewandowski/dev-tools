@@ -24,7 +24,6 @@ assert_contains "and it is the install root's" "$(cat "$compose")" \
 assert_eq "no path of the tree create ran from is in it" "$(grep -cF "$REPO_ROOT" "$compose")" 0
 assert_eq "the config is byte-identical (a budget only)" "$(cat "$AI_SANDBOX_ROOT/config")" "$before_cfg"
 assert_no_file "create made no ~/.ai-sandbox/bin" "$AI_SANDBOX_ROOT/bin"
-assert_eq "and no DEV_TOOLS_DIR line" "$(grep -c '^DEV_TOOLS_DIR=' "$AI_SANDBOX_ROOT/config")" 0
 assert_eq "create did not touch ~/.bashrc" "$([ -e "$HOME/.bashrc" ] && echo present || echo absent)" absent
 assert_contains "the usage names ai-sandbox-install" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)" "ai-sandbox-install"
 assert_eq "and does not say create installs the commands" \

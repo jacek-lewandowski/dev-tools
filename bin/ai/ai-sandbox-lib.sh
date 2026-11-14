@@ -11,10 +11,9 @@ AI_SANDBOX_SCHEMA_VERSION=2
 # C-INSTALL's root: the revisions the host runs (rev/<commit>), `current` naming one.
 # Defined once, here; everything that names it uses this.
 AI_SANDBOX_INSTALLED="$AI_SANDBOX_ROOT/installed"
-# Host-wide settings, shell-style KEY=VALUE lines. create-ai-sandbox.sh writes
-# DEV_TOOLS_DIR; AI_SANDBOX_MEMORY_BUDGET_GB, the RAM in GB that all running
-# sandboxes together may use, is written by the user by hand (the file's only
-# reader outside this repository is the user) and has no default.
+# Host-wide settings, shell-style KEY=VALUE lines. AI_SANDBOX_MEMORY_BUDGET_GB, the RAM
+# in GB that all running sandboxes together may use, is written by the user by hand (the
+# file's only reader outside this repository is the user) and has no default.
 AI_SANDBOX_CONFIG="$AI_SANDBOX_ROOT/config"     # defined once, in the lib
 
 # The shared knowledge repository (see ai-knowledge). Configured when the config
@@ -297,27 +296,6 @@ claude-desktop-versions|.config/Claude/claude-code|claude-data/claude-code
 ide-vsix|.config/Antigravity IDE/CachedExtensionVSIXs|antigravity-ide-data/CachedExtensionVSIXs
 jetbrains-plugins|.local/share/JetBrains|
 SHARED
-}
-
-# Every helper installed into $AI_SANDBOX_ROOT/bin. create-ai-sandbox.sh
-# installs from this list and ai-sandbox-migrate refreshes from it, so a helper
-# added here is picked up by both without either being edited. Programs that
-# run only inside the image (ai-delegate) are deliberately not listed: the host
-# has no use for them and a host copy is one more file to keep current.
-ai_sandbox_helpers() {
-    cat <<'HELPERS'
-ai-sandbox-lib.sh
-ai-sandbox
-ai-sandbox-stop
-ai-sandbox-restart
-ai-sandbox-attach
-ai-sandbox-rm
-ai-sandbox-migrate
-ai-sandbox-account
-ai-sandbox-gc
-ai-knowledge
-ai-sandbox-extensions
-HELPERS
 }
 
 # The image tag of one variant. The uid suffix keeps two host users sharing one

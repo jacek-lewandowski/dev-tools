@@ -19,7 +19,6 @@ for h in ai-sandbox ai-sandbox-stop ai-sandbox-restart ai-sandbox-attach ai-sand
 done
 config_lines() { grep -c "^$1=" "$AI_SANDBOX_ROOT/config"; }
 assert_eq "create leaves the budget line alone, once" "$(config_lines AI_SANDBOX_MEMORY_BUDGET_GB)" 1
-assert_eq "create records no checkout location in the config" "$(config_lines DEV_TOOLS_DIR)" 0
 assert_eq "the budget still reads as a whole number" \
     "$(AI_SANDBOX_ROOT="$AI_SANDBOX_ROOT" bash -c '. "$1/bin/ai/ai-sandbox-lib.sh" && ai_sandbox_memory_budget_gb' _ "$REPO_ROOT" 2>&1)" 18
 # A hand-written config may lack its final newline: a create leaves it byte for byte.

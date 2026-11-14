@@ -18,7 +18,7 @@ assert_eq "it is current" "$(ai_sandbox_stale_reason "$dir")" ""
 
 # as the base's create wrote it: tools from the checkout
 cp "$compose" "$tmp/compose.current"
-sed -i "s|\"$AI_SANDBOX_ROOT/installed/current/tools:|\"/home/x/dev/public/dev-tools/tools:|" "$compose"
+sed -i "s|\"$AI_SANDBOX_ROOT/installed/current/tools:|\"/old/checkout/tools:|" "$compose"
 assert_ne "an old compose file is not current" "$(ai_sandbox_stale_reason "$dir")" ""
 
 : > "$DOCKER_STUB_LOG"

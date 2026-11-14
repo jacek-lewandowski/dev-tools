@@ -45,8 +45,6 @@ resolve_expr() {
         '"$AI_SANDBOX_INSTALLED/current/'*)   base=;    rest=${rest#'"$AI_SANDBOX_INSTALLED/current/'} ;;
         '"${AI_SANDBOX_INSTALLED}/current/'*) base=;    rest=${rest#'"${AI_SANDBOX_INSTALLED}/current/'} ;;
         '"$AI_SANDBOX_ROOT/'*) echo -; return ;;
-        # the recorded checkout; the form goes with the code that uses it
-        '"$DEV_TOOLS_DIR/'*) base=;                     rest=${rest#'"$DEV_TOOLS_DIR/'} ;;
         '"'*) echo '?'; return ;;
         *) return ;;
     esac

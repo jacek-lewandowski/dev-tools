@@ -169,20 +169,13 @@ load_config() {
     [ -n "$REMOTE" ] || die "no REMOTE in $AI_KNOWLEDGE_CONFIG"
 }
 
-# The seed sits beside this helper: in the checkout, or installed next to the
-# copy in ~/.ai-sandbox/bin by create-ai-sandbox.sh. A recorded dev-tools
-# checkout is the fallback for an installation that predates that.
+# The seed sits beside this program, in whichever tree it runs from (an installed
+# revision, or a checkout): nothing else is consulted.
 seed_dir() {
-    local dev_tools=""
     if [ -d "$HERE/knowledge-seed" ]; then
         printf '%s\n' "$HERE/knowledge-seed"; return 0
     fi
-    [ -f "$AI_SANDBOX_ROOT/config" ] && dev_tools=$(sed -n 's/^DEV_TOOLS_DIR=//p' "$AI_SANDBOX_ROOT/config" | head -1)
-    if [ -n "$dev_tools" ] && [ -d "$dev_tools/bin/ai/knowledge-seed" ]; then
-        printf '%s\n' "$dev_tools/bin/ai/knowledge-seed"
-    else
-        return 1
-    fi
+    return 1
 }
 
 # Whatever sits where a checkout belongs is the user's: moved beside it,
@@ -385,9 +378,12 @@ offer_gemini_drift() {
 # render appends again from its own file.
 seed_main() {
     local seed src identity=()
-    seed=$(seed_dir) || die "cannot find bin/ai/knowledge-seed (is DEV_TOOLS_DIR recorded in $AI_SANDBOX_ROOT/config?)"
+    seed=$(seed_dir) || die "cannot find knowledge-seed beside $HERE: run ai-knowledge from an installed revision (ai-sandbox-install)"
     log "seeding the empty repository from $seed"
     rsync -a --exclude=.gitkeep "$seed/" "$KNOWLEDGE_MAIN/"
+    # An installed revision is read-only, and rsync -a keeps modes: what lands in this host-owned
+    # checkout is writable for its owner, as the later fast-forwards need.
+    find "$KNOWLEDGE_MAIN" -path "$KNOWLEDGE_MAIN/.git" -prune -o -exec chmod u+w {} +
     mkdir -p "$KNOWLEDGE_MAIN/rules"
     src="$HOME/.gemini/GEMINI.md"
     [ -L "$src" ] && src=$(readlink -f "$src")

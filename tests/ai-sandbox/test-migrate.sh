@@ -115,15 +115,21 @@ assert_file     "newer store untouched"          "$AI_SANDBOX_ROOT/late-agent"
 assert_eq       "newer marker not overwritten"   "$(cat "$AI_SANDBOX_ROOT/.schema-version")" '99'
 rm -rf "$tmpS"
 
-# --- the installed knowledge seed is refreshed from the recorded checkout
+# --- nothing is refreshed from a recorded checkout any more (O10): the revision is installed
+# --- by ai-sandbox-install, and a config line naming a checkout with a full bin/ai changes nothing
 fake_home >/dev/null; tmpK="$FAKE_HOME_DIR"
+rm "$AI_SANDBOX_ROOT/bin"
 printf 'DEV_TOOLS_DIR=%s\n' "$REPO_ROOT" > "$AI_SANDBOX_ROOT/config"
 mkdir -p "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule"
 echo stale > "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md"
 echo junk > "$AI_SANDBOX_ROOT/bin/knowledge-seed/leftover.md"
+before=$(cd "$AI_SANDBOX_ROOT/bin" && find . -type f -exec sha256sum {} + | LC_ALL=C sort)
 bash "$REPO_ROOT/bin/ai/ai-sandbox-migrate" >/dev/null 2>&1
-assert_eq "installed seed refreshed" "$(cmp -s "$AI_SANDBOX_ROOT/bin/knowledge-seed/skills/propose-rule/SKILL.md" "$REPO_ROOT/bin/ai/knowledge-seed/skills/propose-rule/SKILL.md" && echo same || echo differs)" same
-# (deletion of stale seed files is rsync --delete, which the suite's stub rsync does not model)
+assert_eq "an installed seed is not refreshed from the recorded checkout" \
+    "$(cd "$AI_SANDBOX_ROOT/bin" && find . -type f -exec sha256sum {} + | LC_ALL=C sort)" "$before"
+rm -rf "$AI_SANDBOX_ROOT/bin"
+bash "$REPO_ROOT/bin/ai/ai-sandbox-migrate" >/dev/null 2>&1
+assert_no_file "migrate leaves ~/.ai-sandbox/bin absent" "$AI_SANDBOX_ROOT/bin"
 rm -rf "$tmpK"
 
 finish
