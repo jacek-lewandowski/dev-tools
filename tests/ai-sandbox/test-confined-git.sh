@@ -208,6 +208,7 @@ assert_contains "and the manual fetch is printed" "$(cat "$tmp/timeout.out")" "f
 served="$tmp/served"; mkdir -p "$served"; git init -q "$served/repo"
 git -C "$served/repo" commit -q --allow-empty -m "served one"; mkdir -p "$served/repo/pkg/inner"
 ubase=$(ai_sandbox_image_name base); udocker=$(ai_sandbox_image_name docker)
+ubasegui=$(ai_sandbox_image_name base gui); udockergui=$(ai_sandbox_image_name docker gui)
 confined() { DOCKER_STUB_IMAGES="${IMAGES-$ubase}" ai_sandbox_confined_git "$@"; }
 runs() { grep -c '^run ' "$DOCKER_STUB_LOG"; }
 runline() { grep '^run ' "$DOCKER_STUB_LOG" | head -1; }
@@ -240,6 +241,12 @@ assert_contains "confined: the docker variant when the base image is absent" "$(
 : > "$DOCKER_STUB_LOG"
 IMAGES="$ubase $udocker" confined "$served" repo log --format=%s >/dev/null 2>&1
 assert_contains "confined: the base image wins when both exist" "$(runline)" " $ubase "
+: > "$DOCKER_STUB_LOG"
+IMAGES="$ubasegui" confined "$served" repo log --format=%s >/dev/null 2>&1
+assert_contains "confined: a -gui image alone is found" "$(runline)" " $ubasegui "
+: > "$DOCKER_STUB_LOG"
+IMAGES="$udockergui" confined "$served" repo log --format=%s >/dev/null 2>&1
+assert_contains "confined: the docker -gui image alone is found" "$(runline)" " $udockergui "
 : > "$DOCKER_STUB_LOG"
 out=$(IMAGES=none confined "$served" repo log --format=%s 2>&1); rc=$?
 assert_eq "confined: no image gives 125" "$rc" 125

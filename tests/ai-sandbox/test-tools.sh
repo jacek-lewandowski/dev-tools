@@ -30,7 +30,7 @@ assert_contains "uv has a BuildKit cache mount"          "$df" '--mount=type=cac
 assert_contains "headroom installs with the sandbox extra" "$df" 'headroom-ai[sandbox]==${HEADROOM_VERSION}'
 assert_contains "the image build runs under BuildKit"    "$(cat "$REPO_ROOT/bin/ai/create.d/image.sh")" 'DOCKER_BUILDKIT=1 docker build'
 py_apt=$(printf '%s\n' "$df" | grep -n 'python3 python3-pip python3-venv' | head -1 | cut -d: -f1)
-big_apt=$(printf '%s\n' "$df" | grep -n 'claude-desktop antigravity' | head -1 | cut -d: -f1)
+big_apt=$(printf '%s\n' "$df" | grep -n 'google-cloud-cli cloudflared gh nodejs' | head -1 | cut -d: -f1)
 uv_run=$(printf '%s\n' "$df" | grep -n 'uv pip install --system' | head -1 | cut -d: -f1)
 assert_eq "python apt layer is its own, before the big apt layer" "$([ -n "$py_apt" ] && [ "$py_apt" -lt "$big_apt" ] && echo yes)" yes
 assert_eq "python packages follow the python apt layer, before the big one" "$([ -n "$uv_run" ] && [ "$uv_run" -gt "$py_apt" ] && [ "$uv_run" -lt "$big_apt" ] && echo yes)" yes
@@ -41,11 +41,24 @@ assert_eq "python apt layer sits outside the big apt layer" "$([ "$py_apt" -lt "
 # the Chrome and Antigravity ones after the Python install, so their bumps leave it cached.
 arg_line() { printf '%s\n' "$df" | grep -n "^ARG $1=" | head -1 | cut -d: -f1; }
 assert_eq "UV_VERSION is declared after the python apt layer" "$([ "$(arg_line UV_VERSION)" -gt "$py_apt" ] && echo yes)" yes
-for later in GOOGLE_CHROME_VERSION ANTIGRAVITY_CLI_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION COMBY_VERSION GITLEAKS_VERSION; do
+# The default (no display) build has no GUI pins; an xpra build has them, after the same install.
+for gui in GOOGLE_CHROME_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION; do
+    assert_eq "no display: $gui is not in the Dockerfile" "$(arg_line "$gui")" ""
+done
+assert_eq "no display: the big apt layer has no GUI package" "$(printf '%s\n' "$df" | grep -c -E 'claude-desktop|openbox|xwayland')" 0
+for later in ANTIGRAVITY_CLI_VERSION PLAYWRIGHT_VERSION PUPPETEER_CORE_VERSION COMBY_VERSION GITLEAKS_VERSION; do
     l=$(arg_line "$later")
     assert_eq "$later is declared after the python install" "$([ -n "$l" ] && [ "$l" -gt "$uv_run" ] && echo yes)" yes
 done
 assert_eq "no unfilled ARG placeholder is left"          "$(printf '%s\n' "$df" | grep -c '@[A-Z_0-9]*@')" 0
+assert_contains "playwright is pinned"                   "$df" 'ARG PLAYWRIGHT_VERSION=1.65.1'
+assert_contains "puppeteer-core is pinned"               "$df" 'ARG PUPPETEER_CORE_VERSION=25.17.0'
+# A project's own 'npx playwright install' writes into PLAYWRIGHT_BROWSERS_PATH (lock dir included): the sandbox user must be able to.
+assert_contains "the browsers path is writable by the sandbox user" "$df" 'chmod -R a+rwX "${PLAYWRIGHT_BROWSERS_PATH}"'
+assert_contains "and its top directory takes new revisions and locks"  "$df" 'chmod 1777 "${PLAYWRIGHT_BROWSERS_PATH}"'
+# NODE_PATH is not global (a project's require must not see the global modules); only the build smoke test sets it.
+assert_eq "NODE_PATH is set once, for the smoke test only" "$(printf '%s\n' "$df" | grep -c 'NODE_PATH=')" 1
+assert_contains "and there it prefixes the node command" "$df" 'NODE_PATH=/usr/lib/node_modules node -e'
 # Without buildx the build cannot use cache mounts: fail before doing anything.
 DOCKER_STUB_NO_BUILDX=1 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-start "$proj" >"$tmp/out.nobx" 2>&1; nobx_rc=$?
 assert_ne       "create refuses without docker buildx"   "$nobx_rc" 0
@@ -97,6 +110,20 @@ assert_file     "env file is in the build context"       "$build/sandbox-env.sh"
 assert_file     "sdk wrapper is in the build context"    "$build/sandbox-sdk"
 assert_contains "interactive shells use the same env file" \
     "$(cat "$build/sandbox-bashrc.sh")" '. /etc/ai-sandbox-env.sh'
+
+# --- the same build for a sandbox with a display: the GUI pins and packages are back ---
+xs="$tmp/xstub"; mkdir -p "$xs"
+for t in xpra Xvfb xauth; do printf '#!/bin/sh\nexit 0\n' > "$xs/$t"; done
+printf '#!/bin/sh\necho 0123456789abcdef0123456789abcdef\n' > "$xs/mcookie"; chmod +x "$xs"/*
+PATH="$xs:$PATH" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=xpra --no-start "$proj" >"$tmp/out.gui" 2>&1 || true
+gdf=$(cat "$build/Dockerfile")
+assert_contains "xpra build: the GUI apt packages are installed" "$gdf" 'claude-desktop antigravity'
+guv=$(printf '%s\n' "$gdf" | grep -n 'uv pip install --system' | head -1 | cut -d: -f1)
+for gui in GOOGLE_CHROME_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION; do
+    gl=$(printf '%s\n' "$gdf" | grep -n "^ARG $gui=" | head -1 | cut -d: -f1)
+    assert_eq "xpra build: $gui is declared after the python install" "$([ -n "$gl" ] && [ "$gl" -gt "$guv" ] && echo yes)" yes
+done
+assert_eq "xpra build: no unfilled placeholder" "$(printf '%s\n' "$gdf" | grep -c '@[A-Z_0-9]*@')" 0
 
 # --- the env file, sourced for real ----------------------------------------
 # Simulates the container: a farm at ~/.sdkman with java and gradle defaults.

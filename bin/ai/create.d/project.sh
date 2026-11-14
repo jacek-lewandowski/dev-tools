@@ -169,6 +169,8 @@ log "tools     $HOST_TOOLS_DIR"
 project_extensions() {
 # The image no longer carries extensions, so the shared store is their only
 # source. Not fatal: the IDE simply starts without them until this succeeds.
+# The IDE is only in the -gui images, so a sandbox with no display has nothing to install.
+[ -n "$IMAGE_GUI" ] || return 0
 if ! "$AI_SANDBOX_ROOT/bin/ai-sandbox-extensions"; then
     warn "IDE extensions are not installed. Retry with: ai-sandbox-extensions refresh"
 fi

@@ -309,8 +309,9 @@ HELPERS
 
 # The image tag of one variant. The uid suffix keeps two host users sharing one
 # Docker daemon from fighting over a single tag, since the image bakes in USER_ID.
-ai_sandbox_image_name() {   # <base|docker>
-    printf 'ai-sandbox:%s-u%s' "$1" "$(id -u)"
+# The image family: '-gui' (the GUI applications, for a sandbox with a display) when the second argument is 'gui'.
+ai_sandbox_image_name() {   # <base|docker> [gui]
+    printf 'ai-sandbox:%s%s-u%s' "$1" "${2:+-$2}" "$(id -u)"
 }
 
 # C-GIT, host side. Whether PATH, a bind source a sandbox's compose file mounts
@@ -399,14 +400,16 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
 # A caller that serves a fetch (--upload-pack) gets exit 128 from git when this
 # fails, not 125: it has to find out about a missing image by itself.
 ai_sandbox_confined_git() {   # <root> <subdirectory> <git args...>
-    local root sub=$2 variant tag="" name rc=0
+    local root sub=$2 variant gui tag="" name rc=0
     root=$(readlink -m -- "$1" 2>/dev/null) && [ -n "$root" ] || { echo "ai_sandbox_confined_git: no such root: $1" >&2; return 125; }
     shift 2
     command -v docker >/dev/null 2>&1 || { echo "ai_sandbox_confined_git: docker is not available" >&2; return 125; }
     for variant in base docker; do
-        if docker image inspect "$(ai_sandbox_image_name "$variant")" >/dev/null 2>&1; then
-            tag=$(ai_sandbox_image_name "$variant"); break
-        fi
+        for gui in "" gui; do
+            if docker image inspect "$(ai_sandbox_image_name "$variant" $gui)" >/dev/null 2>&1; then
+                tag=$(ai_sandbox_image_name "$variant" $gui); break 2
+            fi
+        done
     done
     [ -n "$tag" ] || { echo "ai_sandbox_confined_git: no sandbox image exists yet (create-ai-sandbox.sh builds it)" >&2; return 125; }
     name="ai-sandbox-git-$$-$RANDOM"

@@ -32,7 +32,9 @@ Options:
                               in the sandbox can keylog and screenshot your
                               whole session, in every application. Opt in
                               explicitly.
-                     none     No GUI at all. CLI agents only.
+                     none     No GUI at all. CLI agents only, and an image without the GUI
+                              applications (headless Chromium for Playwright and
+                              Puppeteer is in every image).
                      auto     wayland if available, else xpra, else nested, else
                               fail with instructions. Never silently falls back
                               to host.
@@ -98,8 +100,9 @@ Layout under ~/.ai-sandbox:
   shared/                   IDE extensions, plugins, CLI builds and the agent
                             skills under ~/.agents, synced from the host and
                             read-only in every sandbox.
-  image/                    build context and stamp for the one image every
-                            project shares.
+  image/                    build context and stamps of the images (one per
+                            kind: with or without GUI applications), each
+                            shared by every project.
   bin/                      the ai-sandbox-* commands listed above.
   <project>-<hash>-agent/build-caches/  per-sandbox upper/work layers for the
                             Gradle and Maven overlay mounts (see "Build caches"

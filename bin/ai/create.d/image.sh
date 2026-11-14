@@ -16,6 +16,9 @@ readonly HEADROOM_VERSION='0.42.0'
 readonly GITLEAKS_LINUX_X64_SHA256='551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 readonly GOOGLE_CHROME_VERSION='152.0.7977.64-1'
 readonly NODE_MAJOR='24'
+# The headless browser every sandbox gets (Dockerfile.base); puppeteer-core downloads no browser.
+readonly PLAYWRIGHT_VERSION='1.65.1'
+readonly PUPPETEER_CORE_VERSION='25.17.0'
 
 # Claude Code plugins every sandbox gets at container start (entrypoint.sh).
 # The one place the list lives; it is rendered into claude-plugins.list.
@@ -30,8 +33,11 @@ readonly -a CLAUDE_PLUGINS=(
 )
 
 image_name() {
+# A sandbox with any display mode but 'none' gets the -gui image (Dockerfile.gui); runs after display_resolve.
+if [ "$DISPLAY_MODE" = "none" ]; then IMAGE_GUI=""; else IMAGE_GUI="gui"; fi
 if [ "$WITH_DOCKER" = "yes" ]; then IMAGE_VARIANT="docker"; else IMAGE_VARIANT="base"; fi
-IMAGE_NAME=$(ai_sandbox_image_name "$IMAGE_VARIANT")
+IMAGE_NAME=$(ai_sandbox_image_name "$IMAGE_VARIANT" "$IMAGE_GUI")
+IMAGE_VARIANT="${IMAGE_VARIANT}${IMAGE_GUI:+-$IMAGE_GUI}"   # the build hash covers the family too
 IMAGE_STAMP="$IMAGE_DIR/${IMAGE_NAME#ai-sandbox:}.stamp"   # <variant>-u<uid>, as before
 }
 
@@ -109,13 +115,17 @@ if [ "$WITH_DOCKER" = "yes" ]; then
 cat "$SCRIPT_DIR/image/Dockerfile.docker" >> "$BUILD_DIR/Dockerfile"
 fi
 
+if [ -n "$IMAGE_GUI" ]; then
+cat "$SCRIPT_DIR/image/Dockerfile.gui" >> "$BUILD_DIR/Dockerfile"
+fi
+
 cat "$SCRIPT_DIR/image/Dockerfile.tail" >> "$BUILD_DIR/Dockerfile"
 
 # Fill the @NAME@ placeholders of the ARG lines above (the generated Dockerfile
 # is written through quoted heredocs, so the shell cannot expand them there).
 for _arg in NODE_MAJOR ANTIGRAVITY_CLI_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION \
         COMBY_VERSION EARTHLY_VERSION GITLEAKS_VERSION GITLEAKS_LINUX_X64_SHA256 \
-        GOOGLE_CHROME_VERSION UV_VERSION HEADROOM_VERSION; do
+        GOOGLE_CHROME_VERSION UV_VERSION HEADROOM_VERSION PLAYWRIGHT_VERSION PUPPETEER_CORE_VERSION; do
     sed -i "s|@${_arg}@|${!_arg}|g" "$BUILD_DIR/Dockerfile"
 done
 unset _arg
@@ -138,7 +148,7 @@ elif [ ! -f "$IMAGE_STAMP" ] || [ "$(cat "$IMAGE_STAMP")" != "$BUILD_HASH" ]; th
 fi
 
 if [ "$need_build" = "yes" ]; then
-    log "building $IMAGE_NAME -- one image, shared by every project"
+    log "building $IMAGE_NAME -- one image per kind, shared by every project"
     docker_build_flags=()
     [ "$FORCE_REBUILD" = "yes" ] && docker_build_flags+=(--no-cache)
     DOCKER_BUILDKIT=1 docker build "${docker_build_flags[@]+"${docker_build_flags[@]}"}" \

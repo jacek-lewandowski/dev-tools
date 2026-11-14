@@ -87,9 +87,9 @@ project_resolve
 options_remembered
 options_remembered_memory
 resources_limits
-image_name
 options_remembered_display
 display_resolve
+image_name
 resources_cpuset
 display_environment
 devices_audio

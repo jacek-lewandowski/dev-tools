@@ -20,7 +20,7 @@ git config --global init.defaultBranch main
 export AI_KNOWLEDGE_GIT_TIMEOUT=20
 # The sync reads a sandbox's clone in a container of the sandbox image; the stub docker has one
 # unless a case says otherwise (KNOWLEDGE_IMAGES=none).
-kimages="$(ai_sandbox_image_name base) $(ai_sandbox_image_name docker)"
+kimages="$(ai_sandbox_image_name base) $(ai_sandbox_image_name docker) $(ai_sandbox_image_name base gui) $(ai_sandbox_image_name docker gui)"
 knowledge() { DOCKER_STUB_IMAGES="${KNOWLEDGE_IMAGES-$kimages}" bash "$REPO_ROOT/bin/ai/ai-knowledge" "$@"; }
 # C-STATUS: the outcome of a sync is <sandbox dir>/status/knowledge, line 1 "<time> <word> <message>".
 status_file() { printf '%s/status/knowledge' "$(dirname "$1")"; }   # <clone>

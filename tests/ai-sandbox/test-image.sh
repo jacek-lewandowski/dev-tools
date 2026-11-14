@@ -52,5 +52,68 @@ assert_contains "docker variant tag" "$(cat "$ca")" "ai-sandbox:docker-u${uid}"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$a" >>"$tmp/o1" 2>&1 || true
 assert_contains "docker tag survives a bare re-run" "$(cat "$ca")" "ai-sandbox:docker-u${uid}"
 
+# --- display or not: the GUI applications are in the -gui image only -------
+# Stubs only to get past the require/xauth calls of the display modes (as test-resources.sh).
+xs="$tmp/xstub"; mkdir -p "$xs"
+for t in xpra Xvfb; do printf '#!/bin/sh\nexit 0\n' > "$xs/$t"; done
+printf '#!/bin/sh\nexit 0\n' > "$xs/xauth"
+printf '#!/bin/sh\necho 0123456789abcdef0123456789abcdef\n' > "$xs/mcookie"
+chmod +x "$xs"/*
+create() { PATH="$xs:$PATH" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" ${NOSTART---no-start} "$@" >>"$tmp/o3" 2>&1 || true; }
+compose_of() { printf '%s' "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$1")-agent/docker-compose.yml"; }
+image_of() { grep -o 'image: "[^"]*"' "$(compose_of "$1")"; }
+bdf() { cat "$AI_SANDBOX_ROOT/image/build/Dockerfile"; }
+gui_only='claude-desktop antigravity-repo google-chrome-stable Antigravity.tar.gz Antigravity%20IDE openbox'
+headless_layer='cli_linux_x64.tar.gz playwright@${PLAYWRIGHT_VERSION} puppeteer-core@${PUPPETEER_CORE_VERSION} PUPPETEER_EXECUTABLE_PATH PLAYWRIGHT_MCP_EXECUTABLE_PATH'
+c="$tmp/work/c"; mkdir -p "$c"
+
+# The stamp is written by the build, which --no-start skips: these two runs build (stub docker).
+stampdir="$AI_SANDBOX_ROOT/image"
+NOSTART= create --display=none "$c"
+none_out=$(cat "$tmp/o3")
+stamp_none=$(ls "$stampdir" | grep '\.stamp$' | tr '\n' ' ')
+# (A Wayland socket stands in for the display: xpra would start a real display launcher.)
+wl="$tmp/xdg"; mkdir -p "$wl"; python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$wl/wayland-t"
+XDG_RUNTIME_DIR="$wl" WAYLAND_DISPLAY=wayland-t NOSTART= create --display=wayland "$c"
+stamp_both=$(ls "$stampdir" | grep '\.stamp$' | tr '\n' ' ')
+create --display=none "$c"
+none_df=$(bdf)
+for w in $headless_layer; do assert_contains "none: the Dockerfile has $w" "$none_df" "$w"; done
+for w in $gui_only; do
+    TESTS_RUN=$((TESTS_RUN+1))
+    case "$none_df" in *"$w"*) _fail "none: the Dockerfile has no $w" "found it" ;; *) _pass "none: the Dockerfile has no $w" ;; esac
+done
+assert_eq "none: the headless tag"  "$(image_of "$c")" "image: \"ai-sandbox:base-u${uid}\""
+
+create --display=xpra "$c"
+gui_df=$(bdf)
+for w in $headless_layer $gui_only; do assert_contains "xpra: the Dockerfile has $w" "$gui_df" "$w"; done
+assert_eq "xpra: the -gui tag" "$(image_of "$c")" "image: \"ai-sandbox:base-gui-u${uid}\""
+# O4: one variant, two builds, two stamp names (the build hash differs anyway; the name is the part that could collide).
+assert_eq "none leaves base-u<uid>.stamp"             "$stamp_none" "base-u${uid}.stamp "
+assert_contains "a display build adds its own stamp, not the same" "$stamp_both" "base-gui-u${uid}.stamp"
+assert_contains "and the headless stamp stays"          "$stamp_both" "base-u${uid}.stamp"
+
+# No display, no IDE: a create that gets as far as the extension step neither runs it nor prints its advice.
+for w in "no -gui sandbox image" "could not populate" "IDE extensions are not installed"; do
+    TESTS_RUN=$((TESTS_RUN+1))
+    case "$none_out" in *"$w"*) _fail "none: create does not print '$w'" "found it" ;; *) _pass "none: create does not print '$w'" ;; esac
+done
+
+# O2: the remembered mode picks the tag when no flag is given; an explicit none overrides a remembered xpra.
+create "$c"
+assert_eq "remembered xpra, no flag: -gui" "$(image_of "$c")" "image: \"ai-sandbox:base-gui-u${uid}\""
+create --display=none "$c"
+assert_eq "--display=none over a remembered xpra: headless" "$(image_of "$c")" "image: \"ai-sandbox:base-u${uid}\""
+create --display=xpra --with-docker "$c"
+assert_eq "docker and display: docker-gui" "$(image_of "$c")" "image: \"ai-sandbox:docker-gui-u${uid}\""
+create --display=none --with-docker "$c"
+assert_eq "docker and no display: docker" "$(image_of "$c")" "image: \"ai-sandbox:docker-u${uid}\""
+# --display=auto takes the suffix of the mode display_resolve picks (xpra with the stubs above).
+d="$tmp/work/d"; mkdir -p "$d"
+create --display=auto "$d"
+assert_eq "auto resolved to xpra: -gui" "$(image_of "$d")" "image: \"ai-sandbox:base-gui-u${uid}\""
+assert_eq "the remembered mode is the resolved one" "$(sed -n 's/^SANDBOX_DISPLAY_MODE=//p' "$(dirname "$(compose_of "$d")")/.env")" xpra
+
 rm -rf "$tmp"
 finish
