@@ -145,6 +145,12 @@ assert_eq "O7 d: excluded names stay: Safe Browsing" "$(cat "$root/dst/Safe Brow
 assert_eq "O7 d: excluded names stay: Code Cache" "$(cat "$root/dst/Code Cache/c")" cc
 assert_eq "O7 d: the source's entries arrive" "$(cat "$root/dst/keepdir/n")" new
 
+# --- O7 d (L1): an excluded entry inside a stale directory survives, the directory stays holding only it
+reset; mkdir -p "$root/dst/stale/Cache" "$root/dst/stale/gone" "$src/keep"; printf c > "$root/dst/stale/Cache/c"; printf g > "$root/dst/stale/gone/g"; printf s > "$root/dst/stale/f"
+assert_eq "O7 d L1: the copy succeeds" "$(rcof nf copy "$root" dst "$src" --delete '--exclude=*Cache*')" 0
+assert_eq "O7 d L1: the excluded entry inside the stale directory stays" "$(cat "$root/dst/stale/Cache/c")" c
+assert_eq "O7 d L1: the rest of the stale directory is gone" "$(ls "$root/dst/stale")" Cache
+
 # --- O7 e: the matching is on the entry's own name, at any depth, case-sensitive, split nowhere
 reset; mkdir -p "$src/GPUCache" "$src/x/y/GPUCache" "$src/Code Cache" "$src/Safe Browsing" "$src/gpucache" "$src/x/ok"
 for d in GPUCache x/y/GPUCache "Code Cache" "Safe Browsing" gpucache x/ok; do printf 'v' > "$src/$d/f"; done

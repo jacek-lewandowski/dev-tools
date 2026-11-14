@@ -567,16 +567,23 @@ def place(pfd, name, make, where):
 
 
 def rmtree(pfd, name):
+    """Remove a directory below pfd without following a link, sparing excluded names: a
+    directory still holding one stays (rsync's --delete without --delete-excluded)."""
     fd = os.open(name, DIRFLAGS, dir_fd=pfd)
+    spared = False
     try:
         for e in list(os.scandir(fd)):
-            if e.is_dir(follow_symlinks=False):
-                rmtree(fd, e.name)
+            if excluded(e.name):
+                spared = True
+            elif e.is_dir(follow_symlinks=False):
+                spared = rmtree(fd, e.name) or spared
             else:
                 os.unlink(e.name, dir_fd=fd)
     finally:
         os.close(fd)
-    os.rmdir(name, dir_fd=pfd)
+    if not spared:
+        os.rmdir(name, dir_fd=pfd)
+    return spared
 
 
 def remove_any(pfd, name):
@@ -665,7 +672,9 @@ def copy_tree(srcdir, dfd, rel):
                     if not delete:
                         refuse(where, "a directory is there")
                         continue
-                    rmtree(dfd, n)
+                    if rmtree(dfd, n):
+                        refuse(where, "a directory holding an excluded entry is there")
+                        continue
                 if is_reg:
                     copy_file(e.path, sst, dfd, n, where)
                 else:
