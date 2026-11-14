@@ -347,8 +347,9 @@ of `rules/`, `roles/` or `skills/`, or a role whose name is not
 standard error names the path (`test-knowledge-render.sh`). The host's own writes
 below a directory a sandbox can write (mount targets, skill links, the SDKMAN farm,
 the account's state, the display's socket directory) go through
-`ai_sandbox_nofollow` and never follow a link a sandbox placed there: such a write is
-skipped with a warning naming the path (`test-knowledge-links.sh`,
+`ai_sandbox_nofollow` and never follow a link a sandbox placed there: a link where a file or link is written
+is replaced as itself; any other link met is left alone and that write skipped with
+a warning naming the path (`test-knowledge-links.sh`,
 `test-create-links.sh`, `test-account-links.sh`, `test-display.sh`, and
 `test-sweep.sh`, which plants a link at every path a run of create, sync and account
 writes).
