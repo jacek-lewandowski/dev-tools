@@ -41,6 +41,9 @@ resolve_expr() {
         '"$HERE/'*)        base=bin/ai/;                rest=${rest#'"$HERE/'} ;;
         '"'"$FORM_DIRNAME"*) base=${file%/*}/;          rest=${rest#'"'"$FORM_DIRNAME"} ;;
         '"$self/'*)        base=${file%/*}/;            rest=${rest#'"$self/'} ;;   # context-statusline, handover-ready
+        # the lib's install-root constant: a path of the installed revision, named from the tree
+        '"$AI_SANDBOX_INSTALLED/current/'*)   base=;    rest=${rest#'"$AI_SANDBOX_INSTALLED/current/'} ;;
+        '"${AI_SANDBOX_INSTALLED}/current/'*) base=;    rest=${rest#'"${AI_SANDBOX_INSTALLED}/current/'} ;;
         '"$AI_SANDBOX_ROOT/'*) echo -; return ;;
         # the recorded checkout; the form goes with the code that uses it
         '"$DEV_TOOLS_DIR/'*) base=;                     rest=${rest#'"$DEV_TOOLS_DIR/'} ;;
@@ -80,6 +83,14 @@ manifest_report() {
                 'cp '*)      cmd=copy;   rest=${line#cp } ;;
                 'install '*) cmd=install; rest=${line#install } ;;
             esac
+            if [ -z "$cmd" ] && [[ $line =~ ^-[[:space:]]+(\"[^\":]*): ]]; then
+                # a mount source of the compose writer: only those named from the tree are checked
+                rest="${BASH_REMATCH[1]}\""
+                case $rest in
+                    '"$SCRIPT_DIR/'*|'"${SCRIPT_DIR}/'*|'"$HERE/'*|'"$AI_SANDBOX_INSTALLED/'*|'"${AI_SANDBOX_INSTALLED}/'*) cmd=mount ;;
+                esac
+                rest=${rest//'${SCRIPT_DIR}'/'$SCRIPT_DIR'}
+            fi
             [ -n "$cmd" ] || continue
             if [ "$cmd" = install ]; then
                 # install [-m MODE] <source> ...: the source is the first quoted word
@@ -98,6 +109,7 @@ manifest_report() {
                      echo "$file:$n: cannot resolve the path of '$line'"; continue ;;
             esac
             case $cmd in
+                mount)   manifest_covered "$root" mount "$res/" || echo "$file:$n: $res/ is mounted into the sandbox and not listed as mount" ;;
                 source)  manifest_covered "$root" source "$res" || echo "$file:$n: $res is sourced and not listed as source" ;;
                 copy)    manifest_covered "$root" image "$res"  || echo "$file:$n: $res is copied into the build context and not listed as image" ;;
                 install) manifest_covered "$root" any "$res"    || echo "$file:$n: $res is installed and not listed" ;;
@@ -159,6 +171,12 @@ printf 'source bin/ai/does-not-exist.sh\n' >> "$t/p/bin/ai/MANIFEST"
 r=$(manifest_report "$t/p")
 assert_contains "a manifest line naming a missing file is reported with its line" "$r" \
     "bin/ai/MANIFEST:$(wc -l < "$t/p/bin/ai/MANIFEST"): bin/ai/does-not-exist.sh does not exist"
+rm -rf "$t/p"; copy_tree "$t/p"
+grep -v '^mount tools/$' "$REPO_ROOT/bin/ai/MANIFEST" > "$t/p/bin/ai/MANIFEST"
+r=$(manifest_report "$t/p")
+assert_contains "the mount line removed: the compose writer's tools mount is reported" "$r" \
+    'bin/ai/create.d/compose.sh:'
+assert_contains "and named" "$r" 'tools/ is mounted into the sandbox and not listed as mount'
 rm -rf "$t"
 
 finish

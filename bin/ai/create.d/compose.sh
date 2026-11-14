@@ -169,8 +169,9 @@ cat <<COMPOSE_VOLS
     volumes:
       # The project, at its real host path, read-write.
       - "${PROJECT_ABS_DIR}:${PROJECT_ABS_DIR}"
-      # dev-tools helpers, read-only.
-      - "${HOST_TOOLS_DIR}:${CONTAINER_HOME}/tools:ro"
+      # dev-tools helpers of the installed revision, read-only; the link is resolved when the
+      # container starts (C-INSTALL).
+      - "${AI_SANDBOX_INSTALLED}/current/tools:${CONTAINER_HOME}/tools:ro"
       - "${HOME}/.gitignore:${CONTAINER_HOME}/.gitignore"
       # Sandbox-local copies of tool state (logins, settings, extensions).
       - "${SANDBOX_DIR}/.gemini:${CONTAINER_HOME}/.gemini"

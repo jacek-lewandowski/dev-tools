@@ -121,16 +121,17 @@ assert_eq "a file under the in-image directory is not required to be parsed" "$(
 assert_eq "every bash file under bin/ai is parsed or under the in-image directory" "$(uncovered "$REPO_ROOT")" ""
 assert_ne "the bash files of bin/ai are found at all" "$(bash_files "$REPO_ROOT" | command grep -c .)" 0
 
-# --- the in-image programs are not host helpers
+# --- the in-image programs are not host entry points (the manifest lists the entry points)
 . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 in_image=$(cd "$REPO_ROOT/$IMAGE_DIR" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+entries=$(awk '$1 == "entry" {print $2}' "$REPO_ROOT/bin/ai/MANIFEST")
 assert_ne "the in-image directory holds files, so the exception is not empty" "$(printf '%s\n' "$in_image" | command grep -c .)" 0
-assert_eq "no file of the in-image directory is an installed helper" \
-    "$(ai_sandbox_helpers | command grep -cxFf <(printf '%s\n' "$in_image"))" 0
-assert_eq "every installed helper is a file of bin/ai outside the in-image directory" \
-    "$(ai_sandbox_helpers | while IFS= read -r h; do [ -f "$REPO_ROOT/bin/ai/$h" ] || echo "$h"; done | command grep -c .)" 0
-assert_eq "no installed helper is also a file of the in-image directory" \
-    "$(ai_sandbox_helpers | while IFS= read -r h; do [ -e "$REPO_ROOT/$IMAGE_DIR/$h" ] && echo "$h"; done | command grep -c .)" 0
+assert_eq "no file of the in-image directory is an entry point" \
+    "$(printf '%s\n' "$entries" | sed 's|.*/||' | command grep -cxFf <(printf '%s\n' "$in_image"))" 0
+assert_eq "every entry point is a file of the tree" \
+    "$(printf '%s\n' "$entries" | while IFS= read -r h; do [ -f "$REPO_ROOT/$h" ] || echo "$h"; done | command grep -c .)" 0
+assert_eq "no entry point is under the in-image directory" \
+    "$(printf '%s\n' "$entries" | command grep -c "^$IMAGE_DIR/")" 0
 for f in ai_sandbox_host_git ai_sandbox_confined_git; do
     assert_eq "the lib defines $f, the name the rule exempts" "$(command grep -cE "^$f\(\) \{" "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")" 1
     assert_eq "the rule file names $f" "$(command grep -cF "$f" "$SG/rules/host-git.yml")" 1

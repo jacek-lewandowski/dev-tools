@@ -13,6 +13,8 @@ T=$(mktemp -d)
 
 new_home() {   # a fresh HOME with the stub docker, the host's git identity, no prompt
     fake_home >/dev/null
+    # no revision installed yet: fake_home's install root is for the tests that need one
+    rm -rf "$AI_SANDBOX_ROOT/installed" "$AI_SANDBOX_ROOT/bin"
     git config --global user.email t@example.com; git config --global user.name t
     git config --global init.defaultBranch main
 }

@@ -68,7 +68,10 @@ Options:
 Options marked "Remembered" persist per project: re-running with no flags keeps
 the last choice, and passing the option again changes it.
 
-Commands on the host (installed into ~/.ai-sandbox/bin, put on your PATH):
+Commands on the host (run from the installed revision, ~/.ai-sandbox/bin, which is on
+your PATH; create-ai-sandbox.sh installs none of them):
+  ai-sandbox-install    [<revision>] [--from <dir>] -- install a revision of
+                        dev-tools; shows the changes and asks first
   ai-sandbox            enter the sandbox for the current project; with
                         arguments, run a command inside it
   ai-sandbox-stop       stop it, and its private display if it has one

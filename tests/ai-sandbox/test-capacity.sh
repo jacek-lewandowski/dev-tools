@@ -160,12 +160,13 @@ case "$(stub_docker_log)" in
 esac
 proj2="$tmp/work/q"; mkdir -p "$proj2"
 dir2="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj2")-agent"
+config_before=$(cat "$config")
 out=$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" 2>&1); rc=$?
 assert_ne       "create refuses without a budget, --no-start included" "$rc" 0
 assert_contains "create names the missing key"                        "$out" "$missing"
 assert_contains "create says what to write where"                     "$out" "$howto"
 assert_no_file  "a refused create writes no .env"                     "$dir2/.env"
-assert_contains "a refused create leaves the config alone"            "$(cat "$config")" "DEV_TOOLS_DIR=$REPO_ROOT"
+assert_eq       "a refused create leaves the config alone"            "$(cat "$config")" "$config_before"
 
 # A value that is not a whole number of GB is as good as none, and is quoted.
 printf 'AI_SANDBOX_MEMORY_BUDGET_GB=abc\n' >> "$config"

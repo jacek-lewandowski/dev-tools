@@ -59,7 +59,7 @@ else
 fi
 step "Ready"
 cat <<SUMMARY
-  Shell:              ai-sandbox           (run 'source ~/.bashrc' first, this once)
+  Shell:              ai-sandbox
                       An interactive shell in the container. Run anything from it,
                       GUI apps included -- 'antigravity2-ide &'. Open as many as
                       you like; each 'ai-sandbox' is a separate shell.

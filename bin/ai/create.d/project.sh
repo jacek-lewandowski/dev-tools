@@ -41,7 +41,6 @@ require python3
 docker compose version >/dev/null 2>&1 || die "'docker compose' (v2 plugin) is required."
 docker buildx version >/dev/null 2>&1 || die "'docker buildx' (BuildKit) is required: the image build uses cache mounts. Install the docker-buildx-plugin package."
 log "ok"
-DEV_TOOLS_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 }
 
 project_resolve() {
@@ -49,8 +48,9 @@ project_resolve() {
 # Resolve the project
 # ---------------------------------------------------------------------------
 
-if [ -x "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" ]; then
-    "$AI_SANDBOX_ROOT/bin/ai-sandbox-migrate" || true
+# The commands create runs are those beside it, so one run never mixes two revisions.
+if [ -x "$SCRIPT_DIR/ai-sandbox-migrate" ]; then
+    "$SCRIPT_DIR/ai-sandbox-migrate" || true
 fi
 
 PROJECT_ABS_DIR=$(ai_sandbox_create_root "${PROJECT_ARG:-.}") \
@@ -153,17 +153,6 @@ if ai_knowledge_configured; then
     mkdir -p "$SANDBOX_DIR/knowledge"
     ai_sandbox_make_origin "$SANDBOX_DIR" || warn "cannot make the knowledge origin in $SANDBOX_DIR"
 fi
-
-# ---------------------------------------------------------------------------
-# Locate the host tools/ directory
-# ---------------------------------------------------------------------------
-
-if   [ -d "$DEV_TOOLS_DIR/tools" ];              then HOST_TOOLS_DIR="$DEV_TOOLS_DIR/tools"
-elif [ -d "$HOME/dev/public/dev-tools/tools" ];  then HOST_TOOLS_DIR="$HOME/dev/public/dev-tools/tools"
-elif [ -d "$HOME/tools" ];                       then HOST_TOOLS_DIR="$HOME/tools"
-else die "Cannot locate the dev-tools 'tools' directory (looked next to this script, in ~/dev/public/dev-tools, and in ~/tools)."
-fi
-log "tools     $HOST_TOOLS_DIR"
 }
 
 project_extensions() {
@@ -171,7 +160,7 @@ project_extensions() {
 # source. Not fatal: the IDE simply starts without them until this succeeds.
 # The IDE is only in the -gui images, so a sandbox with no display has nothing to install.
 [ -n "$IMAGE_GUI" ] || return 0
-if ! "$AI_SANDBOX_ROOT/bin/ai-sandbox-extensions"; then
+if ! "$SCRIPT_DIR/ai-sandbox-extensions"; then
     warn "IDE extensions are not installed. Retry with: ai-sandbox-extensions refresh"
 fi
 }
