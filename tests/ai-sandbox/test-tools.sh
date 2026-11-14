@@ -234,5 +234,16 @@ rm -f "$sf"; python3 "$merge" "$sf" 2>/dev/null
 assert_no_file "missing file is never created" "$sf"
 assert_contains "failure cannot fail the start" "$(cat "$ep")" "|| true"
 
+# --- entrypoint defaults Claude Code's compaction off, without overriding a choice
+cmerge="$tmp/cmerge.py"
+sed -n "/^python3 - .*\.claude\/settings.json/,/^PYEOF/p" "$ep" | sed '1d;$d' > "$cmerge"
+cs="$tmp/claude-settings.json"
+rm -f "$cs"; python3 "$cmerge" "$cs"
+assert_eq "absent file: both compaction keys set false" "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["idleCompaction"],d["autoCompactEnabled"])' "$cs")" "False False"
+printf '{"theme":"x","autoCompactEnabled":true}' > "$cs"; python3 "$cmerge" "$cs"
+assert_eq "a user's choice is kept, the other key defaulted, others untouched" "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["theme"],d["idleCompaction"],d["autoCompactEnabled"])' "$cs")" "x False True"
+printf 'not json' > "$cs"; python3 "$cmerge" "$cs" 2>/dev/null
+assert_eq "unparsable file left alone" "$(cat "$cs")" 'not json'
+
 rm -rf "$tmp"
 finish
