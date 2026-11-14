@@ -50,14 +50,15 @@ export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 export AI_SANDBOX_GIT_TIMEOUT="${AI_SANDBOX_GIT_TIMEOUT:-120}"
 g() { ai_sandbox_host_git "$SRC" --no-pager --no-replace-objects "$@"; }
 # Text that came from a repository a sandbox can write is printed without control characters:
-# every code point of category Cc (C0, DEL, C1) except newline and tab, the bidi embeddings,
+# every code point of category Cc (C0, DEL, C1) except newline and tab, the bidi marks (U+200E, U+200F, U+061C), embeddings,
 # overrides and isolates, and every byte that is not UTF-8 (C-GIT's display rule).
 clean() {
     python3 -I -c '
 import sys, unicodedata
 text = sys.stdin.buffer.read().decode("utf-8", "ignore")
 keep = "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
-        and not "\u202a" <= c <= "\u202e" and not "\u2066" <= c <= "\u2069"))
+        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
+        and not "\u2066" <= c <= "\u2069"))
 sys.stdout.buffer.write(keep.encode("utf-8"))'
 }
 

@@ -16,5 +16,5 @@ if [ -d "$self/../../tools/context_statusline" ]; then tools="$self/../../tools"
 else echo "handover-ready: no 'tools' directory beside this script (run it from an installed revision)" >&2; exit 2
 fi
 cd "$(dirname "$tools")"
-# -I leaves the working directory off sys.path, so the directory holding tools/ is put there here.
-exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from tools.context_statusline.mark import main; sys.exit(main(sys.argv[1:]))' "$PWD" "$@"
+# -I leaves the working directory off sys.path, so the directory holding tools/ is added there here, after the standard library (the image's copy runs with ~ as that directory).
+exec python3 -I -c 'import sys; sys.path.append(sys.argv.pop(1)); from tools.context_statusline.mark import main; sys.exit(main(sys.argv[1:]))' "$PWD" "$@"

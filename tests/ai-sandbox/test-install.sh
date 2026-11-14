@@ -332,17 +332,17 @@ assert_eq "the same tree with the path once installs" "$rc" 0
 assert_eq "with git's view of the file" "$(cat "$INST/rev/$cok/bin/ai/tool")" "echo benign"
 
 # the display filter: C0, DEL, C1 (as UTF-8 and as a raw byte) and bidi controls are dropped
-subj=$(printf 'subj \xc2\x9b2J c1 \xe2\x80\xaeRTL\xe2\x80\xac iso\xe2\x81\xa6 raw\x9bJ del\x7f end\tTAB')
+subj=$(printf 'subj \xc2\x9b2J c1 \xe2\x80\xaeRTL\xe2\x80\xac iso\xe2\x81\xa6 lrm\xe2\x80\x8e rlm\xe2\x80\x8f alm\xd8\x9c raw\x9bJ del\x7f end\tTAB')
 cc=$(gi commit-tree "$(gi rev-parse "$c1^{tree}")" -p "$c1" -m "$subj"); gi update-ref refs/heads/ctl "$cc"
 rc=$(ANS=n inst ctl)
 out=$(cat "$T/out")
 filtered=$(python3 -I -c '
 import sys, unicodedata
 t = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
-bad = [hex(ord(c)) for c in t if (unicodedata.category(c) == "Cc" and c not in "\n\t") or "‪" <= c <= "‮" or "⁦" <= c <= "⁩" or c == "�"]
+bad = [hex(ord(c)) for c in t if (unicodedata.category(c) == "Cc" and c not in "\n\t") or "‪" <= c <= "‮" or "⁦" <= c <= "⁩" or c in "\u200e\u200f\u061c\ufffd"]
 print(" ".join(bad))' "$T/out")
 assert_eq "no control, bidi or undecodable code point reaches stdout" "$filtered" ""
-assert_contains "the subject's text is kept" "$out" "subj 2J c1 RTL iso rawJ del end"
+assert_contains "the subject's text is kept" "$out" "subj 2J c1 RTL iso lrm rlm alm rawJ del end"
 assert_contains "and its tab" "$out" $'end\tTAB'
 # known case: the C0-only filter the install had passes the same subject's U+009B and U+202E
 old=$(printf '%s' "$subj" | LC_ALL=C tr -d '\000-\010\013-\037\177')
@@ -374,6 +374,10 @@ new_home; INST="$AI_SANDBOX_ROOT/installed"
 git init -q --bare "$INST/src.git"; git --git-dir="$INST/src.git" remote add origin "$ORIGIN"
 mkdir -p "$AI_SANDBOX_ROOT/bin"; printf 'old\n' > "$AI_SANDBOX_ROOT/bin/ai-sandbox"
 printf 'export A=1\n' > "$HOME/.bashrc"; chmod 000 "$HOME/.bashrc"
+if [ "$(id -u)" = 0 ]; then
+    echo "# skipped: running as root, where mode 000 does not make a file unreadable"
+    chmod 644 "$HOME/.bashrc"
+else
 rc=$(inst "$c1")
 assert_eq "a ~/.bashrc that cannot be read: exit 1" "$rc" 1
 assert_no_file "current was not created" "$INST/current"
@@ -383,6 +387,7 @@ assert_no_file "and no revision was exported" "$INST/rev/$c1"
 chmod 644 "$HOME/.bashrc"
 rc=$(inst "$c1")
 assert_eq "known case: the same install with a readable file succeeds" "$rc" 0
+fi
 
 # ===========================================================================
 # D31: --from takes a repository's top level and no link below its stamped project
