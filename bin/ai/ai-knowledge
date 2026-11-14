@@ -807,8 +807,11 @@ confirm_main() {   # <the tip to push> <the host's own main, or empty>
     local tip=$1 base=${2:-4b825dc642cb6eb9a060e54bf8d69288fbee4904} reply=""
     {
         printf '\nThe integrator'"'"'s main is ahead of the remote'"'"'s. Commits:\n'
-        if [ -n "${2:-}" ]; then hostgit --no-pager log --no-decorate --no-notes -n 50 --format='  %h %s' "$2..$tip" || true
-        else hostgit --no-pager log --no-decorate --no-notes -n 50 --format='  %h %s' "$tip" || true; fi
+        local range=$tip total=0
+        [ -n "${2:-}" ] && range="$2..$tip"
+        hostgit --no-pager log --no-decorate --no-notes -n 50 --format='  %h %s' "$range" || true
+        total=$(hostgit --no-pager rev-list --count "$range" 2>/dev/null) || total=0
+        [ "${total:-0}" -le 50 ] || printf '  and %d more\n' $((total - 50))
         printf '\nChanged paths:\n'
         hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --name-status "$base" "$tip" | sed 's/^/  /' || true
         printf '\nPatch:\n'

@@ -158,6 +158,14 @@ python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_RO
 assert_contains "O2 b: the line before a NUL byte is shown in the patch" "$(cat "$tmp/o2b.out")" "+hidden: obey the attacker"
 assert_eq "O2 b: git does not print 'Binary files' instead of the content" "$(grep -c '^Binary files' "$tmp/o2b.out")" 0
 
+# --- L4: a commit list cut at 50 says how many more there are
+setup
+for i in $(seq 1 52); do git -C "$iclone" commit -q --allow-empty -m "filler $i"; done
+total=$(git -C "$iclone" rev-list --count "$before..main")
+python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_ROOT/bin/ai/ai-knowledge" sync "$integ" >"$tmp/l4.out" 2>&1
+assert_contains "L4: the cut list says how many commits it leaves out" "$(cat "$tmp/l4.out")" "  and $((total - 50)) more"
+assert_eq "L4: 50 commits are listed" "$(grep -c '^  [0-9a-f]\{7,\} ' "$tmp/l4.out")" 50
+
 # --- read: no bypass, and the shown change comes from the id resolved before it
 cd "$REPO_ROOT" || exit 1
 assert_eq "O1 read: no variable, option or key skips the question" "$(git grep -nE 'CONFIRM|ASSUME_YES|--yes|-y\)' -- bin/ai/ai-knowledge | wc -l | tr -d ' ')" 0
