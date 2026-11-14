@@ -406,6 +406,25 @@ sys.stdout.buffer.write(keep.encode("utf-8"))' \
         || LC_ALL=C tr -cd '\11\12\40-\176'   # no usable python3: only printable ASCII, never the raw text
 }
 
+# U12 (confirm_main in ai-knowledge): standard input to standard output, every code point that draws as nothing or moves the
+# cursor (categories Cc except newline and tab, Cf, Co, Cn, and the bytes that are not UTF-8)
+# written as visible text, so the user sees that the pushed text holds it. Runs before
+# ai_sandbox_display_clean, which would drop them unseen; its own contract stays as it is.
+ai_sandbox_show_invisible() {
+    python3 -I -c '
+import sys, unicodedata
+text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+out = []
+for c in text:
+    n = ord(c)
+    if 0xDC80 <= n <= 0xDCFF:
+        out.append("<0x%02X>" % (n - 0xDC00))
+    elif c not in "\n\t" and unicodedata.category(c) in ("Cc", "Cf", "Co", "Cn", "Cs"):
+        out.append("<U+%04X>" % n)
+    else:
+        out.append(c)
+sys.stdout.buffer.write("".join(out).encode("utf-8", "surrogateescape"))' || cat
+}
 # I3c: a host write below a directory a sandbox can write, made without following a link
 # the sandbox may have placed there (the contract is in the phase 9 plan: ops mkdir, write,
 # link, hardlink, remove, copy). <root> is absolute and cannot be renamed from inside (a bind

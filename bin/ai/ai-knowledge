@@ -781,25 +781,6 @@ at_terminal() {
     set -- $pg
     [ $# -eq 2 ] && [ "$1" = "$2" ]
 }
-# U12: standard input to standard output, every code point that draws as nothing or moves the
-# cursor (categories Cc except newline and tab, Cf, Co, Cn, and the bytes that are not UTF-8)
-# written as visible text, so the user sees that the pushed text holds it. Runs before
-# ai_sandbox_display_clean, which would drop them unseen; its own contract stays as it is.
-show_invisible() {
-    python3 -I -c '
-import sys, unicodedata
-text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
-out = []
-for c in text:
-    n = ord(c)
-    if 0xDC80 <= n <= 0xDCFF:
-        out.append("<0x%02X>" % (n - 0xDC00))
-    elif c not in "\n\t" and unicodedata.category(c) in ("Cc", "Cf", "Co", "Cn", "Cs"):
-        out.append("<U+%04X>" % n)
-    else:
-        out.append(c)
-sys.stdout.buffer.write("".join(out).encode("utf-8", "surrogateescape"))' || cat
-}
 # U12: shows what the integrator's main holds beyond the remote's (commits, changed paths, the
 # patch; all through the display filter, on standard error) and asks. 0 only on yes; no
 # environment variable, option or configuration key answers it (D6).
@@ -818,7 +799,7 @@ confirm_main() {   # <the tip to push> <the host's own main, or empty>
         # --text: a NUL byte or a -diff/binary attribute would else replace the content with "Binary files differ"
         hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --text "$base" "$tip" || true
         printf '\nPush main (%s) to %s? [y/N] ' "${tip:0:12}" "$REMOTE"
-    } 2>&1 | show_invisible | ai_sandbox_display_clean >&2
+    } 2>&1 | ai_sandbox_show_invisible | ai_sandbox_display_clean >&2
     read -r reply || true
     case $reply in y|Y|yes|YES|Yes) return 0 ;; esac
     return 1
