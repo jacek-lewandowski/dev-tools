@@ -106,7 +106,8 @@ mkdir -p "$ch/.sdkman/candidates/java/17.0.16-tem/bin" \
          "$ch/.sdkman/candidates/maven"            # installed, no default
 ln -s 17.0.16-tem "$ch/.sdkman/candidates/java/current"
 ln -s 9.6.1       "$ch/.sdkman/candidates/gradle/current"
-env_out=$(HOME="$ch" PATH=/usr/bin:/bin bash -c '
+# BASH_ENV (set inside a sandbox) would source the live env file before this one.
+env_out=$(env -u BASH_ENV HOME="$ch" PATH=/usr/bin:/bin bash -c '
     unset JAVA_HOME PYTHONPATH SDKMAN_DIR
     . "'"$build/sandbox-env.sh"'"
     p1=$PATH
