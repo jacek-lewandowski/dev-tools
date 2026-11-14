@@ -41,8 +41,8 @@ host) or missing. Upgrade in this order:
    the knowledge seed from the dev-tools checkout into `~/.ai-sandbox/bin`.
 2. Expect refusals. A stopped sandbox whose stamp is not current is refused by
    `ai-sandbox` and `ai-sandbox-restart` with one repair named,
-   `create-ai-sandbox.sh <project>`. A running one is entered, its host side is
-   synced, nothing is executed in it, and the host says it must be re-created.
+   `create-ai-sandbox.sh <project>`. A running one is entered, nothing is
+   executed in it, and the host says it must be re-created.
    `ai-knowledge sync --all` lists it as stale with the same command and does not
    sync it (`tests/ai-sandbox/test-knowledge.sh`, sections "the start scripts
    refuse a sandbox whose stamp does not match the host" and "sync --all").
@@ -250,14 +250,14 @@ reports the host has pushed and the clone may drop) and `closed-report=<name>` (
 integrator's reports closed on the remote, whose refs and tombstones the clone may
 remove). Every sync writes the file whole, so a key not repeated is withdrawn.
 
-### 3. Sync on every sandbox start
+### 3. Sync by create and on demand
 
-`create-ai-sandbox.sh`, `ai-sandbox` and `ai-sandbox-restart` run
-`ai-knowledge sync <project>` before `compose up`; a start syncs only its own
-sandbox. Network git runs non-interactively (`GIT_TERMINAL_PROMPT=0`, ssh
+Only `create-ai-sandbox.sh` and an explicit `ai-knowledge sync` run the sync;
+`ai-sandbox` and `ai-sandbox-restart` do not. Create runs
+`ai-knowledge sync <project>` for its own sandbox. Network git runs non-interactively (`GIT_TERMINAL_PROMPT=0`, ssh
 `BatchMode=yes`) and under a timeout (60 s, `AI_KNOWLEDGE_GIT_TIMEOUT`, which also
 bounds the confined read of the clone and the `docker exec` below). No step fails
-the start. The outcome is `status/knowledge` in the sandbox directory, shown by
+create. The outcome is `status/knowledge` in the sandbox directory, shown by
 `sandbox-doctor` (line 1 with its age) and `ai-knowledge status`.
 
 When a fetch or push fails, for example because the ssh key needs a passphrase
@@ -285,7 +285,7 @@ never the end of the sync (`test-knowledge.sh`, "O12 (who runs it)").
 
 ### Sync on demand: `ai-knowledge sync --all`
 
-Nothing runs on a timer. Between sandbox starts the user runs `ai-knowledge sync
+Nothing runs on a timer. Between creates the user runs `ai-knowledge sync
 --all` on the host. It fetches and renders `main` once, then syncs every current
 sandbox's clone, running or stopped, in parallel (`AI_KNOWLEDGE_JOBS`, default 4),
 then fetches `main` once more and renders again only if an integrator clone
@@ -493,8 +493,8 @@ through the skills directories. It:
    `proposal/<YYYY-MM-DD>-<slug>-<4 hex of the commit>` and returns to `main`.
 4. Never pushes and never touches other paths.
 
-The host pushes the branch on the next sync: a sandbox start, or
-`ai-knowledge sync --all` on the host, reading the clone through the confined
+The host pushes the branch on the next sync: `ai-knowledge sync` on the
+host, or a re-run of `create-ai-sandbox.sh`, reading the clone through the confined
 container. Inside the sandbox, `sandbox-doctor` shows each local proposal branch as
 `pushed` or `pending`, and the age of the host's last status.
 

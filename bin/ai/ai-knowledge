@@ -17,7 +17,7 @@
 # there against its own refs/remotes/origin/main, and publishes from there. The clone
 # itself is made and updated by sandbox-knowledge-sync, inside the sandbox, from the
 # read-only bare origin this script refreshes (<sandbox dir>/knowledge-origin.git),
-# and removes a ref only as the status file lists it. A sync never fails a start:
+# and removes a ref only as the status file lists it. A sync never fails create-ai-sandbox.sh:
 # whatever goes wrong is written to <sandbox dir>/status/knowledge, which
 # sandbox-doctor shows. After a sync a running sandbox of the current stamp
 # is made to run its command (docker exec).
@@ -60,7 +60,7 @@ usage() {
     sed -n '2,/^set -/{/^set -/d;s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
 }
 
-# Network git only: a hung remote must not hold up a sandbox start. Nothing
+# Network git only: a hung remote must not hold up create-ai-sandbox.sh. Nothing
 # here can answer a prompt, so git and ssh are told not to ask: an ssh key with
 # a passphrase and no agent then fails at once instead of hanging until the
 # timeout, and the failure is reported with the command to run by hand.
@@ -271,7 +271,7 @@ cmd_init() {
         warn "another ai-knowledge holds $AI_KNOWLEDGE_ROOT/.lock; run: ai-knowledge render"
     fi
     print_hints
-    log "done. Sandboxes pick the knowledge up on their next sync (a start, or 'ai-knowledge sync --all'); agents in their next session."
+    log "done. Sandboxes pick the knowledge up on their next sync (a re-run of create-ai-sandbox.sh, or 'ai-knowledge sync [--all]'); agents in their next session."
 }
 
 # The host's GEMINI.md without the block create-ai-sandbox.sh generates, which
@@ -417,7 +417,7 @@ seed_main() {
 # locks
 # ---------------------------------------------------------------------------
 
-# Two runs at once (a sandbox start during 'sync --all', two starts) must not
+# Two runs at once (a create during 'sync --all', two creates) must not
 # fetch into the same checkout or rebuild the render under each other. One
 # lock covers main and the render, one per clone covers that clone's sync,
 # and the two are never held together. The locked region runs in this shell,
@@ -553,9 +553,12 @@ if os.path.isdir(roles):
             f.write("---\ntrigger: model_decision\ndescription: %s\n---\n\n%s" % (description, body))
         # Codex custom agents are TOML; registering them in config.toml is left
         # to the user until the format is verified against an installed Codex.
+        # Codex also reads the global rules (~/.codex/AGENTS.md) in an agent's
+        # session, so the role says it is not the lead: the persona is the lead's.
+        not_lead = "You are not the lead; the lead's persona in the global rules does not apply to you.\n\n"
         with open(os.path.join(out, "codex/agents", name + ".toml"), "w", encoding="utf-8") as f:
-            f.write("name = %s\ndescription = %s\ndeveloper_instructions = '''\n%s'''\n"
-                    % (toml_string(name), toml_string(description), body.replace("'''", "'' '")))
+            f.write("name = %s\ndescription = %s\ndeveloper_instructions = '''\n%s%s'''\n"
+                    % (toml_string(name), toml_string(description), not_lead, body.replace("'''", "'' '")))
 
 skills = os.path.join(main, "skills")
 if os.path.isdir(skills):

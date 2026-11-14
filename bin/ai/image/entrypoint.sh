@@ -119,6 +119,35 @@ if os.path.isfile(path):
             f.write("\n")
 PYEOF
 
+# --- Claude Code compaction -------------------------------------------------
+# Context is managed by handover and /clear, so both compaction settings default
+# to false (idleCompaction and autoCompactEnabled, checked in the claude binary
+# of 2.1.323). Written to the user's settings, not the managed ones, and only
+# when absent: managed settings outrank the user's, so they could not be undone.
+python3 - "$HOME/.claude/settings.json" <<'PYEOF' 2>/dev/null || true
+import json, os, sys
+path = sys.argv[1]
+data = {}
+if os.path.isfile(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+changed = False
+for key in ("idleCompaction", "autoCompactEnabled"):
+    if key not in data:
+        data[key] = False
+        changed = True
+if changed:
+    # Temporary file in the same directory, then a rename: a kill mid-write
+    # must not leave an empty settings.json.
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    if os.path.isfile(path):
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    os.replace(tmp, path)
+PYEOF
+
 # --- Claude Code plugins -----------------------------------------------------
 # ~/.claude is a bind mount, so plugins cannot be baked into the image. In the
 # background (network), add the marketplace if unknown and install only the

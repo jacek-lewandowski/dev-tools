@@ -2,15 +2,12 @@
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
 ai_sandbox_require_ctx || exit 1
-# Knowledge sync before the container comes up, so the rules it reads are the
-# current main and its proposals and reports reach the remote. Never blocks the start.
+# No knowledge sync here: create-ai-sandbox.sh and an explicit
+# 'ai-knowledge sync' are the only places that run it.
 # Before the build-caches lock, like 'ai-sandbox': start-display.sh can launch
 # long-lived background processes (Xephyr, Xvfb, the xpra viewer) that would
 # otherwise inherit CACHES_LOCK_FD and keep the flock held long after this
 # script closes its own copy, hanging every later start.
-if ai_knowledge_configured; then
-    "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-knowledge" sync "$AI_SANDBOX_PROJECT" || true
-fi
 if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
     "$AI_SANDBOX_DIR/start-display.sh" || exit 1
 fi

@@ -121,7 +121,7 @@ CLAUDE.md, ~/.codex/AGENTS.md and the tools' agents directories. Each sandbox
 gets its own clone at ~/knowledge with main checked out, made and kept current
 inside the sandbox from a read-only origin the host maintains; the 'propose-rule'
 skill commits one file on a proposal/<date>-<slug>-<hex> branch, and the host
-pushes it on the next sandbox start or 'ai-knowledge sync --all', reading the clone
+pushes it on the next 'ai-knowledge sync' (or 'sync --all', or a re-run of this script), reading the clone
 without running git in it. A 'process-report' report travels the same way as a ref
 refs/reports/<name>. A sandbox created before this setup (its SANDBOX_KNOWLEDGE
 stamp is not the one knowledge needs, 2) is refused at start until it is
