@@ -41,7 +41,7 @@ STUB
 chmod +x "$stub/dbus-launch"
 export STUB_DBUS_LOG="$tmp/dbus.log" SANDBOX_RUNTIME_DIR="$tmp/run"
 export SANDBOX_ETC_DIR="$tmp/ep-etc" SANDBOX_ZONEINFO_DIR="$tmp/ep-zi"
-unset SANDBOX_START_XWAYLAND SANDBOX_START_WM SANDBOX_WITH_DOCKER
+unset SANDBOX_START_XWAYLAND SANDBOX_START_WM SANDBOX_WITH_DOCKER SANDBOX_KNOWLEDGE
 real_env="/run/user/$(id -u)/sandbox-env.sh"
 real_before=$(stat -c '%y %s' "$real_env" 2>&1)
 count_dbus() { ps -eo comm= | grep -cx dbus-daemon; }
