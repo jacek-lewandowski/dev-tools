@@ -108,8 +108,7 @@ ARG PLAYWRIGHT_VERSION=@PLAYWRIGHT_VERSION@
 ARG PUPPETEER_CORE_VERSION=@PUPPETEER_CORE_VERSION@
 # World-writable, so a project's own 'npx playwright install' (which takes a lock
 # directory here) and the first-launch validation file work as the sandbox user.
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    NODE_PATH=/usr/lib/node_modules
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN set -eux; \
     npm install -g "playwright@${PLAYWRIGHT_VERSION}" "puppeteer-core@${PUPPETEER_CORE_VERSION}"; \
     playwright install --only-shell chromium; \
@@ -178,5 +177,5 @@ RUN set -eux; \
     yarn --version; \
     firebase --version; \
     python3 -c 'import headroom'; \
-    node -e "require('playwright'); require('puppeteer-core')"; \
+    NODE_PATH=/usr/lib/node_modules node -e "require('playwright'); require('puppeteer-core')"; \
     chromium-headless --version

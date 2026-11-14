@@ -56,6 +56,9 @@ assert_contains "puppeteer-core is pinned"               "$df" 'ARG PUPPETEER_CO
 # A project's own 'npx playwright install' writes into PLAYWRIGHT_BROWSERS_PATH (lock dir included): the sandbox user must be able to.
 assert_contains "the browsers path is writable by the sandbox user" "$df" 'chmod -R a+rwX "${PLAYWRIGHT_BROWSERS_PATH}"'
 assert_contains "and its top directory takes new revisions and locks"  "$df" 'chmod 1777 "${PLAYWRIGHT_BROWSERS_PATH}"'
+# NODE_PATH is not global (a project's require must not see the global modules); only the build smoke test sets it.
+assert_eq "NODE_PATH is set once, for the smoke test only" "$(printf '%s\n' "$df" | grep -c 'NODE_PATH=')" 1
+assert_contains "and there it prefixes the node command" "$df" 'NODE_PATH=/usr/lib/node_modules node -e'
 # Without buildx the build cannot use cache mounts: fail before doing anything.
 DOCKER_STUB_NO_BUILDX=1 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-start "$proj" >"$tmp/out.nobx" 2>&1; nobx_rc=$?
 assert_ne       "create refuses without docker buildx"   "$nobx_rc" 0
