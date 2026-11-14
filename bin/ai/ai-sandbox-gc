@@ -8,6 +8,7 @@
 # nothing without confirmation.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 
 assume_yes="no"
 [ "${1:-}" = "--yes" ] && assume_yes="yes"

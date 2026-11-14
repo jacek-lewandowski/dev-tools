@@ -149,7 +149,7 @@ assert_eq "a planted direct start in it is reported" "$(sg_reports "$tmp/planted
 
 # --- a missing ast-grep fails the file: run it with a PATH that has no ast-grep
 mkdir -p "$tmp/nobin"
-for c in dirname mktemp rm; do ln -s "$(command -v $c)" "$tmp/nobin/$c"; done
+for c in dirname mktemp rm readlink basename awk sed tail cat; do ln -s "$(command -v $c)" "$tmp/nobin/$c"; done
 out=$(PATH="$tmp/nobin" /bin/bash "${BASH_SOURCE[0]}" 2>&1); r=$?
 assert_eq "a missing ast-grep fails the file" "$r" 1
 assert_contains "a missing ast-grep is reported, not skipped" "$out" "not ok 1 - ast-grep is installed"

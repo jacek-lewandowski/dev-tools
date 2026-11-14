@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Minimal assert library. No framework is available in this environment.
+# C-INSTALL: a test file is a host entry point and refuses, before fake_home replaces HOME,
+# to run from a tree a sandbox can write. In a subshell: the lib's variables stay out of
+# the test's shell.
+( . "$(dirname "${BASH_SOURCE[0]}")/../../bin/ai/ai-sandbox-lib.sh" \
+    && ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" ) || exit 3
 TESTS_RUN=0
 TESTS_FAILED=0
 

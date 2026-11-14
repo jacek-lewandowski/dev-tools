@@ -43,6 +43,7 @@ trap 'printf "!! ai-knowledge: unexpected error at line %s\n" "$LINENO" >&2' ERR
 AGENT_STARTED=""   # pid of the agent this process started, else empty
 trap '[ -z "$AGENT_STARTED" ] || SSH_AGENT_PID=$AGENT_STARTED ssh-agent -k >/dev/null 2>&1 || true' EXIT
 . "$HERE/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 
 KNOWLEDGE_MAIN="$AI_KNOWLEDGE_ROOT/main"
 # create-ai-sandbox.sh writes the generated "AI sandbox environment" block here

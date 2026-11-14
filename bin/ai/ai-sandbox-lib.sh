@@ -8,6 +8,9 @@
 
 AI_SANDBOX_ROOT="${AI_SANDBOX_ROOT:-$HOME/.ai-sandbox}"
 AI_SANDBOX_SCHEMA_VERSION=2
+# C-INSTALL's root: the revisions the host runs (rev/<commit>), `current` naming one.
+# Defined once, here; everything that names it uses this.
+AI_SANDBOX_INSTALLED="$AI_SANDBOX_ROOT/installed"
 # Host-wide settings, shell-style KEY=VALUE lines. create-ai-sandbox.sh writes
 # DEV_TOOLS_DIR; AI_SANDBOX_MEMORY_BUDGET_GB, the RAM in GB that all running
 # sandboxes together may use, is written by the user by hand (the file's only
@@ -387,6 +390,27 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
         if [ -n "${AI_SANDBOX_GIT_TIMEOUT:-}" ]; then exec timeout "$AI_SANDBOX_GIT_TIMEOUT" git "$@"; fi
         exec git "$@"
     )
+}
+
+# C-INSTALL: a host entry point calls this first, with its own path. 0 when the directory
+# holding it, links resolved, is not one a sandbox can write (ai_sandbox_writable_path);
+# else says so with the install command and returns 3, the status ai_sandbox_host_git gives
+# for the same reason. <top> is the directory holding bin/ai, where --from points.
+ai_sandbox_refuse_writable_self() {   # <own path>
+    local own dir top
+    own=$(readlink -f -- "$1" 2>/dev/null) && [ -n "$own" ] || own=$1
+    dir=${own%/*}; [ -n "$dir" ] || dir=/
+    ai_sandbox_writable_path "$dir" || return 0
+    top=$dir
+    while [ "$top" != / ] && [ ! -d "$top/bin/ai" ]; do
+        case $top in */*) top=${top%/*}; [ -n "$top" ] || top=/ ;; *) break ;; esac
+    done
+    [ -d "$top/bin/ai" ] || top=$dir
+    {
+        echo "$(basename "$own"): refusing to run from $dir: a sandbox can write it"
+        echo "Install a revision and run it from ~/.ai-sandbox/bin: ai-sandbox-install --from $top"
+    } >&2
+    return 3
 }
 
 # C-GIT, confined side: git run on a tree a sandbox can write, inside a

@@ -40,6 +40,7 @@ resolve_expr() {
         '"$SCRIPT_DIR/'*)  base=bin/ai/;                rest=${rest#'"$SCRIPT_DIR/'} ;;
         '"$HERE/'*)        base=bin/ai/;                rest=${rest#'"$HERE/'} ;;
         '"'"$FORM_DIRNAME"*) base=${file%/*}/;          rest=${rest#'"'"$FORM_DIRNAME"} ;;
+        '"$self/'*)        base=${file%/*}/;            rest=${rest#'"$self/'} ;;   # context-statusline, handover-ready
         '"$AI_SANDBOX_ROOT/'*) echo -; return ;;
         # the recorded checkout; the form goes with the code that uses it
         '"$DEV_TOOLS_DIR/'*) base=;                     rest=${rest#'"$DEV_TOOLS_DIR/'} ;;

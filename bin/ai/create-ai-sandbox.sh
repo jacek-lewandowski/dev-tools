@@ -62,6 +62,13 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
 
+# Identity and path helpers, shared with the ai-sandbox-* commands so the two
+# can never compute a different id for the same project. Sourced first because the
+# refusal to run from a tree a sandbox can write comes before anything else.
+# shellcheck source=bin/ai/ai-sandbox-lib.sh
+. "$SCRIPT_DIR/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
+
 . "$SCRIPT_DIR/create.d/options.sh"
 . "$SCRIPT_DIR/create.d/project.sh"
 . "$SCRIPT_DIR/create.d/display.sh"
@@ -77,10 +84,6 @@ SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
 # The modules define; the stages run here, in this order.
 options_parse "$@"
 project_prerequisites
-# Identity and path helpers, shared with the ai-sandbox-* commands so the two
-# can never compute a different id for the same project.
-# shellcheck source=bin/ai/ai-sandbox-lib.sh
-. "$SCRIPT_DIR/ai-sandbox-lib.sh"
 options_check_memory
 resources_budget_gate
 project_resolve

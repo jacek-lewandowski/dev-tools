@@ -8,6 +8,7 @@
 # them so the next start prompts for a fresh login.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 ai_sandbox_require_ctx || exit 1
 
 cmd=${1:-status}

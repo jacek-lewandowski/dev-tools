@@ -7,6 +7,11 @@
 set -euo pipefail
 
 self=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+# The refusal needs the lib beside this script; the image's copy has none.
+if [ -f "$self/ai-sandbox-lib.sh" ]; then
+    . "$self/ai-sandbox-lib.sh"
+    ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
+fi
 if   [ -d "$self/../../tools/context_statusline" ];            then tools="$self/../../tools"
 elif [ -d "$HOME/dev/public/dev-tools/tools/context_statusline" ]; then tools="$HOME/dev/public/dev-tools/tools"
 elif [ -d "$HOME/tools/context_statusline" ];                  then tools="$HOME/tools"
