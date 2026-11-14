@@ -302,6 +302,12 @@ jetbrains-plugins|.local/share/JetBrains|
 SHARED
 }
 
+# Kept as an empty list on purpose. A host that still has the pre-install ai-sandbox-migrate
+# runs it with its own lib sourced first, then this one, and copies every file this list names
+# over its installed helpers; the name must stay defined (empty) so that nothing is copied until
+# the host has installed a revision. Removable once every host has (spec's deferred list).
+ai_sandbox_helpers() { :; }
+
 # The image tag of one variant. The uid suffix keeps two host users sharing one
 # Docker daemon from fighting over a single tag, since the image bakes in USER_ID.
 # The image family: '-gui' (the GUI applications, for a sandbox with a display) when the second argument is 'gui'.

@@ -58,5 +58,15 @@ assert_eq "the image's context-statusline without ~/tools exits 2" "$(run "$T/ct
 cp -a "$REPO_ROOT/tools" "$HOME/tools"
 assert_eq "the image's context-statusline with ~/tools runs" "$(run "$T/ctx/context-statusline" --plain)" 0
 
+# ---------------------------------------------------------------------------
+# D26: the base's installed ai-sandbox-migrate sources its own lib (which defines
+# ai_sandbox_helpers) and then the checkout's, and copies what the list names. The merged
+# lib must leave the name defined and the list empty, or the first run on a host copies
+# every helper over the installed ones.
+# ---------------------------------------------------------------------------
+n=$(bash -c '. "$1"; ai_sandbox_helpers() { echo base-helper; }; . "$1"; ai_sandbox_helpers | wc -l' _ "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")
+assert_eq "sourcing the lib after the base's definition leaves the list empty" "$n" 0
+assert_eq "the lib defines ai_sandbox_helpers" "$(bash -c '. "$1"; type -t ai_sandbox_helpers' _ "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")" function
+
 rm -rf "$T"
 finish
