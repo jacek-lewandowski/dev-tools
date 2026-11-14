@@ -60,6 +60,16 @@ for planted in 'exec python3 -m pkg' 'x=$(echo | python3 -c "print(1)")' 'VAR=x 
     printf '%s\n' "$planted" >> "$ai/$host"
     assert_eq "a planted '$planted' is reported" "$(reports "$tmp/copy" | sed 's/.*://' | command grep -c .)" 1
 done
+for planted in 'python3.10 -c "print(1)"' 'python3 - "$f" -I' 'python3 script.py -I'; do
+    cp "$REPO_ROOT/bin/ai/$host" "$ai/$host"; chmod u+w "$ai/$host"
+    printf '%s\n' "$planted" >> "$ai/$host"
+    assert_eq "a planted '$planted' is reported" "$(reports "$tmp/copy" | sed 's/.*://' | command grep -c .)" 1
+done
+for planted in 'python3.10 -I -c "print(1)"' 'python3 -I script.py -x'; do
+    cp "$REPO_ROOT/bin/ai/$host" "$ai/$host"; chmod u+w "$ai/$host"
+    printf '%s\n' "$planted" >> "$ai/$host"
+    assert_eq "a planted '$planted' is not reported" "$(reports "$tmp/copy" | command grep -c .)" 0
+done
 cp "$REPO_ROOT/bin/ai/$host" "$ai/$host"; chmod u+w "$ai/$host"
 printf '#!/usr/bin/env bash\npython3 - <<EOF\nprint(1)\nEOF\n' > "$ai/image/planted-in-image"
 assert_eq "the same line under bin/ai/image/ is not reported" "$(reports "$tmp/copy" | command grep -c .)" 0
