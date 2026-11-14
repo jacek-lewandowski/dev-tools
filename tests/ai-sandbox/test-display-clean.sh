@@ -21,10 +21,11 @@ mkdir -p "$FAKE_HOME_DIR/nopy"; printf '#!/bin/sh\nexit 1\n' > "$FAKE_HOME_DIR/n
 out=$(printf 'ok \xc2\x9b\033x \xe2\x80\xaey\tz\n' | PATH="$FAKE_HOME_DIR/nopy:$PATH" ai_sandbox_display_clean; echo "rc=$?")
 assert_eq "without python3 only printable ASCII, tab and newline remain" "$out" $'ok x y\tz\nrc=0'
 
-# O13: the old copies are gone, the one filter lives in the lib
+# O13: the old copies are gone, the one filter lives in the lib. Searched with grep over the files
+# under REPO_ROOT, not git grep, so the result is the same in a git archive export (L10).
 cd "$REPO_ROOT" || exit 1
 assert_eq "O13: no C0-only filter copy in bin/ai outside image/" \
-    "$(git grep -nE "tr -d '(\[:cntrl:\]|\\\\000-)" -- bin/ai ':!bin/ai/image' | wc -l | tr -d ' ')" 0
-assert_eq "O13: unicodedata only in the lib" "$(git grep -l unicodedata -- bin/ai | tr '\n' ' ')" "bin/ai/ai-sandbox-lib.sh "
+    "$(grep -rnE "tr -d '(\[:cntrl:\]|\\\\000-)" --exclude-dir=image bin/ai | wc -l | tr -d ' ')" 0
+assert_eq "O13: unicodedata only in the lib" "$(grep -rl unicodedata bin/ai | LC_ALL=C sort | tr '\n' ' ')" "bin/ai/ai-sandbox-lib.sh "
 
 finish

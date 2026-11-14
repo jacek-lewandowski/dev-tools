@@ -187,10 +187,11 @@ python3 -I "$PTY" --answer n -- env DOCKER_STUB_IMAGES="$kimages" bash "$REPO_RO
 assert_contains "L7: U+FE0F, U+E0100, U+3164 and U+2028 are shown as text" "$(cat "$tmp/l7.out")" "v<U+FE0F>A s<U+E0100>B h<U+3164>C l<U+2028>D end"
 
 # --- read: no bypass, and the shown change comes from the id resolved before it
+# (grep over the files under REPO_ROOT, so the counts are the same in a git archive export; L10)
 cd "$REPO_ROOT" || exit 1
-assert_eq "O1 read: no variable, option or key skips the question" "$(git grep -nE 'CONFIRM|ASSUME_YES|--yes|-y\)' -- bin/ai/ai-knowledge | wc -l | tr -d ' ')" 0
+assert_eq "O1 read: no variable, option or key skips the question" "$(grep -nE 'CONFIRM|ASSUME_YES|--yes|-y\)' bin/ai/ai-knowledge | wc -l | tr -d ' ')" 0
 assert_eq "O2 read: the patch is made without external diff, textconv and colour" \
     "$(grep -c 'diff --no-ext-diff --no-textconv --no-color' bin/ai/ai-knowledge)" 2
-assert_eq "R1: only seed_main names heads/main:refs/heads/main" "$(git grep -nF 'heads/main:refs/heads/main' -- bin/ai | wc -l | tr -d ' ')" 2
+assert_eq "R1: only seed_main names heads/main:refs/heads/main" "$(grep -rnF 'heads/main:refs/heads/main' bin/ai | wc -l | tr -d ' ')" 2
 
 finish
