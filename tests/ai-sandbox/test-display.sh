@@ -54,7 +54,6 @@ createx() {   # <mode> <project>
 }
 pn="$tmp/work/nested"; mkdir -p "$pn"; createx nested "$pn"
 px="$tmp/work/xpra"; mkdir -p "$px"; createx xpra "$px"
-sockdirs=""
 for pj in "$pn" "$px"; do
     d=$(dir "$pj")
     for f in "$d/start-display.sh" "$d/stop-display.sh"; do
@@ -68,7 +67,7 @@ assert_contains "O11: start-display.sh makes the directory and publishes the soc
     "$(cat "$(dir "$pn")/start-display.sh")" "hardlink"
 assert_contains "O11: stop-display.sh removes the socket through the function" "$(cat "$(dir "$pn")/stop-display.sh")" "remove"
 sockdir=$(sed -n 's/^SOCK_DIR="\(.*\)"$/\1/p' "$(dir "$pn")/start-display.sh")
-xnum=$(num "$pn"); sockname=${sockdir##*/}
+xnum=$(num "$pn")
 assert_eq "O11: create made the socket directory 0700" "$(stat -c %a "$sockdir")" 700
 
 # Running the generated scripts: the socket is published, then removed at stop
