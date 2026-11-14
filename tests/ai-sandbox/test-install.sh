@@ -243,6 +243,7 @@ assert_no_file "the filter did not run" "$T/marker"
 ar="$T/ar"; mkdir -p "$ar"; sg archive "$s1" | tar -x -C "$ar"
 assert_ne "git archive expands export-subst" "$(cat "$ar/bin/ai/subst.txt")" "$(sg cat-file blob "$s1:bin/ai/subst.txt")"
 assert_no_file "and omits the export-ignore file" "$ar/bin/ai/ex-ignored"
+assert_file "and runs the smudge filter, so the marker above can appear" "$T/marker"
 # a full object id of a served branch's commit
 rc=$(frominst "$s2")
 assert_eq "--from, a full object id of a served branch: exit 0" "$rc" 0
