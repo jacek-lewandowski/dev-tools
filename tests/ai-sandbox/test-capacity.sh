@@ -7,6 +7,8 @@ set -uo pipefail
 . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
+# a start brings the sandbox up only when its image exists (E5); the stub answers for the image families
+export DOCKER_STUB_IMAGES="ai-sandbox:base-u$(id -u) ai-sandbox:base-gui-u$(id -u) ai-sandbox:docker-u$(id -u) ai-sandbox:docker-gui-u$(id -u)"
 proj="$tmp/work/p"; mkdir -p "$proj"
 touch "$HOME/.bashrc"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory=6 "$proj" >"$tmp/out" 2>&1 || true
@@ -38,6 +40,18 @@ TESTS_RUN=$((TESTS_RUN + 1))
 case "$(stub_docker_log)" in
     *' up -d'*) _fail "a refused start does not reach compose up" "$(stub_docker_log)" ;;
     *)          _pass "a refused start does not reach compose up" ;;
+esac
+
+# Capacity comes before the image: with no image on the host and the budget exceeded, the
+# refusal is the capacity one (E5 ordering).
+: > "$DOCKER_STUB_LOG"
+out=$(cd "$proj" && DOCKER_STUB_IMAGES= DOCKER_STUB_PS=$'aaa-agent\nbbb-agent\nccc-agent' bash "$helper/ai-sandbox" true 2>&1); rc=$?
+assert_ne       "with no image and no room, ai-sandbox refuses" "$rc" 0
+assert_contains "and the refusal is the capacity one"           "$out" "Cannot start $name (6 GB)"
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$out" in
+    *"needs the image"*) _fail "not the missing-image refusal" "$out" ;;
+    *)                   _pass "not the missing-image refusal" ;;
 esac
 
 # A running container that is not a sandbox of this host does not count, nor

@@ -5,10 +5,14 @@ printf '%s\n' "$*" >> "${DOCKER_STUB_LOG:-/dev/null}"
 # Names 'compose down'/'stop'/'rm' has stopped, cleared by 'compose up'/'start'.
 # Lives next to DOCKER_STUB_LOG, so a fresh fake_home starts with none recorded.
 STOPPED_FILE="${DOCKER_STUB_LOG:-/dev/null}.stopped"
-case "$1 $2" in
+case "$1 ${2:-}" in
     "compose version") exit 0 ;;
     "buildx version") [ -z "${DOCKER_STUB_NO_BUILDX:-}" ] || exit 1; exit 0 ;;
 esac
+# DOCKER_STUB_NO_DAEMON: the daemon is unreachable, so 'info' and 'image' fail as the real client does.
+if [ -n "${DOCKER_STUB_NO_DAEMON:-}" ]; then
+    case "$1" in info|image) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;; esac
+fi
 case "$1" in
     image)
         # 'docker image inspect TAG': missing unless the test pre-seeded it.
