@@ -61,9 +61,17 @@ assert_eq "no compose up for a missing image" "$(grep -c ' up' "$DOCKER_STUB_LOG
 : > "$DOCKER_STUB_LOG"
 msg=$(cd "$proj" && DOCKER_STUB_PS="$name" DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox-restart" 2>&1) && r=0 || r=$?
 assert_eq "ai-sandbox-restart refuses a missing image" "$r" 1
+assert_contains "restart says which image" "$msg" "$image"
 assert_contains "restart names the build command" "$msg" "create-ai-sandbox.sh $proj"
 assert_eq "restart: no compose up" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
 assert_eq "restart: no compose down" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
+# no reachable daemon: the missing image is not the finding, so no refusal that names create;
+# compose up reports the real error
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$proj" && DOCKER_STUB_NO_DAEMON=1 DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) || true
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$msg" in *"needs the image"*) _fail "no create-naming refusal when the daemon is unreachable" "$msg" ;; *) _pass "no create-naming refusal when the daemon is unreachable" ;; esac
+assert_contains "the start goes on to compose up, which reports the real error" "$(stub_docker_log)" " up"
 # a running container is entered whatever its image
 msg=$(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
 assert_eq "a running sandbox is entered with its image gone" "$r" 0

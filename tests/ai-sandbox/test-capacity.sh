@@ -42,6 +42,18 @@ case "$(stub_docker_log)" in
     *)          _pass "a refused start does not reach compose up" ;;
 esac
 
+# Capacity comes before the image: with no image on the host and the budget exceeded, the
+# refusal is the capacity one (E5 ordering).
+: > "$DOCKER_STUB_LOG"
+out=$(cd "$proj" && DOCKER_STUB_IMAGES= DOCKER_STUB_PS=$'aaa-agent\nbbb-agent\nccc-agent' bash "$helper/ai-sandbox" true 2>&1); rc=$?
+assert_ne       "with no image and no room, ai-sandbox refuses" "$rc" 0
+assert_contains "and the refusal is the capacity one"           "$out" "Cannot start $name (6 GB)"
+TESTS_RUN=$((TESTS_RUN + 1))
+case "$out" in
+    *"needs the image"*) _fail "not the missing-image refusal" "$out" ;;
+    *)                   _pass "not the missing-image refusal" ;;
+esac
+
 # A running container that is not a sandbox of this host does not count, nor
 # does a sandbox that exists but is not running (ddd-agent is not in docker ps).
 : > "$DOCKER_STUB_LOG"

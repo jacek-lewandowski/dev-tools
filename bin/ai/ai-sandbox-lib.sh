@@ -222,6 +222,9 @@ ai_sandbox_require_image() {   # <sandbox dir>
     image=$(sed -n 's/^    image: "\(.*\)"$/\1/p' "$1/docker-compose.yml" 2>/dev/null | head -1)
     [ -n "$image" ] || return 0
     docker image inspect "$image" >/dev/null 2>&1 && return 0
+    # an unreachable daemon also fails the inspect: the image is not what is wrong then, and
+    # 'compose up' reports the real error
+    docker info >/dev/null 2>&1 || return 0
     {
         # the name is read from a file under the sandbox's directory: shown through the display rule
         echo "Sandbox $(basename "$1") needs the image $(printf '%s' "$image" | ai_sandbox_display_clean), which does not exist on this host."
