@@ -7,6 +7,8 @@ set -uo pipefail
 . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
 
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"
+# a start brings the sandbox up only when its image exists (E5); the stub answers for the image families
+export DOCKER_STUB_IMAGES="ai-sandbox:base-u$(id -u) ai-sandbox:base-gui-u$(id -u) ai-sandbox:docker-u$(id -u) ai-sandbox:docker-gui-u$(id -u)"
 proj="$tmp/work/p"; mkdir -p "$proj"
 touch "$HOME/.bashrc"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory=6 "$proj" >"$tmp/out" 2>&1 || true

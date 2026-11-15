@@ -596,7 +596,8 @@ rm -rf "$odir"
 out=$(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox" --print-context 2>&1) && r=0 || r=$?
 assert_eq "print-context works on a current sandbox" "$r" 0
 assert_contains "print-context reports the sandbox dir" "$out" "dir=$pdir"
-(cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" >/dev/null 2>&1) && r=0 || r=$?
+# the image must exist for a restart to bring it up (E5)
+(cd "$proj" && DOCKER_STUB_IMAGES="ai-sandbox:base-u$(id -u) ai-sandbox:base-gui-u$(id -u)" bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" >/dev/null 2>&1) && r=0 || r=$?
 assert_eq "restart of a current sandbox proceeds" "$r" 0
 assert_contains "restart of a current sandbox reaches compose" "$(stub_docker_log)" "down"
 # --- init on a host with only the installed helper seeds from the seed beside it (phase 4)

@@ -213,6 +213,24 @@ ai_sandbox_require_current() {   # <sandbox dir>
     return 1
 }
 
+# 'compose up' pulls an image it does not find locally, and the image name of a sandbox
+# ('ai-sandbox:<family>-u<uid>') exists in no registry: the start would end in a pull error
+# that names no repair. Only create-ai-sandbox.sh (without --no-start) builds the image, so
+# a start or restart that would need it is refused here with that command (I6, E5).
+ai_sandbox_require_image() {   # <sandbox dir>
+    local image
+    image=$(sed -n 's/^    image: "\(.*\)"$/\1/p' "$1/docker-compose.yml" 2>/dev/null | head -1)
+    [ -n "$image" ] || return 0
+    docker image inspect "$image" >/dev/null 2>&1 && return 0
+    {
+        # the name is read from a file under the sandbox's directory: shown through the display rule
+        echo "Sandbox $(basename "$1") needs the image $(printf '%s' "$image" | ai_sandbox_display_clean), which does not exist on this host."
+        echo "It cannot be started until the image has been built. Run on the host (without --no-start):"
+        echo "    $(ai_sandbox_recreate_command "$1")"
+    } >&2
+    return 1
+}
+
 # A running sandbox is entered whatever its stamp; this is what the host says
 # about one that is not current (nothing is executed in it).
 ai_sandbox_say_recreate() {   # <sandbox dir>

@@ -44,9 +44,29 @@ assert_contains "it goes through compose exec" "$(stub_docker_log)" "exec"
 create || { echo "create failed:"; cat "$tmp/create.out"; }
 assert_eq "after a create it is current" "$(ai_sandbox_stale_reason "$dir")" ""
 : > "$DOCKER_STUB_LOG"
-(cd "$proj" && DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true >"$tmp/start.out" 2>&1) && r=0 || r=$?
+(cd "$proj" && DOCKER_STUB_IMAGES="$(sed -n 's/^    image: "\(.*\)"$/\1/p' "$compose")" DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true >"$tmp/start.out" 2>&1) && r=0 || r=$?
 assert_eq "ai-sandbox starts it" "$r" 0
 assert_contains "through compose up" "$(stub_docker_log)" " up"
+
+# E5: a stopped sandbox whose image does not exist locally is refused before compose up
+# (which would try a registry pull of a name no registry has), with the build command.
+image=$(sed -n 's/^    image: "\(.*\)"$/\1/p' "$compose")
+assert_contains "the compose file names the image" "$image" "ai-sandbox:"
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$proj" && DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox refuses a missing image" "$r" 1
+assert_contains "says which image" "$msg" "$image"
+assert_contains "and names the build command" "$msg" "create-ai-sandbox.sh $proj"
+assert_eq "no compose up for a missing image" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+: > "$DOCKER_STUB_LOG"
+msg=$(cd "$proj" && DOCKER_STUB_PS="$name" DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox-restart" 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox-restart refuses a missing image" "$r" 1
+assert_contains "restart names the build command" "$msg" "create-ai-sandbox.sh $proj"
+assert_eq "restart: no compose up" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+assert_eq "restart: no compose down" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
+# a running container is entered whatever its image
+msg=$(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
+assert_eq "a running sandbox is entered with its image gone" "$r" 0
 
 rm -rf "$tmp"
 finish
