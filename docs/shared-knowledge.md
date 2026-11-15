@@ -18,7 +18,9 @@ sandbox. They were not versioned, an agent could change them for every sandbox a
 once, and a lesson learned in one project had no reviewed path into the global
 rules. Now the effective rules are never writable from a sandbox, no sandbox holds
 git credentials, the host never runs git in a directory a sandbox can write, every
-change to `main` is approved by the user, and the host never force-pushes.
+change to `main` is approved by the user (the host shows what the integrator
+committed and pushes it only after the user's yes at a terminal), and the host never
+force-pushes.
 
 Project-specific knowledge stays out of the repository. Project rules live in the
 project tree; Claude memory and conversations travel between computers with
@@ -62,7 +64,8 @@ host) or missing. Upgrade in this order:
    first design kept the integrator in the host's config only; this run records
    it in `README.md` on `main`. A re-run is safe. While the integrator clone has
    commits on `main` that are not pushed yet, the record is skipped and the
-   message says so: run `ai-knowledge sync --all` first, then `init` again.
+   message says so: run `ai-knowledge sync --all` first (it asks before it pushes
+`main`; see "Editing the rules yourself"), then `init` again.
 
 ## Deployment
 
@@ -97,8 +100,9 @@ remote into `~/.ai-sandbox/knowledge/main` and, if the remote is empty, seeds it
 - `rules/global.md` taken from the host's current `~/.gemini/GEMINI.md`, with the
   generated sandbox-environment block stripped.
 
-It commits, pushes `main`, records the integrator, and renders (see step 4 of
-"How it works"). From now on `~/.gemini/GEMINI.md` is a symlink into the render.
+It commits, pushes `main` (the first commit, built by this command you ran; later
+changes to `main` wait for your yes at a sync), records the integrator, and renders
+(see step 4 of "How it works"). From now on `~/.gemini/GEMINI.md` is a symlink into the render.
 The previous file is kept as `GEMINI.md.pre-ai-knowledge.<timestamp>`.
 
 `--integrator` names the project whose sandbox is the integrator: the one clone
@@ -158,9 +162,19 @@ re-creation.
 
 You own the repository. Edit `main` directly in the integrator's clone, the path
 `ai-knowledge status` prints as `clone (integrator)`, either inside that sandbox
-or on the host, add a `decisions.md` entry, commit. The next sync pushes `main`,
-re-renders, and every other sandbox picks it up at its next sync; agents read it
-in their next session. Nothing requires a proposal for the owner's own changes.
+or on the host, add a `decisions.md` entry, commit. The next sync run at a terminal
+shows the commits, the changed paths and the patch (text from the clone passes the
+display filter, so no control or bidi character reaches the terminal) and asks
+`y/N`; only after a yes does it push `main` (the commit it showed), re-render, and
+every other sandbox picks it up at its next sync; agents read it in their next
+session. Any other answer, an interrupt, a missing terminal (a log, a pipe, a job
+started in the background of a terminal) pushes nothing: line 1 of the integrator's
+status is `warn` and reads `main waits for your confirmation: run ai-knowledge sync
+<project>`, which `sandbox-doctor` shows inside the sandbox, and the next sync asks
+again. `create-ai-sandbox.sh` for the integrator's project asks the same question in
+its knowledge step, before the image build, when it runs at a terminal. With
+`sync --all` the question comes once, after the other sandboxes' output. No option or
+variable skips it. Nothing requires a proposal for the owner's own changes.
 
 ### Commands
 
@@ -251,8 +265,8 @@ The status file's line 1 is `<time> <ok|warn|refused|offline> <message>`; then
 `role=<proposals|integrator>`, `project-id=<id>`, and the keys the in-sandbox command
 acts on: `closed-proposal=<branch> <commit>`, `pushed-report=<name>` (a writer's
 reports the host has pushed and the clone may drop) and `closed-report=<name>` (the
-integrator's reports closed on the remote, whose refs and tombstones the clone may
-remove). Every sync writes the file whole, so a key not repeated is withdrawn.
+integrator's reports archived and then closed on the remote, whose refs and
+tombstones the clone may remove). Every sync writes the file whole, so a key not repeated is withdrawn.
 
 ### 3. Sync by create and on demand
 
@@ -327,6 +341,19 @@ into `~/.agents/skills/<name>` and into the shared agent-skills store, and linke
 from `.claude/skills`, `.codex/skills` and `.gemini/skills` on the host and in each
 sandbox directory, in the same layout the skills CLI uses.
 
+The render takes regular files only: a link or any other special file at any level
+of `rules/`, `roles/` or `skills/`, or a role whose name is not
+`^[a-z0-9][a-z0-9-]{0,63}$`, refuses the whole render. The previous render stays and
+standard error names the path (`test-knowledge-render.sh`). The host's own writes
+below a directory a sandbox can write (mount targets, skill links, the SDKMAN farm,
+the account's state, the display's socket directory) go through
+`ai_sandbox_nofollow` and never follow a link a sandbox placed there: a link where a file or link is written
+is replaced as itself; any other link met is left alone and that write skipped with
+a warning naming the path (`test-knowledge-links.sh`,
+`test-create-links.sh`, `test-account-links.sh`, `test-display.sh`, and
+`test-sweep.sh`, which plants a link at every path a run of create, sync and account
+writes).
+
 `create-ai-sandbox.sh` no longer writes its sandbox-environment block into
 `GEMINI.md`. It writes it to `sandbox-environment.md` and re-renders. When the
 knowledge repository is configured, that block also tells the agent where its clone
@@ -381,8 +408,11 @@ directory mounted read-only, runs `git upload-pack`, and the host fetches into
    even after the integrator closed it on the remote. The record is dropped once the
    mirror no longer holds the report (`test-knowledge.sh`, "reports", O20 cases).
 5. The status line: `ok: main current; pushed N; closed M` (plus `; reports pushed
-   N` when a report went), or the first problem found, or `offline` with the
-   per-branch push commands to run by hand.
+   N` when a report went), or, for the integrator whose `main` waits for the user's
+   yes, `main waits for your confirmation: run ai-knowledge sync <project>; pushed N;
+   closed M` (a `warn`), or the first problem found, or `offline` with the
+   per-branch push commands to run by hand. Proposal branches are pushed without a
+   question; deleting them on the remote waits for a confirmed `main`.
 
 The sandbox's command then brings the clone up to date: it fetches `origin` with
 `--prune`, makes `main` fast-forward to `origin/main` whether or not it is checked
@@ -398,9 +428,10 @@ The integrator's clone is on `main` and carries a local branch for every open
 `proposal/*` branch of its origin. Which sandbox is the integrator is decided by the
 host's configuration and the sandbox's stamp, never by anything the clone says
 (`test-knowledge.sh`, "O6"). Every host sync does for it what step 5 describes, and
-in addition: pushes `main` when the clone's `main` is ahead of the host's own
-(`diverged` and no push when it has commits the host's `main` lacks and the host's
-has moved on); then, only after `main` is on the remote,
+in addition: when the clone's `main` is ahead of the host's own it shows the
+commits, paths and patch and pushes `main` only after the user's yes at a terminal,
+as "Editing the rules yourself" says (`diverged` and no push when it has commits the
+host's `main` lacks and the host's has moved on); then, only after `main` is on the remote,
 deletes closed branches on the remote, only for a tip that is an ancestor of the
 host's `origin/main`, and only under a lease on the fetched tip: an amendment the
 proposer pushed meanwhile rejects the lease, and the proposal is simply open
@@ -413,10 +444,16 @@ Closing a proposal is `git merge -s ours --no-ff` of its branch into `main`:
 checkout or file removal is needed. The proposal text stays reachable with
 `git log --full-history -- proposals/` or `git show <merge>^2:proposals/<file>`.
 
-Closing a report is deletion. After the user has seen it, the integrator runs
+Closing a report is deletion from `refs/reports/`, and the report is kept. After the
+user has seen it, the integrator runs
 `git -C ~/knowledge update-ref refs/reports-closed/<name> refs/reports/<name>`
-(never under `refs/reports/`). At its next sync the host deletes the report on the
-remote with `--force-with-lease=refs/reports/<name>:<tombstone value>`, then fetches
+(never under `refs/reports/`). At its next sync the host first archives it: when the
+tombstone names the commit the host's own fetch holds for `refs/reports/<name>`, it
+pushes that commit to `refs/reports-archive/<name>` on the remote (created, never
+moved or forced; the toolchain never deletes it and no clone fetches it). A
+tombstone naming another commit is skipped. If the archive already holds another
+commit, the report is not deleted and the status says why. Only then the host deletes
+the report on the remote with `--force-with-lease=refs/reports/<name>:<tombstone value>`, then fetches
 the remote's reports again, and only a sync that did so and no longer finds the
 report writes `closed-report=<name>`; the sandbox's command then removes the report
 ref and the tombstone. git answers a leased delete of a ref the remote no longer has
@@ -430,8 +467,16 @@ pushes a report of its own only when the host's copy of the remote's reports lac
 it or holds another tip, so a sync with nothing new reports no `reports pushed`; it
 keeps its own report refs until they are closed. A tombstone counts only for the
 integrator and only for a name matching the report pattern. There is no
-`decisions.md` entry, a closed report is not recoverable from git and, unlike a
-proposal, is not re-opened; a rule it suggests follows the proposal flow.
+`decisions.md` entry and, unlike a proposal, a closed report is not re-opened; a
+rule it suggests follows the proposal flow. A closed report is read back from the
+host, where the remote's archive is listed and one report fetched without making a
+ref:
+
+```bash
+git -C ~/.ai-sandbox/knowledge/main ls-remote origin 'refs/reports-archive/*'
+git -C ~/.ai-sandbox/knowledge/main fetch origin refs/reports-archive/<name>
+git -C ~/.ai-sandbox/knowledge/main show FETCH_HEAD:<path of the report file>
+```
 
 ### Re-opening a closed proposal
 
@@ -460,7 +505,7 @@ a fast-forward: the branch tip lands on `main`'s first-parent chain, every sync
 reports the branch as `empty`, keeps it on the remote and in every clone, and
 `ai-knowledge proposals` hides it. To fix it, remove the file from `main` with a
 normal commit in the integrator's clone (`git rm proposals/<file>`), add a
-`decisions.md` entry saying what happened, and let the next sync push. Then
+`decisions.md` entry saying what happened, and let the next sync push it (after your yes). Then
 delete the branch by hand; the sync never does it for a tip on the first-parent
 chain. In the integrator clone: `git -C ~/knowledge branch -D <branch>`. On the
 host: `git -C ~/.ai-sandbox/knowledge/main push origin :refs/heads/<branch>`.
@@ -530,8 +575,8 @@ with the tombstone command above, never merged into `main`. The skill reads the
 host's last status from `/run/ai-sandbox/status/knowledge`. Their figures are not
 re-checkable (the stats JSON is not shipped).
 
-The host pushes `main` and deletes the closed branches on the remote on the next
-sync. Every other sandbox receives the new rules on its next sync, and its command
+At the next sync the host shows the change to `main`, pushes it after the user's
+yes at a terminal, and then deletes the closed branches on the remote. Every other sandbox receives the new rules on its next sync, and its command
 drops its own copies of the closed branches the status lists; agents read the new
 rules in their next session.
 
@@ -545,7 +590,7 @@ prints.
 |---|---|---|---|
 | Project sandbox | read-only | commit on `proposal/*` branches and `refs/reports/*` refs it creates; fetch from its read-only origin through its own command | none |
 | Integrator sandbox | read-only | commit on `main`; close proposals with an ours-merge, reports with a tombstone | none |
-| Host | writes the render, the origin and the status file | fetch, fast-forward, read the clone through a confined container, scope check, push, leased deletion of closed branches and reports; never git in the clone | all |
+| Host | writes the render, the origin and the status file | fetch, fast-forward, read the clone through a confined container, scope check, push (`main` only after the user's yes at a terminal), archive of a closed report, leased deletion of closed branches and reports; never git in the clone | all |
 
 ## Known limits
 
@@ -565,5 +610,8 @@ prints.
 local bare repository as the remote and a stub `docker`; `test-confined-git.sh` covers
 the confined fetch and the host's git function, and `test-host-git.sh` checks with
 `ast-grep` that no git is started in `bin/ai` outside those two functions and a
-short list of named exceptions. `bash tests/ai-sync/test-sync.sh` asserts that
+short list of named exceptions. `test-knowledge-confirm.sh` drives the question for
+`main` under a pseudo-terminal (`pty-run.py`), `test-knowledge-render.sh` the render's
+refusals and `test-nofollow.sh` the function every host write below a sandbox-writable
+directory goes through. `bash tests/ai-sync/test-sync.sh` asserts that
 `GEMINI.md` is skipped once configured.

@@ -144,7 +144,8 @@ unset _sub _ctr _sb
 # ai-sandbox-lib.sh, so that 'ai-sandbox-account reset' recreates the same set.
 mkdir -p "$XAUTH_DIR"
 while IFS= read -r _dir; do
-    [ -n "$_dir" ] && mkdir -p "$SANDBOX_DIR/$_dir"
+    [ -n "$_dir" ] || continue
+    ai_sandbox_make_state_dir "$SANDBOX_DIR" "$_dir" || true   # W7: a link below a bind source is refused, create goes on
 done < <(ai_sandbox_state_dirs)
 unset _dir
 # The clone's directory and the bare origin it fetches from (C-KNOW), made here for the

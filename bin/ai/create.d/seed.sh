@@ -21,8 +21,11 @@ seed_rsync() {  # <path under $HOME> <path under $SANDBOX_DIR> [rsync flags...]
 if [ -f "$SANDBOX_DIR/.seeded" ]; then
     log "already seeded on $(cat "$SANDBOX_DIR/.seeded")"
     log "this project's logins are left alone; 'ai-sandbox-account refresh' re-pulls the host's"
-    if [ ! -f "$SANDBOX_DIR/.antigravity-ide/argv.json" ] && [ -f "$SANDBOX_DIR/.antigravity/argv.json" ]; then
-        cp -a "$SANDBOX_DIR/.antigravity/argv.json" "$SANDBOX_DIR/.antigravity-ide/argv.json"
+    # W4: written without following a link the sandbox may have put at the target (D9: a refusal
+    # is one stderr line and create goes on); a link at the source is not read.
+    if [ ! -f "$SANDBOX_DIR/.antigravity-ide/argv.json" ] && [ -f "$SANDBOX_DIR/.antigravity/argv.json" ] \
+       && [ ! -L "$SANDBOX_DIR/.antigravity/argv.json" ]; then
+        ai_sandbox_nofollow write "$(readlink -f "$SANDBOX_DIR")/.antigravity-ide" argv.json < "$SANDBOX_DIR/.antigravity/argv.json" || true
     fi
 else
     log "seeding from the host, once. Later runs will not overwrite this, so a"
@@ -173,15 +176,19 @@ SDKMAN_FARM="$SANDBOX_DIR/sdkman"
 CONTAINER_SDKMAN_HOST="$CONTAINER_HOME/.sdkman-host"
 
 sync_sdkman_farm() {
-    local part cdir vdir name version cur target seeded=0
+    local part cdir vdir name version cur target seeded=0 fr nf=ai_sandbox_nofollow
 
-    mkdir -p "$SDKMAN_FARM/candidates" "$SDKMAN_FARM/etc" \
-             "$SDKMAN_FARM/var" "$SDKMAN_FARM/ext" "$SDKMAN_FARM/tmp"
+    # W3: everything below the farm (a bind source, mounted at ~/.sdkman) is written through
+    # ai_sandbox_nofollow rooted at it, so a link a sandbox placed there is replaced or refused
+    # (one stderr line, create goes on: D9), never written through.
+    mkdir -p "$SDKMAN_FARM"
+    fr="$(readlink -f "$SANDBOX_DIR")/sdkman"
+    for part in candidates etc var ext tmp; do $nf mkdir "$fr" "$part" || true; done
 
     # Linked, not copied, so a 'sdk selfupdate' on the host reaches every
     # sandbox at once and none of them carries a second copy of libexec.
     for part in bin libexec contrib; do
-        [ -d "$HOST_SDKMAN/$part" ] && ln -sfn "$CONTAINER_SDKMAN_HOST/$part" "$SDKMAN_FARM/$part"
+        if [ -d "$HOST_SDKMAN/$part" ]; then $nf link "$fr" "$part" "$CONTAINER_SDKMAN_HOST/$part" || true; fi
     done
     # src is the exception: sdkman-init.sh loads its functions with
     # 'find "$SDKMAN_DIR/src" -type f', and find does not descend into a
@@ -189,31 +196,30 @@ sync_sdkman_farm() {
     # function was ever defined -- 'sdk' did not exist and the candidates never
     # reached PATH. It is 100 kB, so a real copy, refreshed on every run.
     if [ -d "$HOST_SDKMAN/src" ]; then
-        [ -L "$SDKMAN_FARM/src" ] && rm -f "$SDKMAN_FARM/src"
-        mkdir -p "$SDKMAN_FARM/src"
-        safe_rsync -a --delete "$HOST_SDKMAN/src/" "$SDKMAN_FARM/src/"
+        if [ -L "$SDKMAN_FARM/src" ]; then $nf remove "$fr" src || true; fi
+        $nf copy "$fr" src "$HOST_SDKMAN/src" --delete || true
     fi
 
     # Knobs a sandbox may legitimately change: seeded from the host, then its own.
     # '||' rather than 'if' would make a host without etc/config fatal under set -e.
     if [ ! -f "$SDKMAN_FARM/etc/config" ] && [ -f "$HOST_SDKMAN/etc/config" ]; then
-        cp -f "$HOST_SDKMAN/etc/config" "$SDKMAN_FARM/etc/config"
+        $nf write "$fr" etc/config < "$HOST_SDKMAN/etc/config" || true
     fi
-    [ -d "$HOST_SDKMAN/var" ] && safe_rsync -a --ignore-existing \
-        "$HOST_SDKMAN/var/" "$SDKMAN_FARM/var/"
+    if [ -d "$HOST_SDKMAN/var" ]; then $nf copy "$fr" var "$HOST_SDKMAN/var" --ignore-existing || true; fi
 
     for cdir in "$HOST_SDKMAN/candidates"/*; do
         [ -d "$cdir" ] || continue
         name=${cdir##*/}
-        mkdir -p "$SDKMAN_FARM/candidates/$name"
+        $nf mkdir "$fr" "candidates/$name" || continue
 
         # One link per version the host has installed.
         for vdir in "$cdir"/*; do
             version=${vdir##*/}
             [ "$version" = current ] && continue        # the default pointer, not a version
             [ -d "$vdir" ] || continue
-            ln -sfn "$CONTAINER_SDKMAN_HOST/candidates/$name/$version" \
-                    "$SDKMAN_FARM/candidates/$name/$version"
+            # a real directory here is the sandbox's own 'sdk install' of that version: skipped (D19)
+            if [ -d "$SDKMAN_FARM/candidates/$name/$version" ] && [ ! -L "$SDKMAN_FARM/candidates/$name/$version" ]; then continue; fi
+            $nf link "$fr" "candidates/$name/$version" "$CONTAINER_SDKMAN_HOST/candidates/$name/$version" || true
         done
 
         # Retire links to versions the host has since removed. Symlinks only: a
@@ -222,7 +228,7 @@ sync_sdkman_farm() {
             version=${vdir##*/}
             [ "$version" = current ] && continue
             [ -L "$vdir" ] || continue
-            [ -d "$HOST_SDKMAN/candidates/$name/$version" ] || rm -f "$vdir"
+            [ -d "$HOST_SDKMAN/candidates/$name/$version" ] || $nf remove "$fr" "candidates/$name/$version" || true
         done
 
         cur="$SDKMAN_FARM/candidates/$name/current"
@@ -230,7 +236,7 @@ sync_sdkman_farm() {
             # First sight of this candidate: start from the host's default.
             target=$(readlink "$cdir/current" 2>/dev/null || true)
             if [ -n "$target" ]; then
-                ln -sfn "${target##*/}" "$cur"
+                $nf link "$fr" "candidates/$name/current" "${target##*/}" || true
                 seeded=$((seeded + 1))
             fi
             continue
@@ -247,10 +253,10 @@ sync_sdkman_farm() {
             warn "This sandbox's default $name ($target) is no longer installed on the host."
             target=$(readlink "$cdir/current" 2>/dev/null || true)
             if [ -n "$target" ]; then
-                ln -sfn "${target##*/}" "$cur"
+                $nf link "$fr" "candidates/$name/current" "${target##*/}" || true
                 log "  repointed $name -> ${target##*/} (the host's default)"
             else
-                rm -f "$cur"
+                $nf remove "$fr" "candidates/$name/current" || true
                 log "  dropped the $name default; set one with 'sdk default $name <version>'"
             fi
         fi

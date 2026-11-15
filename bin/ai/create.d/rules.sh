@@ -56,13 +56,15 @@ log "~/.claude/CLAUDE.md -> ~/.gemini/GEMINI.md"
 # do not silently compete.
 LEGACY_BRAIN="$HOME/.gemini/antigravity-ide/brain/CLAUDE.md"
 if [ -f "$LEGACY_BRAIN" ] && [ ! -L "$LEGACY_BRAIN" ]; then
-    mv "$LEGACY_BRAIN" "${LEGACY_BRAIN}.superseded"
-    log "Retired legacy brain file -> ${LEGACY_BRAIN##*/}.superseded (Antigravity never read it)"
+    mv -T "$LEGACY_BRAIN" "${LEGACY_BRAIN}.superseded" \
+        && log "Retired legacy brain file -> ${LEGACY_BRAIN##*/}.superseded (Antigravity never read it)" \
+        || warn "could not retire ${LEGACY_BRAIN}: ${LEGACY_BRAIN}.superseded is a directory or not writable"   # -T: a link there is replaced, never entered (W8)
 fi
 
 # Shared knowledge repository: when configured, the rendered main branch is what
 # the tools read, and the sandbox gets its own clone. All network git runs here,
-# on the host, and never blocks the start.
+# on the host; a failure never blocks the start. For the integrator's project at a
+# terminal it waits for the user's answer on pushing main (U12), before the image build.
 KNOWLEDGE="no"
 if ai_knowledge_configured; then
     step "Shared knowledge repository"
@@ -160,7 +162,8 @@ out. A project sandbox proposes a generic rule with the \`propose-rule\` skill: 
 file on a branch proposal/<date>-<slug>-<hex>, never a commit on main (a hook
 refuses it), never a push; the host pushes on the next sync (\`ai-knowledge sync\`, or
 a re-run of create-ai-sandbox.sh) and the integrator sandbox, which commits on main,
-decides with the \`knowledge-integrate\` skill. \`sandbox-doctor\` shows what is
+decides with the \`knowledge-integrate\` skill; the host pushes that main only after
+the user has seen the change and answered yes at a terminal. \`sandbox-doctor\` shows what is
 pushed and pending. A \`process-report\` report is filed the same way, as a ref
 refs/reports/<date>-<project>-<hex>, outside main and every branch; only the
 integrator sandbox receives it.
@@ -231,7 +234,8 @@ fi
 # sandboxed even when read on the host. Move it aside rather than deleting it.
 if [ -f "$PROJECT_ABS_DIR/.agentrules" ] \
    && head -n 1 "$PROJECT_ABS_DIR/.agentrules" | grep -q '^# Agent Environment Context$'; then
-    mv "$PROJECT_ABS_DIR/.agentrules" "$PROJECT_ABS_DIR/.agentrules.superseded"
-    log "Retired generated .agentrules -> .agentrules.superseded (no tool reads that path)"
+    mv -T "$PROJECT_ABS_DIR/.agentrules" "$PROJECT_ABS_DIR/.agentrules.superseded" \
+        && log "Retired generated .agentrules -> .agentrules.superseded (no tool reads that path)" \
+        || warn "could not retire $PROJECT_ABS_DIR/.agentrules: .agentrules.superseded is a directory or not writable"   # -T as above (W8)
 fi
 }

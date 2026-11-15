@@ -10,6 +10,10 @@
 #
 set -euo pipefail
 
+# I3c: the pulls into a directory a sandbox can write go through ai_sandbox_nofollow, from the
+# library beside this script (found through a link to it, as a user's PATH entry may be one).
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+
 DEFAULT_REMOTE="${AI_SYNC_REMOTE:-gdrive:AI_Sync}"
 REMOTE="$DEFAULT_REMOTE"
 LOCAL_TRASH="${AI_SYNC_TRASH:-$HOME/.ai-sync-trash}"
@@ -220,6 +224,23 @@ pull_copy() {
     if remote_has "$rel"; then run_rclone_copy "$REMOTE/$rel" "$dst" "$@"
     else log_skip "not on remote: $rel"; fi
 }
+# Into a directory a sandbox can write (a bind source's parent or the bind source itself): rclone copies
+# into a host-only staging directory, and the staged tree reaches <root>/<path> through
+# ai_sandbox_nofollow copy with no option (rclone copy's semantics: files replaced, nothing removed),
+# so no link a sandbox placed there is followed. <root> is given resolved by the caller (the user may
+# keep ~/.claude as a link); a refusal is a warning naming the path and the pull goes on (D9).
+# A dry run stages nothing and changes nothing.
+pull_nofollow() {
+    local rel="$1" root="$2" path="$3" stage rc=0
+    if ! remote_has "$rel"; then log_skip "not on remote: $rel"; return 0; fi
+    stage=$(mktemp -d "${TMPDIR:-/tmp}/ai-sync-stage.XXXXXX")
+    run_rclone_copy "$REMOTE/$rel" "$stage" || { rc=$?; rm -rf "$stage"; return "$rc"; }
+    if [ -z "$DRY_RUN" ]; then
+        ai_sandbox_nofollow copy "$root" "$path" "$stage" \
+            || log_warn "some entries of $root/$path were not written (a link or a file was in the way; see above)"
+    fi
+    rm -rf "$stage"
+}
 pull_mirror() {
     if remote_has "$1"; then run_rclone_mirror "$REMOTE/$1" "$2" "$LOCAL_TRASH/$TRASH_STAMP/$1"
     else log_skip "not on remote: $1"; fi
@@ -385,7 +406,7 @@ do_pull() {
     log_step "Restoring Claude Code Memories & Settings..."
     mkdir -p "$HOME/.claude/projects"
     pull_file claude/settings.json "$HOME/.claude"
-    pull_copy claude/projects      "$HOME/.claude/projects"
+    pull_nofollow claude/projects  "$(readlink -f "$HOME/.claude")" projects
 
     # 6. Gemini Console (agy) & CLI State
     log_step "Restoring Gemini Console (agy) State..."
@@ -398,8 +419,8 @@ do_pull() {
     # 7. Curated Brain Artifacts
     log_step "Restoring Curated Brain Artifacts..."
     mkdir -p "$HOME/.gemini/antigravity-ide/brain" "$HOME/.gemini/antigravity/brain"
-    pull_copy brain-artifacts/ide "$HOME/.gemini/antigravity-ide/brain"
-    pull_copy brain-artifacts/agy "$HOME/.gemini/antigravity/brain"
+    pull_nofollow brain-artifacts/ide "$(readlink -f "$HOME/.gemini/antigravity-ide")" brain
+    pull_nofollow brain-artifacts/agy "$(readlink -f "$HOME/.gemini/antigravity")" brain
 
     log_success "Pull completed from $REMOTE"
 }

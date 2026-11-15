@@ -310,7 +310,7 @@ record_integrator() {
             if [ -n "$imain" ] && [ "$imain" != "$hmain" ] \
                && ai_sandbox_host_git "$KNOWLEDGE_MAIN" merge-base --is-ancestor "$hmain" "$imain" 2>/dev/null; then
                 warn "the integrator clone $idir/knowledge has commits on main that are not on origin/main yet; the record is skipped so that main does not diverge."
-                warn "Run: ai-knowledge sync --all (it pushes that main), then this init again."
+                warn "Run: ai-knowledge sync --all (at a terminal it shows that main and pushes it on your yes), then this init again."
                 return 0
             fi
         fi
@@ -484,11 +484,38 @@ cmd_render() {
     local tmp
     tmp=$(mktemp -d "$AI_SANDBOX_ROOT/shared/.knowledge-render.XXXXXX") || return 1
     if ! python3 -I - "$KNOWLEDGE_MAIN" "$tmp" "$KNOWLEDGE_ENV_BLOCK" <<'PYEOF'
-import os, re, shutil, sys
+import os, re, shutil, stat, sys
 main, out, env_block = sys.argv[1:4]
+
+def refuse(path, why):
+    sys.exit("refused: %s %s" % (os.path.relpath(path, main), why))
+
+# Regular files and directories only, at every level, checked with lstat before anything is
+# written (a sandbox's integrator can put a link in main; the render would copy its target).
+def check_tree(path):
+    mode = os.lstat(path).st_mode
+    if stat.S_ISDIR(mode):
+        for fn in sorted(os.listdir(path)):
+            check_tree(os.path.join(path, fn))
+    elif not stat.S_ISREG(mode):
+        refuse(path, "is not a regular file or a directory")
+
+for top in ("rules", "roles", "skills"):
+    p = os.path.join(main, top)
+    if os.path.lexists(p):
+        if not stat.S_ISDIR(os.lstat(p).st_mode):
+            refuse(p, "is not a directory")
+        check_tree(p)
 
 def read(path):
     return open(path, encoding="utf-8").read()
+
+def read_main(path):   # no link is followed even if one appears after the check
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, encoding="utf-8") as f:
+        return f.read()
+
+ROLE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 def frontmatter(text):
     m = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.DOTALL)
@@ -519,7 +546,7 @@ for d in ("claude/agents", "gemini/agents", "antigravity/rules", "codex/agents",
 parts = []
 rules = os.path.join(main, "rules", "global.md")
 if os.path.isfile(rules):
-    parts.append(read(rules).rstrip("\n"))
+    parts.append(read_main(rules).rstrip("\n"))
 if os.path.isfile(env_block):
     parts.append(read(env_block).rstrip("\n"))
 with open(os.path.join(out, "GLOBAL.md"), "w", encoding="utf-8") as f:
@@ -530,11 +557,13 @@ if os.path.isdir(roles):
     for fn in sorted(os.listdir(roles)):
         if not fn.endswith(".md") or fn.lower() == "readme.md":
             continue
-        text = read(os.path.join(roles, fn))
+        text = read_main(os.path.join(roles, fn))
         if not text.endswith("\n"):
             text += "\n"
         meta, body = frontmatter(text)
         name = meta.get("name") or fn[:-3]
+        if not ROLE_NAME.fullmatch(name):
+            refuse(os.path.join(roles, fn), "has a role name outside [a-z0-9][a-z0-9-]{0,63}")
         description = meta.get("description", "")
         body = body.strip("\n") + "\n"
         # Claude Code subagents read the canonical format as is. Gemini CLI
@@ -623,7 +652,7 @@ wire_host() {
 # A tool whose directory does not exist is left alone, and so is a real
 # directory of the same name: that is a local skill, not ours to replace.
 link_skills_into() {
-    local base=$1 f name d p
+    local base=$1 f name d p root
     for f in "$AI_KNOWLEDGE_RENDER"/skills/*/; do
         [ -d "$f" ] || continue
         name=$(basename "$f")
@@ -631,19 +660,36 @@ link_skills_into() {
             [ -d "$base/$d" ] || continue
             p="$base/$d/skills/$name"
             if [ -d "$p" ] && [ ! -L "$p" ]; then continue; fi
-            mkdir -p "$base/$d/skills"
-            ln -sfn "../../.agents/skills/$name" "$p"
+            if [ "$base" = "$HOME" ]; then
+                # D17: $HOME is no bind source (a host may keep ~/.claude as a link); plain commands as before
+                mkdir -p "$base/$d/skills"
+                ln -sfn "../../.agents/skills/$name" "$p"
+            else
+                # W1: a sandbox directory's tool directories are bind sources; below them a sandbox
+                # may have placed a link, which no host write follows (a refusal names the path on stderr)
+                root="$(readlink -f "$base")/$d"
+                ai_sandbox_nofollow mkdir "$root" skills || continue
+                ai_sandbox_nofollow link "$root" "skills/$name" "../../.agents/skills/$name" || true
+            fi
         done
     done
 }
 
 # Every knowledge mount target inside the sandbox directory must exist before
-# 'compose up', or Docker creates it root-owned.
+# 'compose up', or Docker creates it root-owned. W2: through ai_sandbox_nofollow, rooted at the
+# tool directories (bind sources); a link where a target belongs is left as it is and named.
 prepare_targets() {
-    local sb=$1 f
-    mkdir -p "$sb/.gemini/agents" "$sb/.claude/agents" "$sb/.codex/agents"
+    local sb=$1 d f root
+    for d in .gemini .claude .codex; do
+        mkdir -p "$sb/$d"
+        root="$(readlink -f "$sb")/$d"
+        ai_sandbox_nofollow mkdir "$root" agents || true
+    done
     for f in .gemini/GEMINI.md .claude/CLAUDE.md .codex/AGENTS.md; do
-        [ -e "$sb/$f" ] || : > "$sb/$f" 2>/dev/null || true
+        d=${f%%/*}; root="$(readlink -f "$sb")/$d"
+        if [ -L "$sb/$f" ]; then warn "$sb/$f is a link; left as it is, not written through"
+        elif [ ! -e "$sb/$f" ]; then ai_sandbox_nofollow write "$root" "${f#*/}" </dev/null || true
+        fi
     done
 }
 
@@ -679,6 +725,7 @@ refresh_origin_noted() {   # <sandbox dir> <proposals|integrator>
 # ---------------------------------------------------------------------------
 
 CLONE=""
+SYNC_PROJECT=""    # the project directory of the clone being synced, for the commands the status names
 MAIN_PUSHED="no"   # set when the integrator sync advanced origin/main
 STATUS_NOTE=""     # appended to this clone's status line
 STATUS_FILE=""; STATUS_ROLE=""; STATUS_ID=""
@@ -706,11 +753,11 @@ set_status() {
     mkdir -p "$(dirname "$STATUS_FILE")"
     tmp="$STATUS_FILE.$$"
     {
-        printf '%s %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$word" "$(printf '%s' "$text" | tr -d '[:cntrl:]')"
+        printf '%s %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$word" "$(printf '%s' "$text" | ai_sandbox_display_clean | tr '\t\n' '  ')"
         printf 'role=%s\nproject-id=%s\n' "$STATUS_ROLE" "$STATUS_ID"
-        [ ${#STATUS_KEYS[@]} -eq 0 ] || printf '%s\n' "${STATUS_KEYS[@]}" | tr -d '\000-\011\013-\037\177'
+        [ ${#STATUS_KEYS[@]} -eq 0 ] || printf '%s\n' "${STATUS_KEYS[@]}" | ai_sandbox_display_clean
     } > "$tmp" && mv -f "$tmp" "$STATUS_FILE"
-    log "$text"
+    log "$(printf '%s' "$text" | ai_sandbox_display_clean | tr '\t\n' '  ')"
 }
 # The same status with one more note; an ok line becomes a warning.
 status_amend() {   # <note>
@@ -725,7 +772,7 @@ status_amend() {   # <note>
 # "never" when there is none.
 status_line() {   # <sandbox dir>
     local line=""
-    [ -f "$1/status/knowledge" ] && line=$(head -1 "$1/status/knowledge" | tr -d '[:cntrl:]')
+    [ -f "$1/status/knowledge" ] && line=$(head -1 "$1/status/knowledge" | ai_sandbox_display_clean | tr '\t\n' '  ')
     printf '%s' "${line:-never}"
 }
 
@@ -745,9 +792,10 @@ tip_state() {   # <commit>
 }
 
 PROPOSAL_RE='^proposal/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
-# reads-outside: refs/reports/<name> and refs/reports-closed/<name> of the private
-# remote, read by the process-report skill and the integrator's knowledge-integrate
-# skill. A name is matched after the refs/reports/ prefix.
+# reads-outside: refs/reports/<name>, refs/reports-closed/<name> and refs/reports-archive/<name>
+# of the private remote, read by the process-report skill and the integrator's
+# knowledge-integrate skill (the archive is written by the host alone, create only, and read by
+# hand). A name is matched after the refs/reports/ prefix.
 REPORT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+-[0-9a-f]{4}$'
 
 # After a sync, a running container whose stamp is current runs the in-sandbox command
@@ -762,12 +810,46 @@ run_in_sandbox() {   # <sandbox dir>
     [ "$(ai_sandbox_knowledge_state "$1")" = current ] || return 0
     ai_sandbox_container_running "$name" || return 0
     out=$(timeout -k 5 "$GIT_TIMEOUT" docker exec "$name" /usr/local/bin/sandbox-knowledge-sync </dev/null 2>&1) || rc=$?
-    [ -z "$out" ] || printf '%s\n' "$out" | tr -d '\000-\011\013-\037\177' | sed 's/^/  /'
+    [ -z "$out" ] || printf '%s\n' "$out" | ai_sandbox_display_clean | sed 's/^/  /'
     case $rc in
         0) ;;
         124|137) status_amend "the sandbox's own sync failed (timed out after ${GIT_TIMEOUT}s)" ;;
         *)       status_amend "the sandbox's own sync failed (exit $rc)" ;;
     esac
+}
+
+# U12: the question is asked only where a person can answer it: standard input and standard
+# error are terminals and this process group is the terminal's foreground group (a background
+# job would be stopped at the read, unseen). create's output in a log, a pipe, B4's loop: no.
+at_terminal() {
+    local pg
+    [ -t 0 ] && [ -t 2 ] || return 1
+    pg=$(ps -o pgid= -o tpgid= -p $$ 2>/dev/null) || return 1
+    set -- $pg
+    [ $# -eq 2 ] && [ "$1" = "$2" ]
+}
+# U12: shows what the integrator's main holds beyond the remote's (commits, changed paths, the
+# patch; all through the display filter, on standard error) and asks. 0 only on yes; no
+# environment variable, option or configuration key answers it (D6).
+confirm_main() {   # <the tip to push> <the host's own main, or empty>
+    local tip=$1 base=${2:-4b825dc642cb6eb9a060e54bf8d69288fbee4904} reply=""
+    {
+        printf '\nThe integrator'"'"'s main is ahead of the remote'"'"'s. Commits:\n'
+        local range=$tip total=0
+        [ -n "${2:-}" ] && range="$2..$tip"
+        hostgit --no-pager log --no-decorate --no-notes -n 50 --format='  %h %s' "$range" || true
+        total=$(hostgit --no-pager rev-list --count "$range" 2>/dev/null) || total=0
+        [ "${total:-0}" -le 50 ] || printf '  and %d more\n' $((total - 50))
+        printf '\nChanged paths:\n'
+        hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --name-status "$base" "$tip" | sed 's/^/  /' || true
+        printf '\nPatch:\n'
+        # --text: a NUL byte or a -diff/binary attribute would else replace the content with "Binary files differ"
+        hostgit --no-pager diff --no-ext-diff --no-textconv --no-color --text "$base" "$tip" || true
+        printf '\nPush main (%s) to %s? [y/N] ' "${tip:0:12}" "$REMOTE"
+    } 2>&1 | ai_sandbox_show_invisible | ai_sandbox_display_clean >&2
+    read -r reply || true
+    case $reply in y|Y|yes|YES|Yes) return 0 ;; esac
+    return 1
 }
 
 # <sandbox dir> <project id> <proposals|integrator>. Nothing here fails the caller: every
@@ -780,7 +862,8 @@ run_in_sandbox() {   # <sandbox dir>
 #
 # Order, for both roles: mirror -> classify every proposal branch as malformed, closed
 # (tip_state), empty, or open -> push the open ones -> list the closed ones. The
-# integrator also pushes its main when it descends from the host's own and deletes
+# integrator also pushes its main when it descends from the host's own, after the user's yes
+# at a terminal (confirm_main), and deletes
 # closed branches on the remote, under a lease on the tip it saw, so an amendment pushed
 # meanwhile survives.
 sync_clone() {
@@ -879,22 +962,24 @@ sync_clone() {
         pushed=$((pushed + 1))
     done < <(hostgit for-each-ref --format='%(refname)' "$mirror/heads/proposal/")
 
-    local main_note=""
+    local main_note="" main_waits=""
     if [ "$role" = integrator ] && [ "$main_state" = current ] && [ -n "$mmain" ] && [ "$mmain" != "$hmain" ]; then
-        if [ "$net" = no ]; then
-            HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$mirror/heads/main:refs/heads/main")"); main_note="main pending"
-        else
+        # U12: main reaches the remote only after the user's yes, at a terminal; the id pushed is
+        # the one resolved above, before the display. Without a yes the status names the command.
+        if [ "$net" = yes ] && at_terminal && confirm_main "$mmain" "$hmain"; then
             rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q origin "$mmain:refs/heads/main" 2>&1) || rc=$?
             if [ "$rc" -eq 0 ]; then MAIN_PUSHED="yes"; main_note="main pushed"
-            else net_failed "$rc" "$out"; HINT_PUSH+=("$(hint git -C "$KNOWLEDGE_MAIN" push origin "$mirror/heads/main:refs/heads/main")"); main_note="main push failed"
+            else net_failed "$rc" "$out"; HINT_PUSH+=("$(hint ai-knowledge sync "$SYNC_PROJECT")"); main_note="main push failed"
             fi
+        else
+            main_waits=yes; main_note="main waits for your confirmation: run $(hint ai-knowledge sync "$SYNC_PROJECT")"
         fi
     fi
     # Remote deletion: only the integrator, only after main is on the remote,
     # only for a tip that is an ancestor of origin/main, and only if the remote
     # still has that tip (the lease). A rejected lease means the proposer pushed
     # an amendment: the proposal is open again, nothing is lost.
-    if [ "$role" = integrator ] && [ "$net" = yes ] && [ "$main_note" != "main push failed" ] && [ "$main_note" != "main pending" ]; then
+    if [ "$role" = integrator ] && [ "$net" = yes ] && [ "$main_note" != "main push failed" ] && [ -z "$main_waits" ]; then
         # Branches the integrator closed in this round became ancestors of
         # origin/main only now that main is pushed; list those too.
         while IFS= read -r ref; do
@@ -975,7 +1060,7 @@ sync_clone() {
 
     if [ "$role" = integrator ] && [ "$net" = yes ]; then
         local -a rtombs=()
-        local rfail=" " rstale=" "
+        local rfail=" " rstale=" " rorig rarch
         while IFS= read -r rref; do
             [ -n "$rref" ] || continue
             rname=${rref#"$mirror/reports-closed/"}
@@ -983,6 +1068,22 @@ sync_clone() {
             rtip=$(hostgit rev-parse -q --verify "$rref" 2>/dev/null || true)
             [ -n "$rtip" ] || continue
             rtombs+=("$rname")
+            # M6: a closed report is archived before it is deleted, the commit being the host's own fetch
+            # of the remote's report, which the tombstone must name; the archive ref is created, never
+            # moved, and the report stays unless the archive holds that commit.
+            rorig=$(hostgit rev-parse -q --verify "refs/origin-reports/$rname^{commit}" 2>/dev/null || true)
+            if [ -n "$rorig" ]; then
+                if [ "$rorig" != "$rtip" ]; then rstale="$rstale$rname "; continue; fi
+                rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/reports-archive/$rname:" origin "$rtip:refs/reports-archive/$rname" 2>&1) || rc=$?
+                if [ "$rc" -ne 0 ]; then
+                    rc=0; rarch=$(git_net -C "$KNOWLEDGE_MAIN" ls-remote origin "refs/reports-archive/$rname" 2>&1) || rc=$?
+                    if [ "$rc" -ne 0 ]; then net_failed "$rc" "$rarch"; warn "cannot archive report $rname on the remote: $out"; rfail="$rfail$rname "; continue; fi
+                    if [ "${rarch%%[[:space:]]*}" != "$rtip" ]; then
+                        STATUS_NOTE="${STATUS_NOTE:+$STATUS_NOTE; }report $rname not closed: refs/reports-archive/$rname holds another commit or could not be created"
+                        rfail="$rfail$rname "; continue
+                    fi
+                fi
+            fi
             rc=0; out=$(git_net -C "$KNOWLEDGE_MAIN" push -q "--force-with-lease=refs/reports/$rname:$rtip" origin ":refs/reports/$rname" 2>&1) || rc=$?
             [ "$rc" -ne 0 ] || continue
             case $out in
@@ -1014,9 +1115,9 @@ sync_clone() {
     refresh_origin_noted "$sb" "$role"
 
     if [ -n "$refused" ]; then
-        set_status "refused: not pushed:$refused; fix or delete those branches"
+        set_status "refused: not pushed:$refused; fix or delete those branches${main_note:+; $main_note}"
     elif [ -n "$conflicts" ]; then
-        set_status "conflict: remote has commits these branches lack:$conflicts; merge origin/<branch> inside the sandbox"
+        set_status "conflict: remote has commits these branches lack:$conflicts; merge origin/<branch> inside the sandbox${main_note:+; $main_note}"
     elif [ "$main_state" = diverged ]; then
         # The integrator's own commits on main are wanted: merged, never reset
         # away. A proposing clone's belong on a proposal branch first.
@@ -1029,6 +1130,8 @@ sync_clone() {
         set_status "offline: cannot reach $REMOTE; pending push: $pending branch(es)${main_note:+, $main_note} (see the commands below)"
     elif [ -n "$pushfail" ] || [ "$main_note" = "main push failed" ]; then
         set_status "push failed: $NET_REASON (${main_note:+$main_note}${pushfail:+; branches:$pushfail})"
+    elif [ -n "$main_waits" ]; then
+        set_status "$main_note; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")$([ "$rpushed" -eq 0 ] || printf '; reports pushed %d' "$rpushed")"
     else
         set_status "ok: main current${main_note:+, $main_note}; pushed $pushed; closed $closed$([ "$empty" -eq 0 ] || printf '; empty %d' "$empty")$([ "$rpushed" -eq 0 ] || printf '; reports pushed %d' "$rpushed")"
     fi
@@ -1043,6 +1146,7 @@ sync_clone() {
 # by 'sync PROJECT_DIR' and by the children of 'sync --all'; never renders.
 sync_project_clone() {   # <project dir> <sandbox dir>
     local project=$1 sb=$2 id role=proposals
+    SYNC_PROJECT=$project
     id=$(ai_sandbox_project_id "$project")
     if [ -n "$INTEGRATOR" ] && [ "$INTEGRATOR" = "$project" ]; then role=integrator; fi
     if ! lock_take "$sb/.knowledge.lock"; then
@@ -1105,6 +1209,7 @@ cmd_sync() {
 cmd_sync_all() {
     local jobs="${AI_KNOWLEDGE_JOBS:-4}" before after sb project state pids=() running=0
     local -a sbs=() projects=()
+    local integ_sb="" irc=0
     sync_main_and_render || return 0
     before=$(ai_sandbox_host_git "$KNOWLEDGE_MAIN" rev-parse HEAD 2>/dev/null || true)
 
@@ -1114,6 +1219,9 @@ cmd_sync_all() {
         rm -f "$sb/.sync-output.$$" "$sb/.sync-exit.$$"
         [ -n "$project" ] || continue                       # unstamped: a row, no child
         [ "$(ai_sandbox_knowledge_state "$sb")" = current ] || continue   # stale: refused at start too
+        # The integrator's clone is synced last, in the foreground: it may ask (U12), and its
+        # question is then the last thing on the terminal.
+        if [ -n "$INTEGRATOR" ] && [ "$project" = "$INTEGRATOR" ]; then integ_sb=$sb; continue; fi
         while [ "$running" -ge "$jobs" ]; do wait -n || true; running=$((running - 1)); done
         (
             # The subshell inherits set -e; without the guard a failing child
@@ -1133,7 +1241,13 @@ cmd_sync_all() {
         cat "$sb/.sync-output.$$"
     done
 
-    # An integrator child may have pushed main; one more fetch shows it.
+    if [ -n "$integ_sb" ]; then
+        printf '\n== %s\n' "$(basename "$integ_sb")"
+        sync_project_clone "$INTEGRATOR" "$integ_sb" || irc=$?
+        echo "$irc" > "$integ_sb/.sync-exit.$$"
+    fi
+
+    # An integrator clone may have pushed main; one more fetch shows it.
     if [ "$MAIN_FETCHED" = yes ]; then
         if lock_take "$AI_KNOWLEDGE_ROOT/.lock"; then
             sync_main || true
