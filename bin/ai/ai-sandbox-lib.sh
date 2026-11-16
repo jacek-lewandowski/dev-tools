@@ -428,14 +428,23 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
 # status line: standard input to standard output, every code point of category Cc except
 # newline and tab, the bidi marks (U+200E, U+200F, U+061C), embeddings, overrides and
 # isolates (U+202A to U+202E, U+2066 to U+2069), and every byte that is not UTF-8, dropped.
-ai_sandbox_display_clean() {
-    python3 -I -c '
-import sys, unicodedata
-text = sys.stdin.buffer.read().decode("utf-8", "ignore")
-keep = "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
+# The rule's Python source, defined once: display_clean(text) returns the text without those code
+# points. Loaded into every python3 -I program that prints a name read from a sandbox
+# (ai_sandbox_display_clean, ai_sandbox_nofollow's refusals, ai_sandbox_seed_backup's skips).
+ai_sandbox_display_rule_py() {
+    cat <<'PY'
+import unicodedata
+def display_clean(text):
+    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
         and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
         and not "\u2066" <= c <= "\u2069"))
-sys.stdout.buffer.write(keep.encode("utf-8"))' \
+PY
+}
+
+ai_sandbox_display_clean() {
+    python3 -I -c "$(ai_sandbox_display_rule_py)
+import sys
+sys.stdout.buffer.write(display_clean(sys.stdin.buffer.read().decode('utf-8', 'ignore')).encode('utf-8'))" \
         || LC_ALL=C tr -cd '\11\12\40-\176'   # no usable python3: only printable ASCII, never the raw text
 }
 
@@ -472,7 +481,7 @@ sys.stdout.buffer.write("".join(out).encode("utf-8", "surrogateescape"))' || cat
 ai_sandbox_nofollow() {   # <op> <root> <path> [<arg>...]
     local prog
     prog=$(cat <<'PY'
-import fnmatch, os, re, stat, sys, unicodedata
+import fnmatch, os, re, stat, sys
 
 PROG = "ai_sandbox_nofollow"
 DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -543,17 +552,10 @@ else:
         usage("an --exclude holds no slash and is not empty")
 
 
-def clean(text):
-    # the display rule of ai_sandbox_display_clean, for a name the sandbox chose
-    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
-        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
-        and not "\u2066" <= c <= "\u2069"))
-
-
 def refuse(where, why):
     global RC
     RC = 1
-    sys.stderr.write(clean("%s: refused %s %s: %s\n" % (PROG, root, where, why)))
+    sys.stderr.write(display_clean("%s: refused %s %s: %s\n" % (PROG, root, where, why)))
 
 
 def why(e):
@@ -843,7 +845,8 @@ except BrokenPipeError:
 sys.exit(RC)
 PY
 )
-    python3 -I -c "$prog" "$@"
+    python3 -I -c "$(ai_sandbox_display_rule_py)
+$prog" "$@"
 }
 
 # C-INSTALL: a host entry point calls this first, with its own path. 0 when the directory
@@ -1629,17 +1632,13 @@ ai_sandbox_env_set() {   # <sandbox dir> <key> <value>
 # every component below the sandbox directory without following a link (ai_sandbox_nofollow has
 # no read operation); a link, or anything on the way that is one, is skipped with a stderr line.
 ai_sandbox_seed_backup() {   # <sandbox dir> <backup dir> <sandbox path>...
-    python3 -I -c '
-import os, shutil, stat, sys, unicodedata
+    local prog
+    prog=$(cat <<'PY'
+import os, shutil, stat, sys
 root, dest, paths = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3:]
 FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
-def clean(text):
-    # the display rule of ai_sandbox_display_clean, for a name the sandbox chose
-    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
-        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
-        and not "\u2066" <= c <= "\u2069"))
 def skip(p, why):
-    sys.stderr.write(clean("ai-sandbox: not backed up: %s (%s)\n" % (p, why)))
+    sys.stderr.write(display_clean("ai-sandbox: not backed up: %s (%s)\n" % (p, why)))
 def copy_tree(fd, rel):
     os.makedirs(os.path.join(dest, rel), exist_ok=True)
     for name in sorted(os.listdir(fd)):
@@ -1689,7 +1688,10 @@ for p in paths:
         skip(p, e.strerror or str(e))
     finally:
         os.close(fd)
-' "$@"
+PY
+)
+    python3 -I -c "$(ai_sandbox_display_rule_py)
+$prog" "$@"
 }
 
 # The Codex default (phase 7, T09; keys settled from Codex's configuration reference): on standard

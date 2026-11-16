@@ -81,4 +81,6 @@ mkdir -p "$tmp/bk-src/.claude" "$tmp/bk-dst"; mkfifo "$tmp/bk-src/.claude/.crede
 timeout 20 bash -c '. "$1"; ai_sandbox_seed_backup "$2" "$3" .claude/.credentials.json' _ "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh" "$tmp/bk-src" "$tmp/bk-dst" >/dev/null 2>&1
 assert_eq "I-2 the backup helper on a FIFO row exits 0 (not 124)" "$?" 0
 
+# R2-1: the display rule has one definition (the bidi marks' literal appears once in bin/)
+assert_eq "R2-1 one definition of the display rule in bin/" "$(git -C "$REPO_ROOT" grep -c -F -e '\u200e\u200f\u061c' -- bin | awk -F: '{n+=$NF} END{print n+0}')" 1
 finish
