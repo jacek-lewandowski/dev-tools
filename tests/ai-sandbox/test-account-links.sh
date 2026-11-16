@@ -64,4 +64,21 @@ for cmd in reset refresh; do
     assert_eq "I-1 $cmd prints no ESC or BEL from a sandbox name" "$bad" 0
 done
 
+# I-2: a FIFO the sandbox placed where reset reads agy's settings does not hang it; it counts as
+# "not JSON" and the file is written anew. A FIFO inside a login directory is skipped by refresh.
+host
+mkdir -p "$dir/.gemini/antigravity-cli"; rm -f "$dir/.gemini/antigravity-cli/settings.json"; mkfifo "$dir/.gemini/antigravity-cli/settings.json"
+(cd "$proj" && timeout 30 bash "$REPO_ROOT/bin/ai/ai-sandbox-account" reset --yes >"$tmp/i2.out" 2>&1); rc=$?; out=$(cat "$tmp/i2.out")
+assert_eq "I-2 reset with a FIFO at agy's settings exits 0 (not 124)" "$rc" 0
+assert_contains "I-2 reset replaces the FIFO with the trust file" "$([ -f "$dir/.gemini/antigravity-cli/settings.json" ] && cat "$dir/.gemini/antigravity-cli/settings.json")" 'trustedWorkspaces'
+host
+mkfifo "$dir/claude-data/Local Storage/pipe"
+(cd "$proj" && timeout 30 bash "$REPO_ROOT/bin/ai/ai-sandbox-account" refresh --yes >"$tmp/i2.out" 2>&1); rc=$?; out=$(cat "$tmp/i2.out")
+assert_eq "I-2 refresh with a FIFO in a login directory exits 0 (not 124)" "$rc" 0
+assert_contains "I-2 refresh names the FIFO as not backed up" "$out" 'not a plain file'
+# the backup helper alone, on a FIFO at a file row
+mkdir -p "$tmp/bk-src/.claude" "$tmp/bk-dst"; mkfifo "$tmp/bk-src/.claude/.credentials.json"
+timeout 20 bash -c '. "$1"; ai_sandbox_seed_backup "$2" "$3" .claude/.credentials.json' _ "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh" "$tmp/bk-src" "$tmp/bk-dst" >/dev/null 2>&1
+assert_eq "I-2 the backup helper on a FIFO row exits 0 (not 124)" "$?" 0
+
 finish

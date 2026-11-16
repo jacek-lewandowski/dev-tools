@@ -1657,8 +1657,10 @@ def copy_tree(fd, rel):
         except OSError as e:
             skip(sub, e.strerror or str(e))
 def copy_file(fd, name, rel):
-    sfd = os.open(name, FL, dir_fd=fd)
+    sfd = os.open(name, FL | os.O_NONBLOCK, dir_fd=fd)   # a FIFO swapped in after the stat must not block
     try:
+        if not stat.S_ISREG(os.fstat(sfd).st_mode):
+            raise OSError(0, "not a plain file")
         out = os.path.join(dest, rel)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with os.fdopen(os.dup(sfd), "rb") as src, open(out, "wb") as dst:
@@ -1729,7 +1731,7 @@ ai_sandbox_seed_agy_trust() {   # <sandbox dir> <project path>
     local root out
     root=$(readlink -f "$1") || return 1
     out=$(python3 -I -c '
-import json, os, sys
+import json, os, stat, sys
 root, project = sys.argv[1:3]
 FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
 doc = {}
@@ -1737,11 +1739,13 @@ fd = os.open(root, FL | os.O_DIRECTORY)
 try:
     for c in (".gemini", "antigravity-cli"):
         nfd = os.open(c, FL | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
-    ffd = os.open("settings.json", FL, dir_fd=fd)
+    # O_NONBLOCK: a FIFO placed there must not block the open; only a regular file is read
+    ffd = os.open("settings.json", FL | os.O_NONBLOCK, dir_fd=fd)
     with os.fdopen(ffd, "rb") as f:
-        data = json.loads(f.read().decode("utf-8"))
-    if isinstance(data, dict):
-        doc = data
+        if stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            data = json.loads(f.read().decode("utf-8"))
+            if isinstance(data, dict):
+                doc = data
 except (OSError, ValueError):
     pass
 finally:
