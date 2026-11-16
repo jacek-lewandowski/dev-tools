@@ -1,0 +1,61 @@
+# bin/ai/MANIFEST  (tracked: .gitignore gets !bin/ai/MANIFEST)
+#   One entry per line: <kind> <path>. Lines starting with '#' and blank lines are ignored.
+#   kind  entry   a host entry point: executable; the first thing it does is the refusal
+#         source  a file a host program sources
+#         image   a file copied into the image's build context
+#         mount   a directory mounted into sandboxes, read-only
+#   path  relative to the repository root; a path ending in '/' covers every file below it.
+#   A path may appear under several kinds, one line each. Every listed path exists.
+
+entry bin/ai/create-ai-sandbox.sh
+entry bin/ai/ai-sandbox
+entry bin/ai/ai-sandbox-account
+entry bin/ai/ai-sandbox-attach
+entry bin/ai/ai-sandbox-extensions
+entry bin/ai/ai-sandbox-gc
+entry bin/ai/ai-sandbox-install
+entry bin/ai/ai-sandbox-migrate
+entry bin/ai/ai-sandbox-restart
+entry bin/ai/ai-sandbox-rm
+entry bin/ai/ai-sandbox-stop
+entry bin/ai/ai-knowledge
+entry bin/ai/context-statusline
+entry bin/ai/handover-ready
+entry bin/ai/update-antigravity-ide.sh
+entry tests/ai-sandbox/run-tests.sh
+entry verify-ai-sandbox-on-host.sh
+
+source bin/ai/ai-sandbox-lib.sh
+source bin/ai/create.d/compose.sh
+source bin/ai/create.d/devices.sh
+source bin/ai/create.d/display.sh
+source bin/ai/create.d/image.sh
+source bin/ai/create.d/install.sh
+source bin/ai/create.d/options.sh
+source bin/ai/create.d/project.sh
+source bin/ai/create.d/resources.sh
+source bin/ai/create.d/rules.sh
+source bin/ai/create.d/seed.sh
+source bin/ai/create.d/start.sh
+# read by ai-knowledge init (the knowledge repository's first content)
+source bin/ai/knowledge-seed/
+
+image bin/ai/image/Dockerfile.base
+image bin/ai/image/Dockerfile.docker
+image bin/ai/image/Dockerfile.gui
+image bin/ai/image/Dockerfile.head
+image bin/ai/image/Dockerfile.tail
+image bin/ai/image/ai-delegate
+image bin/ai/image/claude-managed-settings.json
+image bin/ai/image/entrypoint.sh
+image bin/ai/image/sandbox-bashrc.sh
+image bin/ai/image/sandbox-desktop
+image bin/ai/image/sandbox-doctor
+image bin/ai/image/sandbox-env.sh
+image bin/ai/image/sandbox-idea
+image bin/ai/image/sandbox-knowledge-sync
+image bin/ai/image/sandbox-sdk
+image bin/ai/image/xdg-open
+image bin/ai/context-statusline
+
+mount tools/

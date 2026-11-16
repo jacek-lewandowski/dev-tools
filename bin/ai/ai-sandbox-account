@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Inspect and manage the AI accounts this project's sandbox uses.
+# Inspect and manage the AI logins this project's sandbox uses.
 #
-# Credentials are seeded from the host once, when the sandbox is created, and
-# are never overwritten afterwards -- that is what lets one project hold a
-# different Claude, Codex or Gemini account from another. This command is how
-# you deliberately change that: pull the host's credentials in again, or clear
-# them so the next start prompts for a fresh login.
+# A sandbox holds the logins made inside it ("inside" mode, the default); only a sandbox created
+# with --host-logins (or one from before the mode was recorded) holds copies of the host's.
+# What is copied or removed is the login rows of ai_sandbox_seed_table in the lib, nothing else.
+#   status   which mode the sandbox is in
+#   refresh  host mode only: copy the host's login rows again (the old ones are backed up)
+#   reset    any mode: remove the login rows, copy the settings rows, record the inside mode
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 ai_sandbox_require_ctx || exit 1
 
 cmd=${1:-status}
@@ -23,7 +25,7 @@ confirm() {
 
 claude_account_of() {
     [ -f "$1" ] || { echo "no state file"; return 0; }
-    python3 - "$1" <<'PY' 2>/dev/null || echo unknown
+    python3 -I - "$1" <<'PY' 2>/dev/null || echo unknown
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -38,10 +40,15 @@ status)
     printf '%-13s %s\n' project "$AI_SANDBOX_PROJECT"
     printf '%-13s %s\n' sandbox "$AI_SANDBOX_NAME"
     if [ -f "$AI_SANDBOX_DIR/.seeded" ]; then
-        printf '%-13s %s\n' seeded "$(cat "$AI_SANDBOX_DIR/.seeded") -- host credentials are no longer copied in"
+        printf '%-13s %s\n' seeded "$(cat "$AI_SANDBOX_DIR/.seeded") -- the first seed is done and is not repeated"
     else
         printf '%-13s %s\n' seeded "no (the sandbox has not been created yet)"
     fi
+    case "$(ai_sandbox_env_value "$AI_SANDBOX_DIR" SANDBOX_HOST_LOGINS)" in
+        0) printf '%-13s %s\n' logins inside ;;
+        1) printf '%-13s %s\n' logins host ;;
+        *) printf '%-13s %s\n' logins "host (not recorded)" ;;
+    esac
     printf '%-13s %s\n' claude "$(claude_account_of "$AI_SANDBOX_DIR/.claude.json")"
     while IFS='|' read -r name path; do
         [ -n "$name" ] || continue
@@ -57,45 +64,66 @@ gemini|.gemini/google_accounts.json
 TOOLS
     ;;
 refresh)
-    confirm "Replace this project's AI credentials with the host's?" || exit 1
+    if [ "$(ai_sandbox_env_value "$AI_SANDBOX_DIR" SANDBOX_HOST_LOGINS)" = 0 ]; then
+        {
+            echo "This sandbox holds logins made inside it; there are no host logins to refresh."
+            echo "To copy the host's logins, re-create it with: $(ai_sandbox_recreate_command "$AI_SANDBOX_DIR") --host-logins"
+        } >&2
+        exit 1
+    fi
+    confirm "Replace this project's AI logins with the host's?" || exit 1
+    root=$(readlink -f "$AI_SANDBOX_DIR")
     backup="$AI_SANDBOX_DIR/.credentials-backup"
-    rm -rf "$backup"; mkdir -p "$backup"
-    while IFS='|' read -r host_rel sb_rel; do
-        [ -n "$host_rel" ] || continue
-        if [ -e "$AI_SANDBOX_DIR/$sb_rel" ]; then
-            mkdir -p "$backup/$(dirname "$sb_rel")"
-            cp -a "$AI_SANDBOX_DIR/$sb_rel" "$backup/$sb_rel"
-        fi
-        [ -d "$HOME/$host_rel" ] || continue
-        mkdir -p "$AI_SANDBOX_DIR/$sb_rel"
-        # Same excludes as the seed, and --delete (not --delete-excluded)
-        # leaves the excluded live mount points in place.
-        mapfile -t ex < <(ai_sandbox_seed_excludes "$host_rel")
-        rsync -a --delete "${ex[@]}" "$HOME/$host_rel/" "$AI_SANDBOX_DIR/$sb_rel/"
-    done < <(ai_sandbox_seed_paths)
-    [ -f "$AI_SANDBOX_DIR/.claude.json" ] && cp -a "$AI_SANDBOX_DIR/.claude.json" "$backup/"
-    if [ -f "$HOME/.claude.json" ]; then cp -f "$HOME/.claude.json" "$AI_SANDBOX_DIR/.claude.json"; fi
+    rm -rf "$backup"; mkdir -p "$backup"; chmod 700 "$backup"
+    # L6: sandbox-side paths go only to the no-follow helpers
+    mapfile -d '' -t present < <(ai_sandbox_seed_sandbox_paths "$AI_SANDBOX_DIR" login)
+    [ "${#present[@]}" -eq 0 ] || ai_sandbox_seed_backup "$AI_SANDBOX_DIR" "$backup" "${present[@]}"
+    copied=$(ai_sandbox_seed_copy "$AI_SANDBOX_DIR" login) || true
+    printf '%s\n' "$copied" | ai_sandbox_seed_log_logins "$AI_SANDBOX_DIR"
     chmod 600 "$AI_SANDBOX_DIR/.claude.json" 2>/dev/null || true
     date -Iseconds > "$AI_SANDBOX_DIR/.seeded"
-    echo "Refreshed from the host. What was replaced is in $backup."
+    echo "Refreshed from the host:"
+    printf '%s\n' "$copied" | sed 's/^/  /' | ai_sandbox_display_clean
+    echo "What was replaced is in $backup."
     echo "Restart the sandbox for it to take effect: ai-sandbox-restart"
     ;;
 reset)
-    confirm "Erase this project's AI credentials and start from a clean login?" || exit 1
-    while IFS='|' read -r _ sb_rel; do
-        [ -n "$sb_rel" ] && rm -rf "${AI_SANDBOX_DIR:?}/$sb_rel"
-    done < <(ai_sandbox_seed_paths)
-    # Then recreate every bind source, .claude/projects included: a missing
-    # one is created root-owned on restart, which the container user cannot
-    # write to -- so the clean login would fail -- and cannot remove later.
+    mapfile -d '' -t present < <(ai_sandbox_seed_sandbox_paths "$AI_SANDBOX_DIR" login)
+    if [ "$(ai_sandbox_env_value "$AI_SANDBOX_DIR" SANDBOX_HOST_LOGINS)" = 1 ] && [ -s "$AI_SANDBOX_DIR/host-logins.log" ]; then
+        echo "Logins copied from the host into this sandbox (host-logins.log):"
+        cut -f2- "$AI_SANDBOX_DIR/host-logins.log" | sort -u | sed 's/\t/  /; s/^/  /' | ai_sandbox_display_clean
+    else
+        echo "Login files present in this sandbox (they may have been made inside it, or copied from the host):"
+        printf '%s\n' "${present[@]}" | sed 's/^/  /' | ai_sandbox_display_clean
+    fi
+    confirm "Remove these logins, copy the settings again and make the sandbox log in inside?" || exit 1
+    root=$(readlink -f "$AI_SANDBOX_DIR")
+    empty=$(mktemp -d)
+    for p in "${present[@]}"; do
+        if [ -d "$AI_SANDBOX_DIR/$p" ] && [ ! -L "$AI_SANDBOX_DIR/$p" ]; then
+            # a directory row: emptied, the directory itself may stay (nofollow remove refuses one)
+            ai_sandbox_nofollow copy "$root" "$p" "$empty" --delete || echo "Not emptied: $(printf '%s' "$p" | ai_sandbox_display_clean) (see above)." >&2
+        else
+            ai_sandbox_nofollow remove "$root" "$p" || echo "Not removed: $(printf '%s' "$p" | ai_sandbox_display_clean) (see above)." >&2
+        fi
+    done
+    rmdir "$empty"
+    # Recreate every bind source: a missing one is created root-owned on restart, which the
+    # container user cannot write to -- so the clean login would fail -- and cannot remove later.
     while IFS= read -r d; do
-        [ -n "$d" ] && mkdir -p "$AI_SANDBOX_DIR/$d"
+        [ -n "$d" ] || continue
+        ai_sandbox_make_state_dir "$AI_SANDBOX_DIR" "$d" || echo "Not recreated: $AI_SANDBOX_DIR/$d (see above)." >&2
     done < <(ai_sandbox_state_dirs)
+    ai_sandbox_seed_copy "$AI_SANDBOX_DIR" settings >/dev/null || true
+    ai_sandbox_seed_codex_default "$AI_SANDBOX_DIR" "$AI_SANDBOX_PROJECT" || true
+    ai_sandbox_seed_agy_trust "$AI_SANDBOX_DIR" "$AI_SANDBOX_PROJECT" || true
     echo '{}' > "$AI_SANDBOX_DIR/.claude.json"
     chmod 600 "$AI_SANDBOX_DIR/.claude.json"
-    # Keep the marker: the point is that the host's credentials do NOT come back.
+    # Keep the marker: the point is that the host's logins do NOT come back.
     date -Iseconds > "$AI_SANDBOX_DIR/.seeded"
-    echo "Cleared. Log in inside the sandbox; the host's credentials will not return."
+    # Last: an interrupted reset has not recorded the inside mode, so running it again finishes it.
+    ai_sandbox_env_set "$AI_SANDBOX_DIR" SANDBOX_HOST_LOGINS 0 || { echo "The mode could not be recorded; run reset again." >&2; exit 1; }
+    echo "Cleared. Log in inside the sandbox; the host's logins will not return."
     echo "Restart the sandbox: ai-sandbox-restart"
     ;;
 *)

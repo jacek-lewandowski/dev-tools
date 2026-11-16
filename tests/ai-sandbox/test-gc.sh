@@ -94,6 +94,17 @@ bash "$REPO_ROOT/bin/ai/ai-sandbox-extensions" >"$tmp2/ext" 2>&1 || true
 assert_file "extensions seeded from the host" \
             "$AI_SANDBOX_ROOT/shared/antigravity-ide-extensions/ide-ext/package.json"
 
+# With no -gui image the install step refuses clearly (the IDE is only in the -gui images); with
+# one, it runs the IDE from that image. Nothing is seeded from the host here, so it must install.
+rm -rf "$AI_SANDBOX_ROOT/shared/antigravity-ide-extensions"
+mkdir -p "$tmp2/bin"
+out=$(DOCKER_STUB_IMAGES="$(ai_sandbox_image_name base) $(ai_sandbox_image_name docker)" HOME="$tmp2/emptyhome" AI_SANDBOX_ROOT="$tmp2/emptyroot" bash "$REPO_ROOT/bin/ai/ai-sandbox-extensions" 2>&1) || true
+assert_contains "extensions: only headless images, refuses clearly" "$out" "no -gui sandbox image exists"
+: > "$DOCKER_STUB_LOG"
+out=$(DOCKER_STUB_IMAGES="$(ai_sandbox_image_name base gui)" HOME="$tmp2/emptyhome" AI_SANDBOX_ROOT="$tmp2/emptyroot" bash "$REPO_ROOT/bin/ai/ai-sandbox-extensions" 2>&1) || true
+assert_contains "extensions: a -gui image is used" "$(cat "$DOCKER_STUB_LOG")" "antigravity2-ide"
+assert_contains "extensions: and names it" "$out" "using $(ai_sandbox_image_name base gui)"
+
 # The image must no longer bake extensions in -- shared/ is now their only home.
 proj2="$tmp2/work/q"; mkdir -p "$proj2"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" >>"$tmp2/o" 2>&1 || true

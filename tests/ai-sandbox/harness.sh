@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Minimal assert library. No framework is available in this environment.
+# C-INSTALL: a test file is a host entry point and refuses, before fake_home replaces HOME,
+# to run from a tree a sandbox can write. In a subshell: the lib's variables stay out of
+# the test's shell.
+( . "$(dirname "${BASH_SOURCE[0]}")/../../bin/ai/ai-sandbox-lib.sh" \
+    && ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" ) || exit 3
 TESTS_RUN=0
 TESTS_FAILED=0
 
@@ -51,6 +56,11 @@ assert_no_file() {
     if [ ! -e "$2" ]; then _pass "$1"; else _fail "$1" "path should not exist: $2"; fi
 }
 
+# A snapshot of a tree for the tests that plant a link into a trap: every entry's type, link target, content hash
+# and mode, so a write, a chmod or a replacement through a link changes it. One definition for the link tests (L11).
+snap() { ( cd "$1" && find . | LC_ALL=C sort | while IFS= read -r f; do   # modes too: a chmod through a link is a write
+    if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; elif [ -f "$f" ]; then printf '%s %s %s\n' "$f" "$(stat -c %a "$f")" "$(sha256sum < "$f")"; else printf '%s %s\n' "$f" "$(stat -c %a "$f")"; fi; done ); }
+
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
 # A throwaway HOME with the stub docker first on PATH.
@@ -74,6 +84,16 @@ fake_home() {
     # The host's memory budget, which the user writes by hand on a real host;
     # without it create-ai-sandbox.sh and every start are refused.
     printf 'AI_SANDBOX_MEMORY_BUDGET_GB=18\n' > "$AI_SANDBOX_ROOT/config"
+    # The installed revision create needs (C-INSTALL): revision "test" is a copy of this
+    # repository's bin/ai and tools, writable for the test (a test may overwrite what it
+    # runs), and ~/.ai-sandbox/bin is the link ai-sandbox-install makes, so the commands a
+    # test runs from $AI_SANDBOX_ROOT/bin are the repository's own text.
+    mkdir -p "$AI_SANDBOX_ROOT/installed/rev/test/bin"
+    cp -a "$REPO_ROOT/bin/ai" "$AI_SANDBOX_ROOT/installed/rev/test/bin/ai"
+    cp -a "$REPO_ROOT/tools" "$AI_SANDBOX_ROOT/installed/rev/test/tools"
+    chmod -R u+w "$AI_SANDBOX_ROOT/installed/rev/test"
+    ln -s rev/test "$AI_SANDBOX_ROOT/installed/current"
+    ln -s installed/current/bin/ai "$AI_SANDBOX_ROOT/bin"
     FAKE_HOME_DIR="$tmp"
     printf '%s' "$tmp"
 }

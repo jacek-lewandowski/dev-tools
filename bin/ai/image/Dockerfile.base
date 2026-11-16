@@ -1,0 +1,181 @@
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl wget gnupg ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python and its packages sit before the big apt layer, and every version ARG
+# is declared right before the RUN that uses it (a changed ARG invalidates the
+# cache from its first use), so bumping the big apt list
+# does not rebuild them. The uv cache mount keeps downloaded wheels between builds.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UV_VERSION=@UV_VERSION@
+RUN pip3 install --no-cache-dir uv==${UV_VERSION}
+
+ARG HEADROOM_VERSION=@HEADROOM_VERSION@
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy uv pip install --system "headroom-ai[sandbox]==${HEADROOM_VERSION}"
+
+ARG NODE_MAJOR=@NODE_MAJOR@
+# Third-party repositories.
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings /usr/share/keyrings; \
+    arch="$(dpkg --print-architecture)"; \
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list; \
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+        > /usr/share/keyrings/cloudflare-main.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main" \
+        > /etc/apt/sources.list.d/cloudflared.list; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        > /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=${arch} signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git sudo less vim-tiny nano ca-certificates \
+        socat usbutils net-tools \
+        libwayland-client0 \
+        libnss3 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgbm1 \
+        libasound2 libasound2-plugins pulseaudio-utils alsa-utils \
+        xdg-utils dbus-x11 fonts-liberation \
+        libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libglib2.0-0 libnspr4 \
+        libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+        libxfixes3 libxkbcommon0 libxrandr2 \
+        google-cloud-cli cloudflared gh nodejs \
+        ffmpeg imagemagick sox libsox-fmt-all \
+        libev4 libpcre3 libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && dbus-uuidgen > /etc/machine-id
+
+RUN npm install -g --force \
+        @anthropic-ai/claude-code @openai/codex firebase-tools @google/gemini-cli @ast-grep/cli \
+    && npm cache clean --force
+
+# pnpm and yarn through corepack, so a project's 'packageManager' field is
+# honoured and nobody has to 'corepack enable' by hand. The cache is a shared
+# location (chowned to the sandbox user below) rather than root's ~/.cache, or
+# the versions warmed here would be invisible at run time.
+ENV COREPACK_HOME=/usr/local/share/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN set -eux; \
+    command -v corepack >/dev/null || npm install -g corepack; \
+    corepack enable; \
+    corepack prepare pnpm@latest yarn@stable --activate; \
+    npm cache clean --force
+
+# The release binary is dynamically linked: without libev4 (and libpcre3,
+# libsqlite3-0, all installed above) it dies with a loader error on first use.
+ARG COMBY_VERSION=@COMBY_VERSION@
+RUN set -eux; \
+    wget -q "https://github.com/comby-tools/comby/releases/download/${COMBY_VERSION}/comby-${COMBY_VERSION}-x86_64-linux" -O /usr/local/bin/comby; \
+    chmod +x /usr/local/bin/comby; \
+    comby -version
+
+# Static binary; the git hooks in .githooks/ refuse to run without it.
+ARG GITLEAKS_VERSION=@GITLEAKS_VERSION@
+ARG GITLEAKS_LINUX_X64_SHA256=@GITLEAKS_LINUX_X64_SHA256@
+RUN set -eux; \
+    wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O /tmp/gitleaks.tar.gz; \
+    echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gitleaks.tar.gz --no-same-owner -C /usr/local/bin gitleaks; \
+    rm /tmp/gitleaks.tar.gz; \
+    gitleaks version
+
+ARG ANTIGRAVITY_CLI_VERSION=@ANTIGRAVITY_CLI_VERSION@
+RUN set -eux; \
+    wget -q "https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_CLI_VERSION}/linux-x64/cli_linux_x64.tar.gz" -O /tmp/cli.tar.gz; \
+    tar -xzf /tmp/cli.tar.gz -C /tmp; \
+    mv /tmp/antigravity /usr/local/bin/agy; \
+    chmod +x /usr/local/bin/agy; \
+    rm -f /tmp/cli.tar.gz
+
+# Headless browser for every sandbox, display or not: Playwright and Puppeteer
+# (puppeteer-core, no bundled download) drive Playwright's headless Chromium.
+# One stable wrapper path hides the revision in Playwright's directory name; it
+# is what Puppeteer and the Claude 'playwright' plugin's MCP server
+# (npx @playwright/mcp, configured by PLAYWRIGHT_MCP_* variables) are pointed at.
+ARG PLAYWRIGHT_VERSION=@PLAYWRIGHT_VERSION@
+ARG PUPPETEER_CORE_VERSION=@PUPPETEER_CORE_VERSION@
+# World-writable, so a project's own 'npx playwright install' (which takes a lock
+# directory here) and the first-launch validation file work as the sandbox user.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN set -eux; \
+    npm install -g "playwright@${PLAYWRIGHT_VERSION}" "puppeteer-core@${PUPPETEER_CORE_VERSION}"; \
+    playwright install --only-shell chromium; \
+    shell="$(find "${PLAYWRIGHT_BROWSERS_PATH}" -type f -name chrome-headless-shell | head -n 1)"; \
+    test -n "${shell}"; \
+    printf '#!/bin/bash\nexec "%s" --no-sandbox --disable-dev-shm-usage "$@"\n' "${shell}" \
+        > /usr/local/bin/chromium-headless; \
+    chmod +x /usr/local/bin/chromium-headless; \
+    chmod -R a+rwX "${PLAYWRIGHT_BROWSERS_PATH}"; \
+    chmod 1777 "${PLAYWRIGHT_BROWSERS_PATH}"; \
+    npm cache clean --force
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless \
+    PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/chromium-headless \
+    PLAYWRIGHT_MCP_BROWSER=chromium \
+    PLAYWRIGHT_MCP_HEADLESS=1 \
+    PLAYWRIGHT_MCP_NO_SANDBOX=1
+
+# Thin wrappers for the dev-tools Python utilities mounted at ~/tools.
+RUN set -eux; \
+    printf '#!/bin/bash\nexec python3 -m tools.agent_log_trimmer "$@"\n' > /usr/local/bin/agent-log-trimmer; \
+    chmod +x /usr/local/bin/agent-log-trimmer
+
+# Allow the agent to work with PDFs through ImageMagick.
+RUN sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/g' \
+        /etc/ImageMagick-6/policy.xml
+
+COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
+COPY sandbox-doctor   /usr/local/bin/sandbox-doctor
+COPY claude-plugins.list /usr/local/share/claude-plugins.list
+COPY sandbox-desktop  /usr/local/bin/sandbox-desktop
+COPY sandbox-bashrc.sh /etc/ai-sandbox-bashrc.sh
+COPY sandbox-env.sh   /etc/ai-sandbox-env.sh
+COPY sandbox-sdk      /usr/local/bin/sdk
+COPY ai-delegate       /usr/local/bin/ai-delegate
+COPY sandbox-knowledge-sync /usr/local/bin/sandbox-knowledge-sync
+COPY context-statusline /usr/local/bin/context-statusline
+COPY xdg-open         /usr/local/bin/xdg-open
+COPY claude-managed-settings.json /etc/claude-code/managed-settings.json
+# IntelliJ IDEA is not installed in the image: this only launches the host's
+# read-only mount, so it is inert on a host that has none.
+COPY sandbox-idea     /usr/local/bin/idea
+RUN mv /usr/bin/xdg-open /usr/bin/xdg-open-original \
+    && chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-doctor \
+                /usr/local/bin/sandbox-desktop /usr/local/bin/xdg-open \
+                /usr/local/bin/idea /usr/local/bin/sdk /usr/local/bin/ai-delegate \
+                /usr/local/bin/sandbox-knowledge-sync \
+                /usr/local/bin/context-statusline \
+    && chmod 0644 /etc/claude-code/managed-settings.json \
+    && ln -s /etc/ai-sandbox-env.sh /etc/profile.d/ai-sandbox.sh \
+    && install -d -m 1777 /tmp/.X11-unix \
+    && echo "ai-sandbox" > /etc/ai-sandbox-release
+
+# Non-interactive 'bash -c' reads nothing but BASH_ENV; login shells get the
+# same file through /etc/profile.d, interactive ones through .bashrc. See the
+# comment on sandbox-env.sh in create-ai-sandbox.sh.
+ENV BASH_ENV=/etc/ai-sandbox-env.sh
+
+# Fail the build, not the agent, when a tool is broken -- comby's binary
+# missing a shared library, or the corepack shims not resolving.
+RUN set -eux; \
+    comby -version; \
+    gitleaks version; \
+    sg --version; \
+    node --version; \
+    pnpm --version; \
+    yarn --version; \
+    firebase --version; \
+    python3 -c 'import headroom'; \
+    NODE_PATH=/usr/lib/node_modules node -e "require('playwright'); require('puppeteer-core')"; \
+    chromium-headless --version

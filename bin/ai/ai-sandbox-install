@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# ai-sandbox-install -- make one revision of this repository the one the host runs.
+#
+#   ai-sandbox-install [<revision>] [--from <directory>]
+#
+# <revision> is a full object id or a branch name (default: main). Without --from the
+# revision comes from the hosting remote ('origin' of ~/.ai-sandbox/installed/src.git);
+# with --from, from the repository whose top level is <directory> (no link at or below its
+# stamped project), which a sandbox may be able to write: its branches are fetched through
+# the confined git (C-GIT) and nothing else of it is.
+# The command shows the commits and the changed paths, asks, exports the commit's files
+# under bin/ai, tools, tests/ai-sandbox and verify-ai-sandbox-on-host.sh without applying
+# any attribute of the commit, makes them read-only as installed/rev/<commit>, and
+# switches installed/current to it. ~/.ai-sandbox/bin is a link to installed/current/bin/ai.
+#
+# Exit: 0 installed (or already installed; nothing is asked), 1 declined, not found, no
+# hosting remote, fetch or export failed (installed/current is unchanged), 2 usage, 3 the
+# refusal to run from a tree a sandbox can write, 124 / 125 from the confined fetch.
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ai-sandbox-lib.sh"
+ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
+
+NAME=$(basename "$0")
+# What a revision holds on the host: the four roots of C-INSTALL.
+EXPORT_ROOTS=(bin/ai tools tests/ai-sandbox verify-ai-sandbox-on-host.sh)
+
+usage() { sed -n '2,/^set -/{/^set -/d;s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"; }
+die() { printf '%s: %s\n' "$NAME" "$*" >&2; exit 1; }
+
+revision=""; from=""
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h|--help) usage; exit 0 ;;
+        --from)    [ $# -ge 2 ] || { usage >&2; exit 2; }; from=$2; shift 2 ;;
+        --from=*)  from=${1#--from=}; shift ;;
+        -*)        echo "$NAME: unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *)         [ -z "$revision" ] || { echo "$NAME: a second revision: $1" >&2; usage >&2; exit 2; }
+                   revision=$1; shift ;;
+    esac
+done
+revision=${revision:-main}
+
+INSTALLED=$AI_SANDBOX_INSTALLED
+SRC="$INSTALLED/src.git"
+REVS="$INSTALLED/rev"
+
+# Every git call goes through C-GIT's host function, in src.git, with no prompt.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+export AI_SANDBOX_GIT_TIMEOUT="${AI_SANDBOX_GIT_TIMEOUT:-120}"
+g() { ai_sandbox_host_git "$SRC" --no-pager --no-replace-objects "$@"; }
+mkdir -p "$INSTALLED"
+# A new src.git checks every object it takes in: a tree that lists one name twice is refused
+# at the fetch (the export refuses it again, for a src.git made before this setting).
+if [ ! -f "$SRC/HEAD" ]; then
+    ai_sandbox_host_git - init -q --bare "$SRC" || die "cannot create $SRC"
+    g config transfer.fsckObjects true || die "cannot configure $SRC"
+fi
+
+# ---------------------------------------------------------------------------
+# Fetch and resolve
+# ---------------------------------------------------------------------------
+# --from names a repository's top level, and no component of its path at or below the
+# stamped project that holds it is a link: a sandbox can write there, and a link it made
+# would have the host mount another directory the user can read. Links above the project
+# are the user's own.
+check_from() {   # <directory as given> <directory, links resolved>
+    local abs cur="" comp in_project=no d line st phys
+    local -a parts stamped=()
+    # the stamps' lines, resolved as ai_sandbox_writable_path resolves them: a stamp may hold
+    # the path as the user's link gave it
+    for d in "$AI_SANDBOX_ROOT"/*-agent; do
+        [ -f "$d/project-path" ] && IFS= read -r line < "$d/project-path" && [ -n "$line" ] || continue
+        stamped+=("$(readlink -m -- "$line")")
+    done
+    [ -e "$2/.git" ] || die "--from takes a repository's top level (the directory holding .git): $1"
+    abs=$(realpath -sm -- "$1")
+    [ "$(readlink -f -- "$abs")" = "$2" ] || die "--from: a path with a link before a '..' is not accepted: $1"
+    IFS=/ read -ra parts <<<"${abs#/}"
+    for comp in "${parts[@]}"; do
+        cur="$cur/$comp"
+        if [ "$in_project" = yes ]; then
+            [ ! -L "$cur" ] || die "--from: $cur is a link below a sandbox project; give the repository's own path"
+        else
+            phys=$(readlink -f -- "$cur")
+            for st in "${stamped[@]}"; do [ "$st" != "$phys" ] || in_project=yes; done
+        fi
+    done
+}
+
+rc=0
+if [ -n "$from" ]; then
+    [ -d "$from" ] || die "no such directory: $from"
+    from_real=$(readlink -f -- "$from")
+    check_from "$from" "$from_real"
+    id=$(ai_sandbox_project_id "$from_real")
+    ai_sandbox_confined_fetch "$SRC" "refs/from/$id" "$from_real" . 'refs/heads/*' || rc=$?
+    prefix="refs/from/$id/heads"
+else
+    if ! g config --get remote.origin.url >/dev/null 2>&1; then
+        {
+            echo "$NAME: no hosting remote is set. Add it, then run this again:"
+            echo "    git --git-dir=$SRC remote add origin <url>"
+        } >&2
+        exit 1
+    fi
+    g fetch -q --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*' || rc=$?
+    prefix="refs/remotes/origin"
+fi
+case $rc in
+    0) ;;
+    3|124|125) exit "$rc" ;;
+    *) die "the fetch failed (status $rc); nothing was installed" ;;
+esac
+
+if [[ $revision =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    COMMIT=$(g rev-parse --verify -q "$revision^{commit}") || die "no such commit: $revision"
+else
+    ref="$prefix/$revision"
+    g check-ref-format "$ref" 2>/dev/null || die "not found: $ref"
+    COMMIT=$(g rev-parse --verify -q "$ref^{commit}") || die "not found: $ref"
+fi
+
+CURRENT_LINK="$INSTALLED/current"
+current_rev=""
+if [ -L "$CURRENT_LINK" ]; then current_rev=$(readlink "$CURRENT_LINK"); fi
+if [ "$current_rev" = "rev/$COMMIT" ]; then
+    echo "Revision $COMMIT is already installed."
+    exit 0
+fi
+# The block is written after the switch, so a file it cannot write is found before it.
+ai_sandbox_bashrc_usable "$HOME/.bashrc" || die "cannot read and write $HOME/.bashrc; nothing was installed"
+
+# ---------------------------------------------------------------------------
+# Show what changes, ask
+# ---------------------------------------------------------------------------
+installed_commit=""
+case $current_rev in
+    rev/*) installed_commit=$(g rev-parse --verify -q "${current_rev#rev/}^{commit}" 2>/dev/null) || installed_commit="" ;;
+esac
+{
+    echo "Revision to install: $COMMIT"
+    if [ -n "$installed_commit" ]; then
+        echo "Installed now:       $installed_commit"
+        echo "Commits:"
+        g log --no-decorate --no-notes -n 50 --format='  %h %s' "$installed_commit..$COMMIT" || true
+        total=$(g rev-list --count "$installed_commit..$COMMIT" 2>/dev/null) || total=0
+        [ "$total" -le 50 ] || echo "  ... and $((total - 50)) older commits not shown"
+        echo "Changed paths:"
+        g diff --no-ext-diff --no-textconv --name-status "$installed_commit" "$COMMIT" -- "${EXPORT_ROOTS[@]}" | sed 's/^/  /' || true
+    else
+        echo "Installed now:       nothing"
+        g log --no-decorate --no-notes -n 1 --format='  %h %s' "$COMMIT" || true
+        echo "Files:               $(g ls-tree -r --name-only "$COMMIT" -- "${EXPORT_ROOTS[@]}" | wc -l | tr -d ' ')"
+    fi
+} | ai_sandbox_display_clean
+printf 'Install it? [y/N] '
+reply=""
+read -r reply || true
+case $reply in y|Y) ;; *) echo "Cancelled."; exit 1 ;; esac
+
+# ---------------------------------------------------------------------------
+# Export: the commit's bytes and executable bits, read from the object database, no
+# attribute applied (export-ignore, export-subst and filters would change what the
+# revision holds from what was shown). Written into a partial directory beside the
+# revisions and renamed, so a revision directory is whole or absent and never written.
+# ---------------------------------------------------------------------------
+rm_tree() { [ ! -e "$1" ] && [ ! -L "$1" ] || { chmod -R u+w -- "$1" 2>/dev/null || true; rm -rf -- "$1"; }; }
+
+export_commit() {   # <commit> <destination>
+    local commit=$1 dest=$2 tmp e meta mode type oid
+    tmp=$(mktemp -d)
+    g ls-tree -r -z --full-tree "$commit" -- "${EXPORT_ROOTS[@]}" > "$tmp/entries" || { rm -rf "$tmp"; return 1; }
+    : > "$tmp/oids"
+    while IFS= read -r -d '' e; do
+        meta=${e%%$'\t'*}
+        read -r mode type oid <<<"$meta"
+        case "$type:$mode" in
+            blob:100644|blob:100755) printf '%s\n' "$oid" >> "$tmp/oids" ;;
+            *) echo "$NAME: $commit holds an entry that is not a plain file: ${e#*$'\t'}" >&2; rm -rf "$tmp"; return 1 ;;
+        esac
+    done < "$tmp/entries"
+    mkdir -p "$dest"
+    g cat-file --batch < "$tmp/oids" | python3 -I -c '
+import os, sys
+dest, entries_file = sys.argv[1], sys.argv[2]
+os.umask(0o022)
+entries = [e for e in open(entries_file, "rb").read().split(b"\0") if e]
+src = sys.stdin.buffer
+seen = set()
+for e in entries:
+    meta, path = e.split(b"\t", 1)
+    mode, _type, oid = meta.decode().split()
+    header = src.readline().split()
+    if len(header) != 3 or header[0].decode() != oid or header[1] != b"blob":
+        sys.exit("unexpected answer from git for " + oid)
+    data = src.read(int(header[2])); src.read(1)
+    if len(data) != int(header[2]):
+        sys.exit("short read for " + oid)
+    parts = path.decode("utf-8", "surrogateescape").split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        sys.exit("unsafe path in the tree: " + path.decode("utf-8", "replace"))
+    if path in seen:
+        sys.exit("the tree lists a path twice: " + path.decode("utf-8", "replace"))
+    seen.add(path)
+    target = os.path.join(dest, *parts)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as f:
+        f.write(data)
+    os.chmod(target, 0o755 if mode == "100755" else 0o644)
+' "$dest" "$tmp/entries" || { rm -rf "$tmp"; return 1; }
+    rm -rf "$tmp"
+}
+
+mkdir -p "$REVS"
+FINAL="$REVS/$COMMIT"
+PARTIAL="$REVS/.partial-$COMMIT"
+if [ ! -d "$FINAL" ]; then
+    rm_tree "$PARTIAL"
+    if ! export_commit "$COMMIT" "$PARTIAL"; then rm_tree "$PARTIAL"; die "the export failed; nothing was installed"; fi
+    chmod -R a-w -- "$PARTIAL"
+    mv -T -- "$PARTIAL" "$FINAL" || { rm_tree "$PARTIAL"; die "cannot move the export into place"; }
+fi
+
+# ---------------------------------------------------------------------------
+# Switch: a new link beside the old one, renamed over it, so `current` always names a
+# whole revision; then the PATH entry, then the block that puts it on PATH.
+# ---------------------------------------------------------------------------
+switch_link() {   # <target> <link>
+    rm -f -- "$2.new"
+    ln -s -- "$1" "$2.new"
+    mv -T -- "$2.new" "$2"
+}
+switch_link "rev/$COMMIT" "$CURRENT_LINK"
+
+BIN="$AI_SANDBOX_ROOT/bin"
+BIN_TARGET="installed/current/bin/ai"
+if [ -L "$BIN" ]; then
+    [ "$(readlink "$BIN")" = "$BIN_TARGET" ] || switch_link "$BIN_TARGET" "$BIN"
+else
+    if [ -e "$BIN" ]; then
+        aside="$AI_SANDBOX_ROOT/bin.pre-install"
+        [ ! -e "$aside" ] && [ ! -L "$aside" ] || aside="$aside.$(date +%Y%m%d%H%M%S)"
+        mv -- "$BIN" "$aside"
+        echo "Moved the old $BIN to $aside (nothing in it is deleted)."
+    fi
+    switch_link "$BIN_TARGET" "$BIN"
+fi
+ai_sandbox_write_bashrc_block "$HOME/.bashrc"
+
+echo "Installed $COMMIT: $CURRENT_LINK -> rev/$COMMIT; $BIN -> $BIN_TARGET"
+
+# ---------------------------------------------------------------------------
+# Who still runs another revision
+# ---------------------------------------------------------------------------
+running=$(docker ps --format '{{.Names}}' 2>/dev/null || true)
+for d in "$AI_SANDBOX_ROOT"/*-agent; do
+    [ -f "$d/docker-compose.yml" ] || continue
+    name=$(basename "$d")
+    up=no; if printf '%s\n' "$running" | grep -qxF -- "$name"; then up=yes; fi
+    if [ "$up" = yes ]; then
+        echo "Sandbox $name is running the revision it started with; to use this one: stop and start it (ai-sandbox-stop, then ai-sandbox)"
+    fi
+    if ! ai_sandbox_mounts_install_root "$d"; then
+        echo "Sandbox $name mounts another tools directory; re-create it: $(ai_sandbox_recreate_command "$d")"
+    fi
+done
+exit 0

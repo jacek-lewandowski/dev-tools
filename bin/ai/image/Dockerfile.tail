@@ -1,0 +1,36 @@
+
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+ARG USER_NAME=developer
+# Set to the host's $HOME so absolute paths are valid on both sides of a mount.
+ARG USER_HOME=/home/developer
+
+RUN set -eux; \
+    if ! getent group "${GROUP_ID}" >/dev/null; then groupadd -g "${GROUP_ID}" "${USER_NAME}"; fi; \
+    useradd -s /bin/bash -l -u "${USER_ID}" -g "${GROUP_ID}" -d "${USER_HOME}" -m "${USER_NAME}"; \
+    usermod -aG sudo,dialout,plugdev,audio,video "${USER_NAME}"; \
+    echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ai-sandbox; \
+    chmod 0440 /etc/sudoers.d/ai-sandbox; \
+    if ! grep -q "^${USER_NAME}:" /etc/subuid; then \
+        echo "${USER_NAME}:100000:65536" >> /etc/subuid; fi; \
+    if ! grep -q "^${USER_NAME}:" /etc/subgid; then \
+        echo "${USER_NAME}:100000:65536" >> /etc/subgid; fi; \
+    mkdir -p "${USER_HOME}/.config" "${USER_HOME}/.antigravity" "${USER_HOME}/.antigravity-ide" \
+             "${USER_HOME}/.gemini" "${USER_HOME}/.claude" \
+             "${USER_HOME}/.gradle" "${USER_HOME}/.gradle/wrapper" "${USER_HOME}/.m2" \
+             "${USER_HOME}/.local/share" "${USER_HOME}/.local/bin" \
+             "${USER_HOME}/tools" "/run/user/${USER_ID}"; \
+    chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}" "/run/user/${USER_ID}" "${COREPACK_HOME}"; \
+    chmod 700 "/run/user/${USER_ID}"; \
+    echo '. /etc/ai-sandbox-bashrc.sh' >> "${USER_HOME}/.bashrc"
+
+USER ${USER_NAME}
+WORKDIR ${USER_HOME}
+
+# IDE extensions are NOT installed here. They live in ~/.ai-sandbox/shared and
+# are bind-mounted in, so one copy serves every sandbox; anything installed here
+# would be shadowed by that mount and duplicated on disk.
+# ai-sandbox-extensions populates the shared store.
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["tail", "-f", "/dev/null"]

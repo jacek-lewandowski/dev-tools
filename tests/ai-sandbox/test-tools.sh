@@ -23,15 +23,57 @@ assert_contains "nano is installed"                      "$df" 'nano'
 assert_contains "net-tools is installed"                 "$df" 'net-tools'
 assert_contains "comby's shared libraries are installed" "$df" 'libev4 libpcre3 libsqlite3-0'
 assert_contains "comby is smoke-tested at build time"    "$df" 'comby -version'
+assert_contains "uv is pinned"                           "$df" 'ARG UV_VERSION=0.13.8'
+assert_contains "headroom is pinned"                     "$df" 'ARG HEADROOM_VERSION=0.42.0'
+assert_contains "python packages install with uv"        "$df" 'uv pip install --system'
+assert_contains "uv has a BuildKit cache mount"          "$df" '--mount=type=cache,target=/root/.cache/uv'
+assert_contains "headroom installs with the sandbox extra" "$df" 'headroom-ai[sandbox]==${HEADROOM_VERSION}'
+assert_contains "the image build runs under BuildKit"    "$(cat "$REPO_ROOT/bin/ai/create.d/image.sh")" 'DOCKER_BUILDKIT=1 docker build'
+py_apt=$(printf '%s\n' "$df" | grep -n 'python3 python3-pip python3-venv' | head -1 | cut -d: -f1)
+big_apt=$(printf '%s\n' "$df" | grep -n 'google-cloud-cli cloudflared gh nodejs' | head -1 | cut -d: -f1)
+uv_run=$(printf '%s\n' "$df" | grep -n 'uv pip install --system' | head -1 | cut -d: -f1)
+assert_eq "python apt layer is its own, before the big apt layer" "$([ -n "$py_apt" ] && [ "$py_apt" -lt "$big_apt" ] && echo yes)" yes
+assert_eq "python packages follow the python apt layer, before the big one" "$([ -n "$uv_run" ] && [ "$uv_run" -gt "$py_apt" ] && [ "$uv_run" -lt "$big_apt" ] && echo yes)" yes
+big_start=$(printf '%s\n' "$df" | head -n "$big_apt" | grep -n '^RUN apt-get update' | tail -1 | cut -d: -f1)
+assert_eq "big apt layer no longer lists python"         "$(printf '%s\n' "$df" | sed -n "${big_start},${big_apt}p;/dbus-uuidgen/q" | grep -c python3)" 0
+assert_eq "python apt layer sits outside the big apt layer" "$([ "$py_apt" -lt "$big_start" ] && echo yes)" yes
+# Each version ARG sits right before its RUN: the Python ARGs after the python apt layer,
+# the Chrome and Antigravity ones after the Python install, so their bumps leave it cached.
+arg_line() { printf '%s\n' "$df" | grep -n "^ARG $1=" | head -1 | cut -d: -f1; }
+assert_eq "UV_VERSION is declared after the python apt layer" "$([ "$(arg_line UV_VERSION)" -gt "$py_apt" ] && echo yes)" yes
+# The default (no display) build has no GUI pins; an xpra build has them, after the same install.
+for gui in GOOGLE_CHROME_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION; do
+    assert_eq "no display: $gui is not in the Dockerfile" "$(arg_line "$gui")" ""
+done
+assert_eq "no display: the big apt layer has no GUI package" "$(printf '%s\n' "$df" | grep -c -E 'claude-desktop|openbox|xwayland')" 0
+for later in ANTIGRAVITY_CLI_VERSION PLAYWRIGHT_VERSION PUPPETEER_CORE_VERSION COMBY_VERSION GITLEAKS_VERSION; do
+    l=$(arg_line "$later")
+    assert_eq "$later is declared after the python install" "$([ -n "$l" ] && [ "$l" -gt "$uv_run" ] && echo yes)" yes
+done
+assert_eq "no unfilled ARG placeholder is left"          "$(printf '%s\n' "$df" | grep -c '@[A-Z_0-9]*@')" 0
+assert_contains "playwright is pinned"                   "$df" 'ARG PLAYWRIGHT_VERSION=1.65.1'
+assert_contains "puppeteer-core is pinned"               "$df" 'ARG PUPPETEER_CORE_VERSION=25.17.0'
+# A project's own 'npx playwright install' writes into PLAYWRIGHT_BROWSERS_PATH (lock dir included): the sandbox user must be able to.
+assert_contains "the browsers path is writable by the sandbox user" "$df" 'chmod -R a+rwX "${PLAYWRIGHT_BROWSERS_PATH}"'
+assert_contains "and its top directory takes new revisions and locks"  "$df" 'chmod 1777 "${PLAYWRIGHT_BROWSERS_PATH}"'
+# NODE_PATH is not global (a project's require must not see the global modules); only the build smoke test sets it.
+assert_eq "NODE_PATH is set once, for the smoke test only" "$(printf '%s\n' "$df" | grep -c 'NODE_PATH=')" 1
+assert_contains "and there it prefixes the node command" "$df" 'NODE_PATH=/usr/lib/node_modules node -e'
+# Without buildx the build cannot use cache mounts: fail before doing anything.
+DOCKER_STUB_NO_BUILDX=1 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-start "$proj" >"$tmp/out.nobx" 2>&1; nobx_rc=$?
+assert_ne       "create refuses without docker buildx"   "$nobx_rc" 0
+assert_contains "and names buildx"                       "$(cat "$tmp/out.nobx")" "'docker buildx' (BuildKit) is required"
+for gone in torch lancedb fastembed pypdf tqdm 'headroom-ai\[all\]' semantic-docs semantic_docs; do
+    assert_eq "the image no longer mentions $gone" "$(printf '%s\n' "$df" | grep -c -E "$gone")" 0
+done
+assert_contains "the agent-log-trimmer wrapper stays"    "$df" 'tools.agent_log_trimmer'
+assert_contains "headroom is still smoke-tested"         "$df" "python3 -c 'import headroom'"
 assert_contains "gitleaks is downloaded at the pinned release" "$df" 'releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz'
 assert_contains "the pinned gitleaks version is passed to the build" "$df" 'ARG GITLEAKS_VERSION=8.30.1'
 assert_contains "the gitleaks tarball is verified against the pinned sha256" "$df" 'sha256sum -c -'
 assert_contains "the pinned sha256 is passed to the build" "$df" 'ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
 assert_contains "gitleaks is extracted root-owned" "$df" 'tar -xzf /tmp/gitleaks.tar.gz --no-same-owner'
-# Every copy of the version outside the generator must equal GITLEAKS_VERSION.
-gl_ver=$(sed -n "s/^readonly GITLEAKS_VERSION='\(.*\)'$/\1/p" "$REPO_ROOT/bin/ai/create-ai-sandbox.sh")
-gl_copies=$(grep -ohE 'v?[0-9]+\.[0-9]+\.[0-9]+' "$REPO_ROOT"/.githooks/* "$REPO_ROOT/README.md" | sed 's/^v//' | sort -u | tr '\n' ' ')
-assert_eq "gitleaks version copies in .githooks and README.md equal GITLEAKS_VERSION" "$gl_copies" "$gl_ver "
+# (the copies of the version in .githooks and README.md are checked by tests/git-hooks/test-hooks.sh)
 assert_contains "gitleaks is smoke-tested at build time" "$df" 'gitleaks version; '
 assert_contains "agy is installed from the antigravity tarball" \
     "$df" 'mv /tmp/antigravity /usr/local/bin/agy'
@@ -66,6 +108,20 @@ assert_file     "sdk wrapper is in the build context"    "$build/sandbox-sdk"
 assert_contains "interactive shells use the same env file" \
     "$(cat "$build/sandbox-bashrc.sh")" '. /etc/ai-sandbox-env.sh'
 
+# --- the same build for a sandbox with a display: the GUI pins and packages are back ---
+xs="$tmp/xstub"; mkdir -p "$xs"
+for t in xpra Xvfb xauth; do printf '#!/bin/sh\nexit 0\n' > "$xs/$t"; done
+printf '#!/bin/sh\necho 0123456789abcdef0123456789abcdef\n' > "$xs/mcookie"; chmod +x "$xs"/*
+PATH="$xs:$PATH" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=xpra --no-start "$proj" >"$tmp/out.gui" 2>&1 || true
+gdf=$(cat "$build/Dockerfile")
+assert_contains "xpra build: the GUI apt packages are installed" "$gdf" 'claude-desktop antigravity'
+guv=$(printf '%s\n' "$gdf" | grep -n 'uv pip install --system' | head -1 | cut -d: -f1)
+for gui in GOOGLE_CHROME_VERSION ANTIGRAVITY_HUB_VERSION ANTIGRAVITY_IDE_VERSION; do
+    gl=$(printf '%s\n' "$gdf" | grep -n "^ARG $gui=" | head -1 | cut -d: -f1)
+    assert_eq "xpra build: $gui is declared after the python install" "$([ -n "$gl" ] && [ "$gl" -gt "$guv" ] && echo yes)" yes
+done
+assert_eq "xpra build: no unfilled placeholder" "$(printf '%s\n' "$gdf" | grep -c '@[A-Z_0-9]*@')" 0
+
 # --- the env file, sourced for real ----------------------------------------
 # Simulates the container: a farm at ~/.sdkman with java and gradle defaults.
 ch="$tmp/container-home"
@@ -74,7 +130,8 @@ mkdir -p "$ch/.sdkman/candidates/java/17.0.16-tem/bin" \
          "$ch/.sdkman/candidates/maven"            # installed, no default
 ln -s 17.0.16-tem "$ch/.sdkman/candidates/java/current"
 ln -s 9.6.1       "$ch/.sdkman/candidates/gradle/current"
-env_out=$(HOME="$ch" PATH=/usr/bin:/bin bash -c '
+# BASH_ENV (set inside a sandbox) would source the live env file before this one.
+env_out=$(env -u BASH_ENV HOME="$ch" PATH=/usr/bin:/bin bash -c '
     unset JAVA_HOME PYTHONPATH SDKMAN_DIR
     . "'"$build/sandbox-env.sh"'"
     p1=$PATH
@@ -128,6 +185,7 @@ assert_contains "and says why"                 "$none_out" 'not available'
 brain=$(cat "$HOME/.gemini/GEMINI.md")
 assert_contains "notes forbid apt-installing a JDK" "$brain" 'never apt-get install a JDK'
 assert_contains "notes mention comby and ast-grep"  "$brain" '`comby`'
+assert_eq "notes no longer mention semantic-docs" "$(printf '%s' "$brain" | grep -c 'semantic-docs')" 0
 assert_contains "notes mention pnpm via corepack"   "$brain" 'corepack'
 assert_contains "notes mention agy"                 "$brain" '`agy`'
 assert_contains "notes mention codex"               "$brain" '`codex`'
@@ -143,7 +201,7 @@ assert_contains "notes say how to run it in the background" "$brain" 'or run it 
 assert_contains "notes name the conversation id line" "$brain" '`ai-delegate: conversation_id=<id>`'
 assert_contains "notes say how round 2 resumes"     "$brain" '`--conversation <id>` to continue round 1'
 assert_contains "ai-delegate is installed in the image" "$df" 'COPY ai-delegate       /usr/local/bin/ai-delegate'
-assert_file     "ai-delegate is a host helper"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
+assert_no_file  "ai-delegate is not a host helper (it runs in the image only)"  "$AI_SANDBOX_ROOT/bin/ai-delegate"
 assert_contains "notes mention net-tools"           "$brain" '`net-tools`'
 
 # --- entrypoint merges read_url(*) into the sandbox's own agy settings -----
@@ -172,6 +230,27 @@ assert_eq "unparsable file left alone" "$(cat "$sf")" 'not json'
 rm -f "$sf"; python3 "$merge" "$sf" 2>/dev/null
 assert_no_file "missing file is never created" "$sf"
 assert_contains "failure cannot fail the start" "$(cat "$ep")" "|| true"
+
+# --- ~/.local/share and ~/.local/bin exist, user-owned, before the JetBrains mount
+# Searched only in the mkdir that the recursive chown of the home directory follows.
+home_mkdir=$(printf '%s\n' "$df" | sed -n '/mkdir -p "${USER_HOME}\/.config"/,/chown -R "${USER_ID}:${GROUP_ID}" "${USER_HOME}"/p')
+assert_contains "image creates ~/.local/share owned by the user" "$home_mkdir" '"${USER_HOME}/.local/share"'
+assert_contains "image creates ~/.local/bin owned by the user"   "$home_mkdir" '"${USER_HOME}/.local/bin"'
+
+# --- entrypoint defaults Claude Code's compaction off, without overriding a choice
+cmerge="$tmp/cmerge.py"
+sed -n "/^python3 - .*\.claude\/settings.json/,/^PYEOF/p" "$ep" | sed '1d;$d' > "$cmerge"
+cs="$tmp/claude-settings.json"
+rm -f "$cs"; python3 "$cmerge" "$cs"
+assert_eq "absent file: both compaction keys set false" "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["idleCompaction"],d["autoCompactEnabled"])' "$cs")" "False False"
+printf '{"theme":"x","autoCompactEnabled":true}' > "$cs"; python3 "$cmerge" "$cs"
+assert_eq "a user's choice is kept, the other key defaulted, others untouched" "$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["theme"],d["idleCompaction"],d["autoCompactEnabled"])' "$cs")" "x False True"
+printf 'not json' > "$cs"; python3 "$cmerge" "$cs" 2>/dev/null
+assert_eq "unparsable file left alone" "$(cat "$cs")" 'not json'
+printf '{"theme":"x"}' > "$cs"; chmod 0640 "$cs"; python3 "$cmerge" "$cs"
+assert_eq "the merge keeps the file's mode" "$(stat -c %a "$cs")" '640'
+assert_no_file "the merge leaves no temporary file" "$cs.tmp"
+assert_contains "compaction merge cannot fail the start" "$(grep '^python3 - .*\.claude/settings.json' "$ep")" "|| true"
 
 rm -rf "$tmp"
 finish

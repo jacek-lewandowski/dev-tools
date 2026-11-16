@@ -55,12 +55,62 @@ assert_file "sandbox-side .antigravity-ide is pre-created so docker does not mak
 assert_contains "compose mounts .antigravity-ide" \
                 "$(cat "$dir/docker-compose.yml")" "\"$dir/.antigravity-ide:$HOME/.antigravity-ide\""
 
+# O5: the identity the sandbox commits as is the host's global one, also when the
+# project's own configuration sets other values; the project cannot choose it.
+env_value() { sed -n "s/^$1=//p" "$dir/.env" | tail -1; }
+git config --global user.name "Host Person"; git config --global user.email host@example.com
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-id" 2>&1 \
+    || { echo "script failed:"; cat "$tmp/out-id"; }
+assert_eq "HOST_GIT_NAME is the global one, not the project's" "$(env_value HOST_GIT_NAME)" "Host Person"
+assert_eq "HOST_GIT_EMAIL is the global one, not the project's" "$(env_value HOST_GIT_EMAIL)" "host@example.com"
+git config --global --unset user.name; git config --global --unset user.email
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out-id2" 2>&1 \
+    || { echo "script failed:"; cat "$tmp/out-id2"; }
+assert_eq "no global identity: HOST_GIT_NAME stays empty even though the project sets one" "$(env_value HOST_GIT_NAME)" ""
+assert_eq "no global identity: HOST_GIT_EMAIL stays empty" "$(env_value HOST_GIT_EMAIL)" ""
+
 # Two projects with the same basename must land in different directories.
 proj2="$tmp/play/dev-tools"
 mkdir -p "$proj2"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" >>"$tmp/out" 2>&1 || true
 id2=$(ai_sandbox_project_id "$proj2")
 assert_file "second same-named project gets its own dir" "$AI_SANDBOX_ROOT/${id2}-agent"
+
+# O5: create's resolution (C-STAMP, ai_sandbox_create_root) and no git process in
+# the project. A recording git first on PATH sees every start and its directory.
+REAL_GIT=$(command -v git)
+rec="$tmp/rec"; mkdir -p "$rec"; GITLOG="$tmp/git.log"; export GITLOG; : > "$GITLOG"
+printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$PWD" "$*" >> "$GITLOG"\nexec %s "$@"\n' "$REAL_GIT" > "$rec/git"
+chmod +x "$rec/git"
+create_at() {   # <dir> [name]: a create run through the recording git, from the caller's directory
+    PATH="$rec:$PATH" bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$1" >"$tmp/out-${2:-o5}" 2>&1 \
+        || { echo "script failed:"; cat "$tmp/out-${2:-o5}"; }
+}
+sandboxes() { ls "$AI_SANDBOX_ROOT" | command grep -c -- '-agent$'; }
+stamped_dir() { cat "$(ai_sandbox_dir_for "$1")/project-path" 2>/dev/null; }
+
+# a repository without a sandbox, entered from one of its subdirectories
+rp="$tmp/work/rp"; mkdir -p "$rp/sub/deep"; git init -q "$rp"
+create_at "$rp/sub/deep"
+assert_eq "from a subdirectory of a repository without a sandbox: the repository" "$(stamped_dir "$rp")" "$rp"
+assert_no_file "no sandbox for the subdirectory" "$(ai_sandbox_dir_for "$rp/sub/deep")"
+assert_eq "the repository's id is the id of its path, as before" "$(ls -d "$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$rp")-agent" | wc -l | tr -d ' ')" 1
+assert_eq "no git process ran in the project or below it" "$(command grep -c "^$tmp/work/" "$GITLOG")" 0
+assert_ne "(the recording git saw other starts, so an empty log proves nothing)" "$(wc -l < "$GITLOG" | tr -d ' ')" 0
+
+# a plain directory: itself; a subdirectory of the sandboxed plain directory: that directory
+pp="$tmp/work/pp"; mkdir -p "$pp/sub/deep"
+create_at "$pp"
+assert_eq "a plain directory: itself" "$(stamped_dir "$pp")" "$pp"
+n=$(sandboxes); create_at "$pp/sub/deep"
+assert_eq "from a subdirectory of a sandboxed plain directory: no new sandbox" "$(sandboxes)" "$n"
+assert_no_file "from a subdirectory of a sandboxed plain directory: none for the subdirectory" "$(ai_sandbox_dir_for "$pp/sub/deep")"
+# a repository below the sandboxed plain directory still has its own sandbox
+mkdir -p "$pp/repo/sub"; git init -q "$pp/repo"
+create_at "$pp/repo/sub"
+assert_eq "a repository below a sandboxed parent: the repository" "$(stamped_dir "$pp/repo")" "$pp/repo"
+assert_no_file "a repository below a sandboxed parent: none for its subdirectory" "$(ai_sandbox_dir_for "$pp/repo/sub")"
+assert_eq "still no git process in the project" "$(command grep -c "^$tmp/work/" "$GITLOG")" 0
 
 rm -rf "$tmp"
 finish

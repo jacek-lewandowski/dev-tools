@@ -1,0 +1,34 @@
+id: host-python
+language: bash
+rule:
+  kind: command
+  has:
+    any:
+      - { kind: command_name, regex: "^[\"']?(\\S*/)?python3(\\.\\d+)?[\"']?$" }
+      - { kind: word, regex: '^(\S*/)?python3(\.\d+)?$' }
+  not:
+    any:
+      # a check that python3 exists, not a start of it
+      - has: { kind: command_name, regex: '^(hint|require)$' }
+      - all:
+          - has: { kind: command_name, regex: '^command$' }
+          - has: { kind: word, regex: '^-v$' }
+      # isolated: -I, alone or among other one-letter options, before the first argument that is
+      # not an option ('-' included): after it, -I belongs to the script
+      - has:
+          kind: word
+          regex: '^-[A-Za-z]*I[A-Za-z]*$'
+          not:
+            follows:
+              stopBy: end
+              regex: '^(-$|[^-])'
+              not:
+                any:
+                  - { kind: command_name }
+                  - { kind: variable_assignment }
+                  - { kind: file_redirect }
+                  - { kind: word, regex: '^(\S*/)?python3(\.\d+)?$' }   # exec python3 -I ...
+# Programs that run only inside the container live in bin/ai/image/ (C-MODULES); they are not host scripts.
+ignores: ["**/bin/ai/image/**"]
+severity: error
+message: a host python3 without -I reads the working directory and PYTHON* variables

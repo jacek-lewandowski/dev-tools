@@ -12,8 +12,8 @@ dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
 compose=$(cat "$dir/docker-compose.yml")
 
 # Docker imposes no memory limit unless asked, so these must be present.
-assert_contains "compose caps memory"        "$compose" 'mem_limit: "6g"'
-assert_contains "compose forbids swap"       "$compose" 'memswap_limit: "6g"'
+assert_contains "compose caps memory"        "$compose" 'mem_limit: "2g"'
+assert_contains "compose forbids swap"       "$compose" 'memswap_limit: "2g"'
 # /dev/shm is charged to the container's cgroup: at the old 4gb it could reach
 # the whole limit on its own.
 assert_contains "shm is well under the cap"  "$compose" "shm_size: '1gb'"
@@ -25,7 +25,7 @@ esac
 
 # The agents inside need to know the ceiling exists, or they parallelise into it.
 assert_contains "the shared brain states the cap" "$(cat "$HOME/.gemini/GEMINI.md")" \
-    "capped at 6g of RAM with no swap"
+    "capped at 2g of RAM with no swap and 1 CPU core(s)"
 
 # The sandbox must lose to the host under contention and cannot exhaust its process table.
 assert_contains "compose lowers CPU shares"   "$compose" 'cpu_shares: 256'
@@ -40,7 +40,7 @@ assert_contains "compose limits processes"    "$compose" 'pids_limit: 4096'
 
 # --- CPUs: half the GB of RAM, as a cpuset so nproc inside agrees ------------
 host_cpus=$(nproc)
-want=3; [ "$want" -le "$host_cpus" ] || want=$host_cpus
+want=1; [ "$want" -le "$host_cpus" ] || want=$host_cpus
 expect_first=$(seq -s, 0 $((want - 1)))
 assert_contains "compose pins a cpuset"            "$compose" "cpuset: \"$expect_first\""
 assert_contains "the set is remembered in .env"    "$(cat "$dir/.env")" "SANDBOX_CPUSET=$expect_first"
@@ -51,9 +51,9 @@ assert_contains "doctor reports cpus" "$(cat "$AI_SANDBOX_ROOT/image/build/sandb
 proj2="$tmp/work/q"; mkdir -p "$proj2"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj2" >"$tmp/out.q" 2>&1 || true
 dir2="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj2")-agent"
-if [ "$host_cpus" -ge 6 ]; then
+if [ "$host_cpus" -ge 2 ]; then
     assert_contains "a second sandbox gets the next idle cores" \
-        "$(cat "$dir2/docker-compose.yml")" 'cpuset: "3,4,5"'
+        "$(cat "$dir2/docker-compose.yml")" 'cpuset: "1"'
 fi
 # Re-running keeps the allocation; a stale or malformed one is replaced.
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out.re" 2>&1 || true
@@ -64,7 +64,7 @@ assert_contains "a set of the wrong size is re-allocated" "$(cat "$dir/docker-co
 rm -rf "$dir2"
 
 # --- --memory=GB: the limit, the cores and the rules text follow the option --
-assert_contains "the default size is remembered in .env" "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=6'
+assert_contains "the default size is remembered in .env" "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=2'
 mem_create() {   # <gb>: re-create proj with --memory=<gb>, reload compose
     bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory="$1" "$proj" >"$tmp/out.m$1" 2>&1 || true
     compose=$(cat "$dir/docker-compose.yml")
@@ -74,7 +74,7 @@ want8=4; [ "$want8" -le "$host_cpus" ] || want8=$host_cpus
 expect8=$(seq -s, 0 $((want8 - 1)))
 assert_contains "--memory=8 caps memory at 8g"        "$compose" 'mem_limit: "8g"'
 assert_contains "--memory=8 forbids swap at 8g"       "$compose" 'memswap_limit: "8g"'
-assert_contains "the set recorded for 6 is re-allocated to ceil(8/2) cores" "$compose" "cpuset: \"$expect8\""
+assert_contains "the set recorded for 2 is re-allocated to ceil(8/2) cores" "$compose" "cpuset: \"$expect8\""
 assert_contains "--memory=8 is remembered in .env"    "$(cat "$dir/.env")" 'SANDBOX_MEMORY_GB=8'
 assert_contains "the shared brain states the new cap" "$(cat "$HOME/.gemini/GEMINI.md")" \
     "capped at 8g of RAM with no swap and $want8 CPU core(s)"
@@ -89,7 +89,7 @@ assert_contains "--memory=1 is remembered in .env"    "$(cat "$dir/.env")" 'SAND
 assert_contains "the shared brain states one core"    "$(cat "$HOME/.gemini/GEMINI.md")" \
     "capped at 1g of RAM with no swap and 1 CPU core(s)"
 # Back to the default for the sections below.
-bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --memory=6 "$proj" >"$tmp/out.m6" 2>&1 || true
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out.m6" 2>&1 || true
 
 doctor="$AI_SANDBOX_ROOT/image/build/sandbox-doctor"
 assert_file "sandbox-doctor generated" "$doctor"
@@ -241,5 +241,16 @@ if bash -n "$launcher" 2>"$tmp/launch.err"; then _pass "launcher is valid bash"
 else _fail "launcher is valid bash" "$(cat "$tmp/launch.err")"; fi
 
 rm -rf "/tmp/.X11-unix/.ai-sandbox-$(ai_sandbox_project_id "$proj")-agent" 2>/dev/null
+
+# --- defaults of a sandbox with nothing remembered: no display, 2 GB, 1 core --
+fake_home >/dev/null; dtmp="$FAKE_HOME_DIR"; dproj="$dtmp/work/d"; mkdir -p "$dproj"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-start "$dproj" >"$dtmp/out" 2>&1 || true
+ddir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$dproj")-agent"
+assert_contains "the default display mode is none"  "$(cat "$ddir/.env")" 'SANDBOX_DISPLAY_MODE=none'
+assert_contains "the default memory is 2 GB"        "$(cat "$ddir/.env")" 'SANDBOX_MEMORY_GB=2'
+assert_contains "the default memory is 2g in compose" "$(cat "$ddir/docker-compose.yml")" 'mem_limit: "2g"'
+dhelp=$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)
+assert_contains "help states the display default"   "$dhelp" 'Default: none'
+assert_contains "help states the memory default"    "$dhelp" 'Default: 2 (one CPU core)'
 
 finish
