@@ -38,7 +38,7 @@ rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
 # R2-L1: the rerun of that interrupted first create (no --memory) is still a new sandbox: 2 GB
 f="$tmp/work/f"; mkdir -p "$f"; df=$(dir_of "$f")
 rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"; mkdir -p "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
-create "$f" >/dev/null
+assert_ne "R2-L1 the interrupted first create did stop" "$(create "$f")" 0
 rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
 assert_eq "R2-L1 the rerun of an interrupted first create succeeds" "$(create "$f")" 0
 assert_eq "R2-L1 the rerun keeps the new sandbox's 2 GB" "$(ai_sandbox_env_value "$df" SANDBOX_MEMORY_GB)" 2
