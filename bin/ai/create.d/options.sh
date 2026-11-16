@@ -56,6 +56,17 @@ Options:
                    Remembered until --no-audio.
   --no-audio       Drop a remembered --audio: the host's sound stays out of the
                    sandbox.
+  --host-logins    Copy the host's logins (Claude Code, Codex, Gemini CLI, agy, the
+                   desktop apps' sessions, the MCP configurations and the JetBrains
+                   licences) into the new sandbox as well as the settings. Off by
+                   default: a sandbox then holds only logins made inside it, which
+                   renew themselves there. Remembered. With it, I1 does not hold
+                   for those logins, and only 'ai-sandbox-account refresh' on the
+                   host renews them, so it is not for a sandbox worked from the
+                   phone. Given to an existing sandbox it records the mode and
+                   copies nothing: run 'ai-sandbox-account refresh'. There is no
+                   way back by option: 'ai-sandbox-account reset' removes the
+                   copied logins and records the inside mode.
   --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 2 (one CPU core).
                    Remembered. The sandbox gets half as many CPU cores as GB,
                    rounded up (see Resources below).
@@ -175,6 +186,7 @@ for arg in "$@"; do
         --no-docker)   WITH_DOCKER="no";  WITH_DOCKER_EXPLICIT="yes" ;;
         --audio)       WITH_AUDIO="yes"; WITH_AUDIO_EXPLICIT="yes" ;;
         --no-audio)    WITH_AUDIO="no";  WITH_AUDIO_EXPLICIT="yes" ;;
+        --host-logins) HOST_LOGINS_EXPLICIT="yes" ;;
         --memory=*)   MEMORY_GB="${arg#*=}"; MEMORY_GB_EXPLICIT="yes" ;;
         --rebuild)    FORCE_REBUILD="yes" ;;
         --no-start)   NO_START="yes" ;;
@@ -269,6 +281,37 @@ if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
         [ "$STORED_MEMORY" != "$MEMORY_GB" ] || log "keeping $MEMORY_GB GB of memory (pass --memory=... to change it)"
         unset STORED_MEMORY
     fi
+fi
+}
+
+options_remembered_logins() {
+# ---------------------------------------------------------------------------
+# Logins mode: SANDBOX_HOST_LOGINS in .env is 1 (host logins were copied or are to
+# be), 0 (logins are made inside) or absent. Absent with .seeded present is a sandbox
+# created before the key: counted as host, reported at every start, and left
+# unrecorded unless --host-logins is given (I6: no run rewrites a sandbox on its own).
+# LOGINS_SEED says whether the first seed copies the login rows.
+# ---------------------------------------------------------------------------
+local stored="" seeded="no"
+[ -f "$ENV_FILE" ] && stored=$(ai_sandbox_env_value "$SANDBOX_DIR" SANDBOX_HOST_LOGINS)
+[ -f "$SANDBOX_DIR/.seeded" ] && seeded="yes"
+case "$stored" in 0|1) ;; *) stored="" ;; esac
+LOGINS_SEED="no"
+LOGINS_MODE="$stored"
+if [ "$HOST_LOGINS_EXPLICIT" = "yes" ]; then
+    LOGINS_MODE=1
+    if [ "$seeded" = "no" ]; then
+        LOGINS_SEED="yes"
+        warn "--host-logins: the host's logins are copied into this sandbox. I1 does not hold for them: only 'ai-sandbox-account refresh' on the host renews them, so this sandbox is not for work from the phone."
+    elif [ "$stored" = "1" ]; then
+        warn "This sandbox holds the host's logins (--host-logins). I1 does not hold for them: only 'ai-sandbox-account refresh' on the host renews them."
+    else
+        warn "--host-logins recorded for this sandbox; nothing is copied now. Run 'ai-sandbox-account refresh' on the host to copy the logins. I1 does not hold for them: only refresh renews them."
+    fi
+elif [ "$stored" = "1" ]; then
+    warn "This sandbox holds the host's logins (--host-logins). I1 does not hold for them: only 'ai-sandbox-account refresh' on the host renews them."
+elif [ -z "$stored" ] && [ "$seeded" = "no" ]; then
+    LOGINS_MODE=0
 fi
 }
 

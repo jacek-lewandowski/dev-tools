@@ -34,6 +34,7 @@ DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
 MEM_GB="$MEMORY_GB" \
+LOGINS_MODE="$LOGINS_MODE" \
 KNOWLEDGE_STAMP="$AI_SANDBOX_KNOWLEDGE_STAMP" \
 python3 -I - "$ENV_FILE" <<'PYEOF'
 import os, sys
@@ -58,6 +59,9 @@ managed = {
     "SANDBOX_CPUSET": os.environ.get("CPUSET", ""),
     # The size the start scripts count against the host's memory budget.
     "SANDBOX_MEMORY_GB": os.environ.get("MEM_GB", ""),
+    # The logins mode (phase 7): 1 host logins copied, 0 made inside; empty (key not written)
+    # for a sandbox created before the key. Host only: .env is bound nowhere (I3d).
+    "SANDBOX_HOST_LOGINS": os.environ.get("LOGINS_MODE", ""),
     # The build-caches stamp (D7): unconditional, so every sandbox this script
     # (re)creates gets the overlay caches; a sandbox not yet recreated has no
     # stamp and every caches function is a no-op for it (I8).

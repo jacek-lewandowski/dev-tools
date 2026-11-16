@@ -41,6 +41,9 @@ WITH_AUDIO="no"         # host sound socket and devices, microphone included; of
 WITH_AUDIO_EXPLICIT="no"
 AUDIO_OLD_VALUE="no"    # the stored value was the one the old default wrote
 AUDIO_STORED_OFF="no"   # the stored value was 0: audio was switched off before
+HOST_LOGINS_EXPLICIT="no"   # --host-logins: copy the login rows too (see options_remembered_logins)
+LOGINS_MODE=""          # the SANDBOX_HOST_LOGINS value to record: 0, 1 or empty (unrecorded)
+LOGINS_SEED="no"        # yes when the first seed copies the login rows
 MEMORY_GB=""            # --memory=GB; the remembered size, else 2, when empty
 MEMORY_GB_EXPLICIT="no"
 FORCE_REBUILD="no"
@@ -92,6 +95,7 @@ resources_budget_gate
 project_resolve
 options_remembered
 options_remembered_memory
+options_remembered_logins
 resources_limits
 options_remembered_display
 display_resolve
