@@ -598,8 +598,9 @@ prints.
   documented formats and are unverified. Codex agents are rendered but not
   registered in `config.toml`; Antigravity rules are rendered but linked into a
   project's `.agents/rules/` only by hand.
-- Mounting the render over `~/.claude/agents` hides agents seeded from the host's
-  own directory. Roles come from the repository only.
+- Mounting the render over `~/.claude/agents` hides the host's own agents
+  directory (a new sandbox's seed no longer copies it). Roles come from the
+  repository only.
 - Key discovery for the ssh-agent step relies on `ssh -G` printing `identityfile`
   lines; with none usable it falls back to a bare `ssh-add`, and several configured
   keys may prompt more than once.

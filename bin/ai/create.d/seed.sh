@@ -60,9 +60,9 @@ seed_idea() {
 # runs the IDE but cannot modify or auto-update it. Everything IDEA writes is
 # under $HOME, split three ways because the three have different lifetimes:
 #
-#   ~/.config/JetBrains       settings, and the licence or JetBrains Account
-#                             token -- per sandbox, seeded from the host once so
-#                             the IDE comes up already activated.
+#   ~/.config/JetBrains       settings -- per sandbox, seeded from the host once;
+#                             the licence or JetBrains Account token only with
+#                             --host-logins, otherwise activate the IDE inside.
 #   ~/.local/share/JetBrains  downloaded plugins -- bulk and identical for every
 #                             project, so it lives in the shared store, read-only.
 #   ~/.cache/JetBrains        indexes, logs, the system directory -- per sandbox,

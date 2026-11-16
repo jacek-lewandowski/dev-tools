@@ -20,7 +20,7 @@ a="$tmp/work/a"; mkdir -p "$a"; da=$(dir_of "$a")
 assert_eq "create without options exits 0" "$(create "$a")" 0
 assert_eq "a new sandbox records the inside mode" "$(mode "$da")" 0
 assert_eq "once" "$(keyline "$da")" 1
-assert_eq "no host-logins message without the option" "$(grep -c 'I1' "$tmp/out")" 0
+assert_eq "no host-logins message without the option" "$(grep -c 'I1 does not hold' "$tmp/out")" 0
 create "$a" >/dev/null
 assert_eq "a second create keeps 0" "$(mode "$da")" 0
 
@@ -78,13 +78,26 @@ for m in 0 1; do
     sed -i '/^SANDBOX_HOST_LOGINS=/d' "$dd_/.env"; echo "SANDBOX_HOST_LOGINS=$m" >> "$dd_/.env"
     for cmd in ai-sandbox ai-sandbox-restart; do
         start "$d" "$cmd" true >/dev/null
-        assert_eq "$cmd prints no legacy line for a sandbox recorded $m" "$(grep -c 'I1' "$tmp/start.out")" 0
+        assert_eq "$cmd prints no legacy line for a sandbox recorded $m" "$(grep -c 'I1 does not hold' "$tmp/start.out")" 0
     done
 done
 
 # the option's help text, and no --no-host-logins (D3)
 assert_contains "--help describes the option" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)" '--host-logins'
 assert_contains "--help names the way back" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)" 'ai-sandbox-account reset'
+# T08 (O11): the usage and the generated environment block say what the phase made true
+help=$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)
+assert_contains "--help names the Codex default" "$help" 'Approve for me'
+assert_contains "--help says the brain and conversations are the sandbox's own" "$help" "conversations are the sandbox's own"
+assert_contains "--help says ai-sandbox-rm removes the brain" "$help" "remove this project's sandbox, its logins"
+assert_eq "--help no longer says the Antigravity brain is mounted live" "$(printf '%s\n' "$help" | tr '\n' ' ' | grep -c 'conversations, and this project')" 0
+assert_contains "--help: the licence only with --host-logins" "$help" 'the licence only with --host-logins'
+block=$(cat "$HOME/.gemini/GEMINI.md" 2>/dev/null)
+assert_contains "the generated environment block lists the project entry" "$block" "this project's Claude Code history and memory"
+assert_eq "and no longer lists the Antigravity brain among the host paths" "$(printf '%s\n' "$block" | grep -c 'Antigravity brain and conversations')" 0
+# the coupling register has the Codex default's row, and the markers it names exist
+assert_contains "PROJECT_MAP.md's coupling register names the Codex default" "$(cat "$REPO_ROOT/PROJECT_MAP.md")" 'ai_sandbox_codex_default'
+assert_eq "the two reads-outside markers of the default exist" "$(git -C "$REPO_ROOT" grep -n -A12 'reads-outside:' -- bin/ai/ai-sandbox-lib.sh | grep -c -e 'ai_sandbox_codex_default()' -e 'ai_sandbox_seed_agy_trust()')" 2
 assert_eq "--no-host-logins does not exist: exit 2" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-host-logins "$a" >/dev/null 2>&1; echo $?)" 2
 
 rm -rf "$tmp"

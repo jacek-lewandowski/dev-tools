@@ -193,8 +193,8 @@ Environment notes:
 - The sandbox uses the host's timezone (TZ=${HOST_TZ}); \`date\` agrees with the host.
 - The project is mounted read-write at its real host path, so edits are real
   edits to the user's working tree. The only other host paths mounted are the
-  shared AI rules file, the Antigravity brain and conversations, this project's
-  Claude Code history and memory, and ~/.gitignore (read-write), plus the
+  shared AI rules file, this project's Claude Code history and memory, and
+  ~/.gitignore (read-write), plus the
   dev-tools helpers, IntelliJ IDEA and SDKMAN (read-only, when present) and the
   host's Gradle and Maven caches (overlaid: read-only underneath, with writes
   kept in this sandbox until its next start). The rest of the host filesystem

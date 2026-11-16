@@ -1087,7 +1087,7 @@ ai_sandbox_check_capacity() {   # <name> <gb>: 0, or 1 + the over-budget refusal
 # missing parent for a nested target -- as root, and the container user can
 # then neither write to it nor, later, remove it. create-ai-sandbox.sh makes
 # them before generating the compose file; 'ai-sandbox-account reset' remakes
-# them after wiping the credential directories.
+# them after removing the login rows.
 #
 # .claude/projects is the parent of the ~/.claude/projects/<key> mount. Without
 # it Docker creates projects/ and projects/<key> root-owned inside .claude, and
