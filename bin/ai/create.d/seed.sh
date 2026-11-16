@@ -39,6 +39,10 @@ else
         log "no logins: log in inside the sandbox"
     fi
 
+    # The mode is recorded before .seeded exists, so a create that stops after this point does not
+    # leave a sandbox that reads as an unrecorded legacy one (.seeded present, no key).
+    compose_env_skeleton
+    ai_sandbox_env_set "$SANDBOX_DIR" SANDBOX_HOST_LOGINS "$LOGINS_MODE"
     date -Iseconds > "$SANDBOX_DIR/.seeded"
 fi
 

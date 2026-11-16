@@ -23,6 +23,18 @@ assert_eq "once" "$(keyline "$da")" 1
 assert_eq "no host-logins message without the option" "$(grep -c 'I1 does not hold' "$tmp/out")" 0
 create "$a" >/dev/null
 assert_eq "a second create keeps 0" "$(mode "$da")" 0
+# L-2: a first create that stops after the seed (here: the build context cannot be written) has
+# already recorded its mode, so the sandbox is not counted as an unrecorded legacy one afterwards
+for want in 0 1; do
+    e="$tmp/work/e$want"; mkdir -p "$e"; de=$(dir_of "$e")
+    rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"; mkdir -p "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
+    if [ "$want" = 1 ]; then opt=--host-logins; else opt=; fi
+    rc=$(create "$e" $opt)
+    assert_ne "L-2 the interrupted first create (mode $want) did stop" "$rc" 0
+    assert_file "L-2 the seed ran (.seeded present, mode $want)" "$de/.seeded"
+    assert_eq "L-2 the mode $want is recorded although the create stopped" "$(mode "$de")" "$want"
+done
+rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
 
 b="$tmp/work/b"; mkdir -p "$b"; db=$(dir_of "$b")
 assert_eq "create --host-logins exits 0" "$(create "$b" --host-logins)" 0

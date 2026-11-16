@@ -2,11 +2,9 @@
 # Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
 # stage functions in order and they set the script's globals.
 
-compose_env() {
-# ---------------------------------------------------------------------------
-# .env
-# ---------------------------------------------------------------------------
-
+# The .env a sandbox starts with; also made by the first seed, which records the logins mode
+# before it writes .seeded (see seed.sh).
+compose_env_skeleton() {
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" <<'ENVEOF'
 # Secrets for this sandbox. Uncomment and fill in as needed.
@@ -15,6 +13,14 @@ if [ ! -f "$ENV_FILE" ]; then
 ENVEOF
 fi
 chmod 600 "$ENV_FILE"
+}
+
+compose_env() {
+# ---------------------------------------------------------------------------
+# .env
+# ---------------------------------------------------------------------------
+
+compose_env_skeleton
 
 # The host's own identity, from its global git configuration: no repository is
 # discovered, so a project cannot choose which identity its sandbox commits as.
