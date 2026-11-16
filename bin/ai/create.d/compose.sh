@@ -239,13 +239,14 @@ COMPOSE_BRAIN
 fi
 
 cat <<COMPOSE_VOLS
-      # Live-shared Antigravity brain and conversations. ~/.gemini/config is
-      # deliberately NOT here: it holds mcp_config.json and plugins/, which the
-      # host's Antigravity executes, so it is seeded per sandbox instead.
-      - "${HOME}/.gemini/antigravity/brain:${CONTAINER_HOME}/.gemini/antigravity/brain"
-      - "${HOME}/.gemini/antigravity/conversations:${CONTAINER_HOME}/.gemini/antigravity/conversations"
-      - "${HOME}/.gemini/antigravity-ide/brain:${CONTAINER_HOME}/.gemini/antigravity-ide/brain"
-      - "${HOME}/.gemini/antigravity-ide/conversations:${CONTAINER_HOME}/.gemini/antigravity-ide/conversations"
+      # Antigravity's brain and conversations are this sandbox's own (I1: no sandbox reads another
+      # project's conversations). ~/.gemini/config is deliberately NOT bound either: it holds
+      # mcp_config.json and plugins/, which the host's Antigravity executes, so it is seeded per
+      # sandbox instead.
+      - "${SANDBOX_DIR}/antigravity-brain:${CONTAINER_HOME}/.gemini/antigravity/brain"
+      - "${SANDBOX_DIR}/antigravity-conversations:${CONTAINER_HOME}/.gemini/antigravity/conversations"
+      - "${SANDBOX_DIR}/antigravity-ide-brain:${CONTAINER_HOME}/.gemini/antigravity-ide/brain"
+      - "${SANDBOX_DIR}/antigravity-ide-conversations:${CONTAINER_HOME}/.gemini/antigravity-ide/conversations"
       # Live-shared Claude Code history and memory for THIS project only. The
       # whole of ~/.claude/projects would let a prompt-injected agent read other
       # projects' transcripts and plant memory the host loads automatically.

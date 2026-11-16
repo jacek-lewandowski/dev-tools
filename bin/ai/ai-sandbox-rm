@@ -6,7 +6,7 @@ set -euo pipefail
 ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 ai_sandbox_require_ctx || exit 1
 
-printf 'Remove %s and all credentials in %s? [y/N] ' "$AI_SANDBOX_NAME" "$AI_SANDBOX_DIR"
+printf 'Remove %s and all credentials, Antigravity brain and conversations in %s? [y/N] ' "$AI_SANDBOX_NAME" "$AI_SANDBOX_DIR"
 read -r reply
 case "$reply" in
     y|Y) ;;

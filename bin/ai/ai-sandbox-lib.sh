@@ -1091,13 +1091,20 @@ ai_sandbox_check_capacity() {   # <name> <gb>: 0, or 1 + the over-budget refusal
 #
 # .claude/projects is the parent of the ~/.claude/projects/<key> mount. Without
 # it Docker creates projects/ and projects/<key> root-owned inside .claude, and
-# 'rm -rf .claude' fails on <key> ever after.
+# 'rm -rf .claude' fails on <key> ever after. Likewise .gemini/antigravity and .gemini/antigravity-ide
+# are the parents of the four brain and conversations mounts, whose sources are the sandbox's own.
 # cache/ and npm/ are per sandbox on purpose: both hold code the sandbox writes
 # at run time (wheels, npm tarballs), so sharing them would let one sandbox
 # feed code to another.
 ai_sandbox_state_dirs() {
     cat <<'DIRS'
 .gemini
+.gemini/antigravity
+.gemini/antigravity-ide
+antigravity-brain
+antigravity-conversations
+antigravity-ide-brain
+antigravity-ide-conversations
 .antigravity
 .antigravity-ide
 .claude
