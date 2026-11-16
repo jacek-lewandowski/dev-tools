@@ -6,14 +6,6 @@
 # rows always, the login rows only for a sandbox in the host mode (--host-logins). Each login
 # row copied is appended to host-logins.log, which only the host reads ('ai-sandbox-account
 # reset' lists it).
-seed_log_logins() {  # <rows printed by ai_sandbox_seed_copy>
-    local row now
-    now=$(date -Iseconds)
-    while IFS= read -r row; do
-        [ -n "$row" ] && printf '%s\t%s\n' "$now" "$row" >> "$SANDBOX_DIR/host-logins.log"
-    done
-}
-
 seed_tool_state() {
 # ---------------------------------------------------------------------------
 # Copy tool state into the sandbox
@@ -37,7 +29,7 @@ else
     ai_sandbox_seed_copy "$SANDBOX_DIR" settings tools >/dev/null
     log "settings"
     if [ "$LOGINS_SEED" = "yes" ]; then
-        ai_sandbox_seed_copy "$SANDBOX_DIR" login tools | seed_log_logins
+        ai_sandbox_seed_copy "$SANDBOX_DIR" login tools | ai_sandbox_seed_log_logins "$SANDBOX_DIR"
         log "the host's logins (--host-logins)"
     else
         log "no logins: log in inside the sandbox"
@@ -89,7 +81,7 @@ if [ -d "$IDEA_HOST_DIR" ]; then
             ai_sandbox_seed_copy "$SANDBOX_DIR" settings idea >/dev/null
             log "settings seeded from the host, once"
             if [ "${LOGINS_MODE:-}" != "0" ]; then
-                ai_sandbox_seed_copy "$SANDBOX_DIR" login idea | seed_log_logins
+                ai_sandbox_seed_copy "$SANDBOX_DIR" login idea | ai_sandbox_seed_log_logins "$SANDBOX_DIR"
                 log "licence seeded from the host (--host-logins)"
             fi
         fi

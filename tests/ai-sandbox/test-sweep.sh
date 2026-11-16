@@ -35,7 +35,7 @@ host() {
     printf -- '---\nname: newskill\ndescription: d\n---\nx\n' > "$tmp/seedclone/skills/newskill/SKILL.md"
     git -C "$tmp/seedclone" add -A; git -C "$tmp/seedclone" commit -qm "skill"; git -C "$tmp/seedclone" push -q origin main
     proj="$tmp/work/p"; mkproj "$proj"
-    bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/create0.out" 2>&1 </dev/null
+    bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --host-logins "$proj" >"$tmp/create0.out" 2>&1 </dev/null
     sb="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
     rm -f "$sb/.gemini/GEMINI.md" "$sb/.claude/CLAUDE.md" "$sb/.codex/AGENTS.md"   # a sandbox may delete its mount targets
     mkdir -p "$HOME/.gemini/antigravity-ide/brain"; printf 'legacy\n' > "$HOME/.gemini/antigravity-ide/brain/CLAUDE.md"

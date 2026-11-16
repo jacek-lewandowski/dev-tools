@@ -36,6 +36,7 @@ echo '{"name":"IntelliJ IDEA","version":"2025.1"}' > "$idea/product-info.json"
 mkdir -p "$HOME/.config/JetBrains/IntelliJIdea2025.1/options" \
          "$HOME/.local/share/JetBrains/IntelliJIdea2025.1/some-plugin/lib"
 echo 'LICENCE' > "$HOME/.config/JetBrains/IntelliJIdea2025.1/idea.key"
+mkdir -p "$HOME/.config/JetBrains/IntelliJIdea2025.1/codestyles"; echo 'STYLE' > "$HOME/.config/JetBrains/IntelliJIdea2025.1/codestyles/mine.xml"
 echo 'jar'     > "$HOME/.local/share/JetBrains/IntelliJIdea2025.1/some-plugin/lib/p.jar"
 
 IDEA_HOST_DIR="$idea" bash "$CREATE" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
@@ -92,11 +93,11 @@ IDEA_HOST_DIR="$idea" bash "$CREATE" --display=none --no-start "$proj" >"$tmp/ou
 assert_eq "sandbox-local settings survive a re-run" \
     "$(cat "$dir/jetbrains-config/IntelliJIdea2025.1/idea.key")" 'CHANGED-INSIDE'
 
-# --- and 'ai-sandbox-account reset' must not delete the IDE licence --------
-TESTS_RUN=$((TESTS_RUN + 1))
-if ai_sandbox_seed_paths | grep -q 'JetBrains'; then
-    _fail "IDE state is not treated as an AI credential" \
-        "jetbrains is in ai_sandbox_seed_paths, so 'ai-sandbox-account reset' would rm -rf it"
-else _pass "IDE state is not treated as an AI credential"; fi
+# --- 'ai-sandbox-account reset' removes the IDE licence and keeps the IDE settings (U-b (a))
+assert_file "before the reset: the licence is there" "$dir2/jetbrains-config/IntelliJIdea2025.1/idea.key"
+( cd "$proj2" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" reset --yes >"$tmp/reset.out" 2>&1 )
+assert_no_file "reset removes the IDE licence" "$dir2/jetbrains-config/IntelliJIdea2025.1/idea.key"
+assert_eq "reset keeps the IDE settings" "$(cat "$dir2/jetbrains-config/IntelliJIdea2025.1/codestyles/mine.xml")" 'STYLE'
+assert_contains "the reset listing names the licence" "$(cat "$tmp/reset.out")" 'jetbrains-config/IntelliJIdea2025.1/idea.key'
 
 finish

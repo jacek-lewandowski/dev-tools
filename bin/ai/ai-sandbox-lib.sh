@@ -1081,51 +1081,6 @@ ai_sandbox_check_capacity() {   # <name> <gb>: 0, or 1 + the over-budget refusal
     return 1
 }
 
-# rsync '--exclude=' arguments for copying the host's <path under $HOME> into
-# a sandbox, one per line. Used by the one-time seed in create-ai-sandbox.sh
-# and by 'ai-sandbox-account refresh', so a refresh can never drag in what the
-# seed deliberately left out: caches, the bulk that now lives in shared/, host
-# state a single-project sandbox has no use for, and the paths that are
-# bind-mounted live instead of copied (the shared brain and conversations,
-# ~/.claude/CLAUDE.md and this project's ~/.claude/projects entry).
-ai_sandbox_seed_excludes() {
-    cat <<'EX'
---exclude=*Cache*
---exclude=*cache*
---exclude=BrowserMetrics*
---exclude=Crashpad
---exclude=logs
---exclude=tmp
---exclude=extensions
---exclude=downloads
---exclude=claude-code
---exclude=CachedExtensionVSIXs
---exclude=CachedData
---exclude=WebStorage
---exclude=workspaceStorage
---exclude=Safe Browsing
---exclude=optimization_guide_model_store
---exclude=WasmTtsEngine
---exclude=OnDeviceHeadSuggestModel
---exclude=CertificateRevocation
-EX
-    case $1 in
-        .gemini) cat <<'EX'
---exclude=brain
---exclude=conversations
---exclude=browser_recordings
---exclude=html_artifacts
---exclude=history
---exclude=History*
---exclude=IndexedDB
---exclude=Service Worker
---exclude=GEMINI.md
-EX
-        ;;
-        .claude) printf '%s\n' --exclude=CLAUDE.md --exclude=projects ;;
-    esac
-}
-
 # Every directory under a sandbox directory that the compose file binds into
 # the container, plus the parents of nested mount targets. All of them must
 # exist before 'compose up': Docker creates a missing bind source -- or a
@@ -1311,26 +1266,8 @@ ai_sandbox_caches_reset() {   # <sandbox dir>
     return 0
 }
 
-# '<path under $HOME on the host>|<path under the sandbox directory>'.
-# Everything here is identity-bearing -- OAuth tokens, account records, the
-# Electron profiles that hold a logged-in session -- so it is seeded from the
-# host exactly once and never overwritten afterwards. That is what lets one
-# project hold a different Claude, Codex or Gemini account from another.
-ai_sandbox_seed_paths() {
-    cat <<'SEED'
-.gemini|.gemini
-.antigravity|.antigravity
-.antigravity-ide|.antigravity-ide
-.claude|.claude
-.codex|.codex
-.config/Antigravity|antigravity-data
-.config/Antigravity IDE|antigravity-ide-data
-.config/Claude|claude-data
-SEED
-}
-
 # ai_sandbox_seed_table (the phase 7 plan's contract, as reviewed)
-#   The seed's allow list (replaces ai_sandbox_seed_paths and ai_sandbox_seed_excludes).
+#   The seed's allow list.
 #   One row per line, nothing else printed:
 #     <class>|<path under $HOME on the host>|<path under the sandbox directory>|<how>
 #   class  settings  copied by the first seed of every sandbox and by 'ai-sandbox-account reset'
@@ -1651,4 +1588,85 @@ ai_sandbox_seed_copy() {   # <sandbox dir> <settings|login> [tools|idea]
         done < <(ai_sandbox_seed_expand "$HOME" "$host" "$sb")
     done < <(ai_sandbox_seed_table)
     return 0
+}
+
+# One line per login row copied, as ai_sandbox_seed_copy prints them, on standard input:
+# appended to <sandbox dir>/host-logins.log as '<date>TAB<row>[TAB partial]'. Only the host
+# reads the log ('ai-sandbox-account reset' lists it; its format is not a contract).
+ai_sandbox_seed_log_logins() {   # <sandbox dir>
+    local row now
+    now=$(date -Iseconds)
+    while IFS= read -r row; do
+        [ -n "$row" ] && printf '%s\t%s\n' "$now" "$row" >> "$1/host-logins.log"
+    done
+    return 0
+}
+
+# Sets <key> in <sandbox dir>/.env: the whole file is rebuilt beside it and renamed over it, so a
+# failure leaves .env as it was.
+ai_sandbox_env_set() {   # <sandbox dir> <key> <value>
+    local tmp="$1/.env.tmp.$$"
+    { { grep -v "^$2=" "$1/.env" 2>/dev/null || true; printf '%s=%s\n' "$2" "$3"; } > "$tmp" \
+        && { chmod --reference="$1/.env" "$tmp" 2>/dev/null || true; } \
+        && mv -f "$tmp" "$1/.env"; } || { rm -f "$tmp"; return 1; }
+}
+
+# Copies the files and directories at the given sandbox paths into a host directory, entering
+# every component below the sandbox directory without following a link (ai_sandbox_nofollow has
+# no read operation); a link, or anything on the way that is one, is skipped with a stderr line.
+ai_sandbox_seed_backup() {   # <sandbox dir> <backup dir> <sandbox path>...
+    python3 -I -c '
+import os, shutil, stat, sys
+root, dest, paths = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3:]
+FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+def skip(p, why):
+    sys.stderr.write("ai-sandbox: not backed up: %s (%s)\n" % (p, why))
+def copy_tree(fd, rel):
+    os.makedirs(os.path.join(dest, rel), exist_ok=True)
+    for name in sorted(os.listdir(fd)):
+        sub = rel + "/" + name
+        try:
+            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(st.st_mode):
+                nfd = os.open(name, FL | os.O_DIRECTORY, dir_fd=fd)
+                try: copy_tree(nfd, sub)
+                finally: os.close(nfd)
+            elif stat.S_ISREG(st.st_mode):
+                copy_file(fd, name, sub)
+            else:
+                skip(sub, "not a plain file")
+        except OSError as e:
+            skip(sub, e.strerror or str(e))
+def copy_file(fd, name, rel):
+    sfd = os.open(name, FL, dir_fd=fd)
+    try:
+        out = os.path.join(dest, rel)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with os.fdopen(os.dup(sfd), "rb") as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        os.chmod(out, 0o600)
+    finally:
+        os.close(sfd)
+for p in paths:
+    parts = p.split("/")
+    fd = os.open(root, FL | os.O_DIRECTORY)
+    try:
+        for c in parts[:-1]:
+            nfd = os.open(c, FL | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+        st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(st.st_mode):
+            nfd = os.open(parts[-1], FL | os.O_DIRECTORY, dir_fd=fd)
+            try: copy_tree(nfd, p)
+            finally: os.close(nfd)
+        elif stat.S_ISREG(st.st_mode):
+            copy_file(fd, parts[-1], p)
+        else:
+            skip(p, "not a plain file")
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        skip(p, e.strerror or str(e))
+    finally:
+        os.close(fd)
+' "$@"
 }

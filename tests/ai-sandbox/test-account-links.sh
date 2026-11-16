@@ -2,15 +2,16 @@
 # ai-sandbox-account refresh and reset write nothing through a link a sandbox placed in its state (O10).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true; }
+create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --host-logins "$proj" >>"$tmp/out" 2>&1 || true; }
 acct() { ( cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" "$@" 2>&1 ); }
 
 host() {
     fake_home >/dev/null; tmp=$FAKE_HOME_DIR
     . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
     proj="$tmp/work/p"; mkdir -p "$proj"
-    mkdir -p "$HOME/.claude/sub" "$HOME/.codex"
-    echo host-token > "$HOME/.claude/.credentials.json"; echo host-file > "$HOME/.claude/sub/file"; echo '{"a":"host"}' > "$HOME/.claude.json"
+    mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.config/Claude/Local Storage"
+    echo host-token > "$HOME/.claude/.credentials.json"; echo host-file > "$HOME/.config/Claude/Local Storage/file"; echo '{"a":"host"}' > "$HOME/.claude.json"
+    echo '{"theme":"host"}' > "$HOME/.claude/settings.json"
     echo host-codex > "$HOME/.codex/auth.json"
     create; dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
     trap_dir="$tmp/trap"; mkdir -p "$trap_dir/dir"; printf 'trap\n' > "$trap_dir/file"; printf 'trap\n' > "$trap_dir/dir/inner"
@@ -27,19 +28,23 @@ case_of() {
     assert_eq "O10 $label: $cmd exits 0" "$rc" 0
     assert_eq "O10 $label: $cmd leaves the trap unchanged" "$(snap "$trap_dir")" "$t0"
 }
-case_of "a directory the host's copy holds (.claude/sub)" refresh .claude/sub dir
-case_of "a file the host's copy holds (.claude/.credentials.json)" refresh .claude/.credentials.json file
+case_of "a login directory row (claude-data/Local Storage)" refresh "claude-data/Local Storage" dir
+case_of "a login file row (.claude/.credentials.json)" refresh .claude/.credentials.json file
 case_of "the projects mount (.claude/projects)" refresh .claude/projects dir
-case_of "a directory the host's copy holds (.claude/sub)" reset .claude/sub dir
+case_of "a login directory row (claude-data/Local Storage)" reset "claude-data/Local Storage" dir
+case_of "a login file row (.claude/.credentials.json)" reset .claude/.credentials.json file
+case_of "a settings row (.claude/settings.json)" reset .claude/settings.json file
 case_of "the projects mount (.claude/projects)" reset .claude/projects dir
-assert_eq "O10 reset: .claude/projects is a real directory again" "$([ -d "$dir/.claude/projects" ] && [ ! -L "$dir/.claude/projects" ] && echo yes)" yes
+# a link at the mount's parent is refused, named on standard error, and left (the sandbox's own business)
+host; rm -rf "${dir:?}/.claude/projects"; ln -s "$trap_dir/dir" "$dir/.claude/projects"
+assert_contains "O10 reset names the refusal at .claude/projects" "$(acct reset --yes)" 'refused'
 
-# Without links the result is what test-account.sh expects: the host's files arrive, the mounts stay
+# Without links the result is what test-account.sh expects: the host's logins arrive, the mounts stay
 host
-mkdir -p "$dir/.claude/projects/mine"; echo mine > "$dir/.claude/projects/mine/keep"; echo stale > "$dir/.claude/stale"
+mkdir -p "$dir/.claude/projects/mine"; echo mine > "$dir/.claude/projects/mine/keep"
+echo changed > "$HOME/.claude/.credentials.json"; echo changed-file > "$HOME/.config/Claude/Local Storage/file"
 acct refresh --yes >/dev/null
-assert_eq "refresh pulls the host token" "$(cat "$dir/.claude/.credentials.json")" host-token
-assert_eq "refresh pulls a subdirectory's file" "$(cat "$dir/.claude/sub/file")" host-file
+assert_eq "refresh pulls the host token" "$(cat "$dir/.claude/.credentials.json")" changed
+assert_eq "refresh pulls a login directory's file" "$(cat "$dir/claude-data/Local Storage/file")" changed-file
 assert_file "refresh keeps the projects mount" "$dir/.claude/projects/mine/keep"
-assert_no_file "refresh removes a stale file" "$dir/.claude/stale"
 finish
