@@ -5,6 +5,12 @@ ai_sandbox_refuse_writable_self "${BASH_SOURCE[0]}" || exit 3
 ai_sandbox_require_ctx || exit 1
 # No knowledge sync here: create-ai-sandbox.sh and an explicit
 # 'ai-knowledge sync' are the only places that run it.
+# Before 'down' and before the display: a refused restart must leave the sandbox
+# running, not stopped, and no display process behind.
+ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
+ai_sandbox_memory_budget_gb >/dev/null || exit 1
+ai_sandbox_check_capacity "$AI_SANDBOX_NAME" "$(ai_sandbox_memory_gb "$AI_SANDBOX_DIR")" || exit 1
+ai_sandbox_require_image "$AI_SANDBOX_DIR" || exit 1
 # Before the build-caches lock, like 'ai-sandbox': start-display.sh can launch
 # long-lived background processes (Xephyr, Xvfb, the xpra viewer) that would
 # otherwise inherit CACHES_LOCK_FD and keep the flock held long after this
@@ -12,11 +18,6 @@ ai_sandbox_require_ctx || exit 1
 if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
     "$AI_SANDBOX_DIR/start-display.sh" || exit 1
 fi
-# Before 'down': a refused restart must leave the sandbox running, not stopped.
-ai_sandbox_require_current "$AI_SANDBOX_DIR" || exit 1
-ai_sandbox_memory_budget_gb >/dev/null || exit 1
-ai_sandbox_check_capacity "$AI_SANDBOX_NAME" "$(ai_sandbox_memory_gb "$AI_SANDBOX_DIR")" || exit 1
-ai_sandbox_require_image "$AI_SANDBOX_DIR" || exit 1
 CACHES_ENABLED=0
 ai_sandbox_caches_enabled "$AI_SANDBOX_DIR" && CACHES_ENABLED=1
 if [ "$CACHES_ENABLED" -eq 1 ]; then

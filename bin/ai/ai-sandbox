@@ -17,12 +17,10 @@ fi
 
 # No knowledge sync here: create-ai-sandbox.sh and an explicit
 # 'ai-knowledge sync' are the only places that run it.
-# Must precede 'compose up': Docker would otherwise create the display's mount
-# source itself, as root, and Xephyr could no longer bind its socket.
-if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
-    "$AI_SANDBOX_DIR/start-display.sh" || exit 1
-fi
-if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null)" != "true" ]; then
+# Every refusal of a start comes before the display: a refused start must leave
+# no display process behind. A running container is entered without them.
+RUNNING=$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null || true)
+if [ "$RUNNING" != "true" ]; then
     # A sandbox whose compose file predates the host's knowledge configuration
     # would mount the rules read-write, so it is refused only here, where it
     # would come up; a running container is entered whatever its stamp.
@@ -30,6 +28,13 @@ if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/d
     ai_sandbox_memory_budget_gb >/dev/null || exit 1
     ai_sandbox_check_capacity "$AI_SANDBOX_NAME" "$(ai_sandbox_memory_gb "$AI_SANDBOX_DIR")" || exit 1
     ai_sandbox_require_image "$AI_SANDBOX_DIR" || exit 1
+fi
+# Must precede 'compose up': Docker would otherwise create the display's mount
+# source itself, as root, and Xephyr could no longer bind its socket.
+if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
+    "$AI_SANDBOX_DIR/start-display.sh" || exit 1
+fi
+if [ "$RUNNING" != "true" ]; then
     if ai_sandbox_caches_enabled "$AI_SANDBOX_DIR"; then
         # D5/D2: hold the lock from before the check until 'up' has returned --
         # releasing it any earlier would let a concurrent start reset the
