@@ -1316,3 +1316,307 @@ ai_sandbox_seed_paths() {
 .config/Claude|claude-data
 SEED
 }
+
+# The seed's allow list (phase 7): what a new sandbox may receive from the host, and nothing
+# else. One row per line: <class>|<path under $HOME>|<path under the sandbox directory>|<how>.
+# class settings: copied by the first seed of every sandbox and by 'ai-sandbox-account reset';
+#       login: copied in addition only for a sandbox in the host mode, by its first seed and by
+#       'ai-sandbox-account refresh', removed by 'reset'. how: whole (the file, or the directory
+#       with everything below it, links as links), links (only the symbolic links directly in the
+#       directory), json or xml (the file cut to the keys ai_sandbox_seed_keys lists for the row).
+# A component may hold '*'. A row whose host path is absent copies nothing.
+# reads-outside: the layouts of the host's tool stores, as the user's tools write them: Claude Code
+# (~/.claude, ~/.claude.json), Codex (~/.codex), Gemini CLI and Antigravity CLI (~/.gemini),
+# Claude Desktop (~/.config/Claude), Antigravity and Antigravity IDE (~/.config/Antigravity,
+# ~/.config/Antigravity IDE) and JetBrains (~/.config/JetBrains/<product>); a tool that renames a
+# file here silently stops it arriving, so change a row only with a look at that tool's layout.
+ai_sandbox_seed_table() {
+    cat <<'SEED'
+settings|.claude/settings.json|.claude/settings.json|json
+settings|.gemini/settings.json|.gemini/settings.json|json
+settings|.gemini/antigravity-cli/settings.json|.gemini/antigravity-cli/settings.json|json
+settings|.claude/skills|.claude/skills|links
+settings|.codex/skills|.codex/skills|links
+settings|.gemini/skills|.gemini/skills|links
+settings|.codex/AGENTS.md|.codex/AGENTS.md|whole
+settings|.gemini/config/AGENTS.md|.gemini/config/AGENTS.md|whole
+settings|.config/Antigravity/User/settings.json|antigravity-data/User/settings.json|json
+settings|.config/Antigravity/User/keybindings.json|antigravity-data/User/keybindings.json|json
+settings|.config/Antigravity IDE/User/settings.json|antigravity-ide-data/User/settings.json|json
+settings|.config/Antigravity IDE/User/keybindings.json|antigravity-ide-data/User/keybindings.json|json
+settings|.config/JetBrains/*/codestyles|jetbrains-config/*/codestyles|whole
+settings|.config/JetBrains/*/colors|jetbrains-config/*/colors|whole
+settings|.config/JetBrains/*/keymaps|jetbrains-config/*/keymaps|whole
+settings|.config/JetBrains/*/disabled_plugins.txt|jetbrains-config/*/disabled_plugins.txt|whole
+settings|.config/JetBrains/*/options/editor.xml|jetbrains-config/*/options/editor.xml|xml
+settings|.config/JetBrains/*/options/editor-font.xml|jetbrains-config/*/options/editor-font.xml|xml
+settings|.config/JetBrains/*/options/console-font.xml|jetbrains-config/*/options/console-font.xml|xml
+settings|.config/JetBrains/*/options/terminal-font.xml|jetbrains-config/*/options/terminal-font.xml|xml
+settings|.config/JetBrains/*/options/laf.xml|jetbrains-config/*/options/laf.xml|xml
+settings|.config/JetBrains/*/options/ui.lnf.xml|jetbrains-config/*/options/ui.lnf.xml|xml
+settings|.config/JetBrains/*/options/colors.scheme.xml|jetbrains-config/*/options/colors.scheme.xml|xml
+settings|.config/JetBrains/*/options/keymapFlags.xml|jetbrains-config/*/options/keymapFlags.xml|xml
+login|.claude/.credentials.json|.claude/.credentials.json|whole
+login|.claude.json|.claude.json|json
+login|.codex/auth.json|.codex/auth.json|whole
+login|.gemini/oauth_creds.json|.gemini/oauth_creds.json|whole
+login|.gemini/google_accounts.json|.gemini/google_accounts.json|whole
+login|.gemini/antigravity-cli/antigravity-oauth-token|.gemini/antigravity-cli/antigravity-oauth-token|whole
+login|.config/Claude/Cookies|claude-data/Cookies|whole
+login|.config/Claude/Local Storage|claude-data/Local Storage|whole
+login|.config/Claude/IndexedDB|claude-data/IndexedDB|whole
+login|.config/Claude/Session Storage|claude-data/Session Storage|whole
+login|.config/Claude/Local State|claude-data/Local State|whole
+login|.config/Claude/Trust Tokens|claude-data/Trust Tokens|whole
+login|.config/Claude/config.json|claude-data/config.json|whole
+login|.config/Antigravity/Cookies|antigravity-data/Cookies|whole
+login|.config/Antigravity/Local Storage|antigravity-data/Local Storage|whole
+login|.config/Antigravity/Session Storage|antigravity-data/Session Storage|whole
+login|.config/Antigravity/Trust Tokens|antigravity-data/Trust Tokens|whole
+login|.config/Antigravity/User/globalStorage/state.vscdb|antigravity-data/User/globalStorage/state.vscdb|whole
+login|.config/Antigravity IDE/Cookies|antigravity-ide-data/Cookies|whole
+login|.config/Antigravity IDE/Local Storage|antigravity-ide-data/Local Storage|whole
+login|.config/Antigravity IDE/Session Storage|antigravity-ide-data/Session Storage|whole
+login|.config/Antigravity IDE/Trust Tokens|antigravity-ide-data/Trust Tokens|whole
+login|.config/Antigravity IDE/User/globalStorage/state.vscdb|antigravity-ide-data/User/globalStorage/state.vscdb|whole
+login|.gemini/config/mcp_config.json|.gemini/config/mcp_config.json|whole
+login|.gemini/antigravity/mcp_config.json|.gemini/antigravity/mcp_config.json|whole
+login|.gemini/antigravity-ide/mcp_config.json|.gemini/antigravity-ide/mcp_config.json|whole
+login|.config/Claude/claude_desktop_config.json|claude-data/claude_desktop_config.json|whole
+login|.config/JetBrains/*/*.key|jetbrains-config/*/*.key|whole
+login|.config/JetBrains/*/*.license|jetbrains-config/*/*.license|whole
+SEED
+}
+
+# The key allow-list of a json or xml row of ai_sandbox_seed_table, one entry per line, given the
+# row's host path as the table writes it. json: a key path of components separated by '/', a
+# component being a key name, a shell glob over key names or '[]' (every element of an array); the
+# value at the path is kept whole. xml: the name attribute of a child of the root element. A key
+# no entry reaches is dropped; an entry is added only with the user's word.
+# reads-outside: the key names of the tools' settings files (Claude Code settings.json, Gemini CLI
+# settings.json, agy settings.json, the editors' settings.json and keybindings.json, the JetBrains
+# options/*.xml components): a tool that renames a key stops it arriving.
+ai_sandbox_seed_keys() {   # <host path of a json or xml row>
+    case $1 in
+        .claude/settings.json) cat <<'K'
+model
+modelSettings
+language
+theme
+editorMode
+autoCompactEnabled
+idleCompaction
+autoContinueAtUsageLimit
+agentPushNotifEnabled
+inputNeededNotifEnabled
+remoteControlAtStartup
+voice
+voiceEnabled
+K
+        ;;
+        .gemini/settings.json) cat <<'K'
+general/enablePromptCompletion
+general/previewFeatures
+security/auth/selectedType
+K
+        ;;
+        .gemini/antigravity-cli/settings.json) echo colorScheme ;;
+        '.config/Antigravity/User/settings.json'|'.config/Antigravity IDE/User/settings.json') cat <<'K'
+editor.*
+diffEditor.*
+workbench.colorTheme
+workbench.iconTheme
+files.autoSave
+terminal.integrated.fontSize
+debug.console.fontSize
+scm.inputFontSize
+git.autofetch
+git.confirmSync
+json.schemaDownload.enable
+redhat.telemetry.enabled
+extensions.ignoreRecommendations
+markdown-preview-enhanced.previewTheme
+python.languageServer
+playwright.reuseBrowser
+playwright.showTrace
+claudeCode.preferredLocation
+K
+        ;;
+        '.config/Antigravity/User/keybindings.json'|'.config/Antigravity IDE/User/keybindings.json') printf '%s\n' '[]/key' '[]/command' '[]/when' ;;
+        .config/JetBrains/\*/options/editor.xml) printf '%s\n' EditorSettings CodeInsightSettings ;;
+        .config/JetBrains/\*/options/editor-font.xml) echo DefaultFont ;;
+        .config/JetBrains/\*/options/console-font.xml) echo ConsoleFont ;;
+        .config/JetBrains/\*/options/terminal-font.xml) echo TerminalFontOptions ;;
+        .config/JetBrains/\*/options/laf.xml) echo LafManager ;;
+        .config/JetBrains/\*/options/ui.lnf.xml) echo UISettings ;;
+        .config/JetBrains/\*/options/colors.scheme.xml) echo EditorColorsManagerImpl ;;
+        .config/JetBrains/\*/options/keymapFlags.xml) echo KeymapFlagsStorage ;;
+        .claude.json) printf '%s\n' oauthAccount userID hasCompletedOnboarding ;;
+    esac
+}
+
+# Expands the globs of a table row under <base>: NUL-separated pairs <primary path> <secondary
+# path>, one pair per match that exists, the k-th '*' component of the secondary path taking the
+# name the k-th one of the primary matched. Run on the host side with the host path first, on the
+# sandbox side with the sandbox path first.
+ai_sandbox_seed_expand() {   # <base dir> <primary path> <secondary path>
+    python3 -I -c '
+import fnmatch, os, sys
+base, prim, sec = sys.argv[1:4]
+pc, sc = prim.split("/"), sec.split("/")
+wild = lambda c: any(ch in c for ch in "*?[")
+nsec = [i for i, c in enumerate(sc) if wild(c)]
+res = [("", [])]
+for c in pc:
+    nxt = []
+    for path, caps in res:
+        here = os.path.join(base, path) if path else base
+        if wild(c):
+            try:
+                names = sorted(os.listdir(here))
+            except OSError:
+                continue
+            for n in names:
+                if (n.startswith(".") and not c.startswith(".")) or not fnmatch.fnmatchcase(n, c):
+                    continue
+                nxt.append((path + "/" + n if path else n, caps + [n]))
+        else:
+            nxt.append((path + "/" + c if path else c, caps))
+    res = nxt
+for path, caps in res:
+    if not os.path.lexists(os.path.join(base, path)):
+        continue
+    out = list(sc)
+    for i, k in zip(nsec, range(len(caps))):
+        out[i] = caps[k]
+    sys.stdout.write(path + "\0" + "/".join(out) + "\0")
+' "$@"
+}
+
+# The existing sandbox-side paths of the rows of a class (NUL-separated), for the callers that back
+# up or remove them; a glob is expanded against the sandbox directory, as it is there.
+ai_sandbox_seed_sandbox_paths() {   # <sandbox dir> <class> [tools|idea]
+    local c host sb how h s
+    while IFS='|' read -r c host sb how; do
+        [ "$c" = "$2" ] || continue
+        ai_sandbox_seed_in_scope "$sb" "${3:-all}" || continue
+        while IFS= read -r -d '' s && IFS= read -r -d '' h; do
+            printf '%s\0' "$s"
+        done < <(ai_sandbox_seed_expand "$1" "$sb" "$host")
+    done < <(ai_sandbox_seed_table)
+}
+
+# 0 when a sandbox path belongs to the scope: tools (everything but the IDE's settings), idea
+# (only jetbrains-config) or all.
+ai_sandbox_seed_in_scope() {   # <sandbox path> <scope>
+    case $2 in
+        idea) case $1 in jetbrains-config/*) return 0 ;; *) return 1 ;; esac ;;
+        tools) case $1 in jetbrains-config/*) return 1 ;; *) return 0 ;; esac ;;
+        *) return 0 ;;
+    esac
+}
+
+# A json or xml file cut to its allowed keys, on standard output; 1 when it does not parse.
+# JSON may hold comments and trailing commas (the editors' files do).
+ai_sandbox_seed_filter() {   # <json|xml> <file> <key>...
+    python3 -I -c '
+import fnmatch, json, re, sys
+kind, path, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+MISSING = object()
+try:
+    if kind == "xml":
+        import xml.etree.ElementTree as ET
+        root = ET.parse(path).getroot()
+        for ch in list(root):
+            if ch.get("name") not in keys:
+                root.remove(ch)
+        out = ET.tostring(root, encoding="unicode") + "\n"
+        doc = None
+    else:
+        S = r"(\"(?:\\.|[^\"\\])*\")"
+        t = re.sub(S + r"|//[^\n]*|/\*.*?\*/", lambda m: m.group(1) or "", open(path, encoding="utf-8-sig").read(), flags=re.S)
+        doc = json.loads(re.sub(S + r"|,(\s*[}\]])", lambda m: m.group(1) or m.group(2), t))
+        if not isinstance(doc, (dict, list)):
+            raise ValueError("root")
+except Exception:
+    sys.exit(1)
+
+def keep(v, paths):
+    if any(not p for p in paths):
+        return v
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            sub = [p[1:] for p in paths if p[0] != "[]" and fnmatch.fnmatchcase(k, p[0])]
+            if sub:
+                r = keep(x, sub)
+                if r is not MISSING:
+                    out[k] = r
+        return out if out else MISSING
+    if isinstance(v, list):
+        sub = [p[1:] for p in paths if p[0] == "[]"]
+        out = []
+        if sub:
+            for x in v:
+                r = keep(x, sub)
+                if r is not MISSING:
+                    out.append(r)
+        return out if out else MISSING
+    return MISSING
+
+if doc is None:
+    sys.stdout.write(out)
+else:
+    r = keep(doc, [tuple(k.split("/")) for k in keys])
+    if r is MISSING:
+        r = {} if isinstance(doc, dict) else []
+    sys.stdout.write(json.dumps(r, indent=2, ensure_ascii=False) + "\n")
+' "$@"
+}
+
+# Copies the rows of one class from $HOME into a sandbox directory, every write below it through
+# ai_sandbox_nofollow (a refusal is one stderr line and the copy goes on). Prints, one per line,
+# the sandbox path of each row written, so a caller can log the logins. scope: tools (all but the
+# IDE's settings), idea (only those) or all. A json or xml file that does not parse is not
+# written: one stderr line naming it.
+ai_sandbox_seed_copy() {   # <sandbox dir> <settings|login> [tools|idea]
+    local root c host sb how h s mode parent name target out
+    local -a keys
+    root=$(readlink -f "$1") || return 1
+    while IFS='|' read -r c host sb how; do
+        [ "$c" = "$2" ] || continue
+        ai_sandbox_seed_in_scope "$sb" "${3:-all}" || continue
+        mapfile -t keys < <(ai_sandbox_seed_keys "$host")
+        while IFS= read -r -d '' h && IFS= read -r -d '' s; do
+            parent=${s%/*}
+            if [ "$parent" != "$s" ]; then ai_sandbox_nofollow mkdir "$root" "$parent" || continue; fi
+            case $how in
+                json|xml)
+                    if ! out=$(ai_sandbox_seed_filter "$how" "$HOME/$h" "${keys[@]}"); then
+                        echo "ai-sandbox: $h is not copied: it does not parse as $how" >&2
+                        continue
+                    fi
+                    mode=$(stat -c %a "$HOME/$h" 2>/dev/null || echo 600)
+                    printf '%s\n' "$out" | ai_sandbox_nofollow write "$root" "$s" "$mode" || continue ;;
+                links)
+                    [ -d "$HOME/$h" ] || continue
+                    ai_sandbox_nofollow mkdir "$root" "$s" || continue
+                    while IFS= read -r -d '' target; do
+                        name=${target##*/}
+                        ai_sandbox_nofollow link "$root" "$s/$name" "$(readlink "$target")" || true
+                    done < <(find "$HOME/$h" -mindepth 1 -maxdepth 1 -type l -print0) ;;
+                *)
+                    if [ -d "$HOME/$h" ]; then
+                        ai_sandbox_nofollow copy "$root" "$s" "$HOME/$h" --delete || continue
+                    elif [ -f "$HOME/$h" ]; then
+                        mode=$(stat -c %a "$HOME/$h" 2>/dev/null || echo 600)
+                        ai_sandbox_nofollow write "$root" "$s" "$mode" < "$HOME/$h" || continue
+                    else
+                        continue
+                    fi ;;
+            esac
+            printf '%s\n' "$s"
+        done < <(ai_sandbox_seed_expand "$HOME" "$host" "$sb")
+    done < <(ai_sandbox_seed_table)
+    return 0
+}
