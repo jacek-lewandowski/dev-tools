@@ -1677,3 +1677,66 @@ for p in paths:
         os.close(fd)
 ' "$@"
 }
+
+# The Codex default (phase 7, T09; keys settled from Codex's configuration reference): on standard
+# output, the file a sandbox's .codex/config.toml starts as -- Codex's "Approve for me" and trust
+# of this one project. Written by create's first seed and by 'ai-sandbox-account reset', never
+# copied from the host, never read back (I3d). The project path is a TOML basic string
+# (JSON string escapes are valid there).
+# reads-outside: Codex's config.toml layout and key names (approval_policy, approvals_reviewer,
+# sandbox_mode, [projects."<path>"] trust_level), as the Codex CLI in the image reads them; the
+# image installs Codex unpinned, so a renamed key silently stops the default.
+ai_sandbox_codex_default() {   # <the project's absolute path, as bound in the container>
+    local quoted
+    quoted=$(python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1") || return 1
+    cat <<TOML
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+
+[projects.$quoted]
+trust_level = "trusted"
+TOML
+}
+
+# Writes the Codex default below the sandbox directory without following a link; replaces a file
+# there (reset's "anew"). One stderr line and exit 1 on a refusal.
+ai_sandbox_seed_codex_default() {   # <sandbox dir> <project path>
+    local root
+    root=$(readlink -f "$1") || return 1
+    ai_sandbox_nofollow mkdir "$root" .codex || return 1
+    ai_sandbox_codex_default "$2" | ai_sandbox_nofollow write "$root" .codex/config.toml 600
+}
+
+# agy's trust of the project (user decision U-e (a)): <sandbox dir>/.gemini/antigravity-cli/settings.json
+# gains "trustedWorkspaces": [<project path>], after the settings row's copy, which never carries the
+# key; the file is created when the host had none. The existing file is read without following a
+# link (a file that is not JSON starts again from {}).
+# reads-outside: agy's settings.json key trustedWorkspaces (a list of absolute path strings).
+ai_sandbox_seed_agy_trust() {   # <sandbox dir> <project path>
+    local root out
+    root=$(readlink -f "$1") || return 1
+    out=$(python3 -I -c '
+import json, os, sys
+root, project = sys.argv[1:3]
+FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+doc = {}
+fd = os.open(root, FL | os.O_DIRECTORY)
+try:
+    for c in (".gemini", "antigravity-cli"):
+        nfd = os.open(c, FL | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+    ffd = os.open("settings.json", FL, dir_fd=fd)
+    with os.fdopen(ffd, "rb") as f:
+        data = json.loads(f.read().decode("utf-8"))
+    if isinstance(data, dict):
+        doc = data
+except (OSError, ValueError):
+    pass
+finally:
+    os.close(fd)
+doc["trustedWorkspaces"] = [project]
+print(json.dumps(doc, indent=2))
+' "$root" "$2") || return 1
+    ai_sandbox_nofollow mkdir "$root" .gemini/antigravity-cli || return 1
+    printf '%s\n' "$out" | ai_sandbox_nofollow write "$root" .gemini/antigravity-cli/settings.json 600
+}

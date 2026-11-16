@@ -66,6 +66,8 @@ for f in .claude/agents/a.md .codex/agents/a.toml .gemini/agents/a.md .antigravi
          .claude/noname.txt .codex/noname.txt .gemini/noname.txt .gemini/config/noname.txt .gemini/antigravity/noname.txt \
          .gemini/antigravity-cli/noname.txt .antigravity/noname.txt .antigravity-ide/noname.txt \
          $AG/noname.txt "$AGI/noname.txt" $CD/noname.txt $JB/noname.txt $JB/options/noname.txt; do mk "$f"; done
+# the host's Codex configuration: a marker and the host's own project list (O12)
+printf 'MARK:codex-config\nmodel = "MARK:model"\n[projects."/host/other/path"]\ntrust_level = "trusted"\n' > "$HOME/.codex/config.toml"
 # settings rows: whole, links
 WHOLE=(.codex/AGENTS.md .gemini/config/AGENTS.md $JB/codestyles/c.xml $JB/colors/c.icls $JB/keymaps/k.xml $JB/disabled_plugins.txt)
 for f in "${WHOLE[@]}"; do mk "$f"; done
@@ -145,16 +147,35 @@ assert_link "a links row keeps the link and its text" "$d1/.claude/skills/shared
 assert_link "codex skills the same" "$d1/.codex/skills/shared" ../../.agents/skills/shared
 assert_link "gemini skills the same" "$d1/.gemini/skills/shared" ../../.agents/skills/shared
 assert_no_file "a skill directory is not copied (U-d (a))" "$d1/.claude/skills/own"
-assert_no_file "the Codex configuration is not copied" "$d1/.codex/config.toml"
+assert_eq "the host's Codex configuration is not copied: no host marker in .codex/config.toml" "$(grep -c -e 'MARK:' -e '/host/other/path' "$d1/.codex/config.toml")" 0
 assert_eq "the cut files parse (the one with comments included)" \
     "$(for f in .claude/settings.json .gemini/settings.json .gemini/antigravity-cli/settings.json antigravity-data/User/settings.json antigravity-ide-data/User/settings.json antigravity-data/User/keybindings.json; do python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$d1/$f" || echo "bad $f"; done)" ""
 assert_no_file "the file that does not parse is absent" "$d1/antigravity-ide-data/User/keybindings.json"
 assert_eq "and standard error names it once" "$(grep -c 'keybindings.json' "$tmp/err")" 1
-assert_eq "the agy settings hold colorScheme only (O10)" "$(python3 -I -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))))' "$d1/.gemini/antigravity-cli/settings.json")" "['colorScheme']"
+assert_eq "the agy settings hold colorScheme and the project's trust only (O10, O12)" "$(python3 -I -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))))' "$d1/.gemini/antigravity-cli/settings.json")" "['colorScheme', 'trustedWorkspaces']"
 assert_no_file "no login log without logins" "$d1/host-logins.log"
 run "$p1" >/dev/null
 assert_eq "a second create changes none of this" "$(diffset "$(markers "$d1")" "$DEFAULT")" ""
 assert_eq ".env still 0" "$(ai_sandbox_env_value "$d1" SANDBOX_HOST_LOGINS)" 0
+
+# --- O12: the Codex default, written not copied
+codex_want() { printf 'approval_policy = "on-request"\napprovals_reviewer = "auto_review"\nsandbox_mode = "workspace-write"\n\n[projects."%s"]\ntrust_level = "trusted"\n' "$1"; }
+proj_of() { ai_sandbox_env_value "$1" SANDBOX_PROJECT_DIR; }
+assert_eq "O12 the default sandbox has exactly the four keys and the one project table" "$(cat "$d1/.codex/config.toml")" "$(codex_want "$(proj_of "$d1")")"
+assert_eq "O12 one projects table, naming this project" "$(grep -c '^\[projects\.' "$d1/.codex/config.toml")" 1
+assert_eq "O12 no default_permissions key" "$(grep -c default_permissions "$d1/.codex/config.toml")" 0
+assert_eq "O12 agy trust is exactly the project's entry and the host's colorScheme" "$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["trustedWorkspaces"], d["colorScheme"])' "$d1/.gemini/antigravity-cli/settings.json")" "['$(proj_of "$d1")'] MARK:.gemini/antigravity-cli/settings.json#colorScheme"
+assert_eq "O12 no host trustedWorkspaces marker in the sandbox" "$(grep -rlF 'trustedWorkspaces#' "$d1" | wc -l)" 0
+echo 'approval_policy = "never"  # changed inside' > "$d1/.codex/config.toml"
+run "$p1" >/dev/null
+assert_eq "O12 a re-create leaves a file the sandbox changed byte-identical" "$(cat "$d1/.codex/config.toml")" 'approval_policy = "never"  # changed inside'
+rm -f "$d1/.codex/config.toml"
+run "$p1" >/dev/null
+assert_no_file "O12 a re-create of a seeded sandbox whose file is absent writes none" "$d1/.codex/config.toml"
+( cd "$p1" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" reset --yes >/dev/null 2>&1 )
+assert_eq "O12 reset writes it anew" "$(cat "$d1/.codex/config.toml")" "$(codex_want "$(proj_of "$d1")")"
+assert_eq "O12 reset also writes agy's trust" "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["trustedWorkspaces"])' "$d1/.gemini/antigravity-cli/settings.json")" "['$(proj_of "$d1")']"
+assert_contains "O12 the lib function carries the reads-outside marker" "$(grep -B1 -A8 '^# The Codex default' "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh")" '# reads-outside: Codex'
 
 # --- O2: --host-logins copies exactly the two lists
 p2=$(mkp p2); d2=$(dir_of "$p2")
@@ -162,6 +183,7 @@ assert_eq "create --host-logins exits 0" "$(run "$p2" --host-logins)" 0
 assert_eq "the markers are the settings markers and the login markers, nothing else" \
     "$(diffset "$(markers "$d2")" "$(printf '%s\n%s\n' "$DEFAULT" "$LOGINS" | LC_ALL=C sort -u)")" ""
 assert_eq ".claude.json holds exactly the three keys" "$(python3 -I -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))))' "$d2/.claude.json")" "['hasCompletedOnboarding', 'oauthAccount', 'userID']"
+assert_eq "O12 a --host-logins sandbox has the default too" "$(cat "$d2/.codex/config.toml")" "$(printf 'approval_policy = "on-request"\napprovals_reviewer = "auto_review"\nsandbox_mode = "workspace-write"\n\n[projects."%s"]\ntrust_level = "trusted"\n' "$(ai_sandbox_env_value "$d2" SANDBOX_PROJECT_DIR)")"
 assert_eq ".env records the host mode" "$(ai_sandbox_env_value "$d2" SANDBOX_HOST_LOGINS)" 1
 assert_contains "create says I1 does not hold" "$(cat "$tmp/err")" 'I1 does not hold'
 assert_eq "credentials keep their mode" "$(stat -c %a "$d2/.claude/.credentials.json")" "$(stat -c %a "$HOME/.claude/.credentials.json")"
@@ -184,10 +206,10 @@ assert_contains "a complete row is printed bare" "$out" '.codex/auth.json'
 p3=$(mkp p3); d3=$(dir_of "$p3")
 mv "$HOME/.gemini/antigravity-cli/settings.json" "$tmp/agy-settings.json"
 run "$p3" >/dev/null
-assert_no_file "no agy settings on the host: none arrive" "$d3/.gemini/antigravity-cli/settings.json"
+assert_eq "no agy settings on the host: the file holds only the project's trust (U-e (a))" "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])))' "$d3/.gemini/antigravity-cli/settings.json")" "{'trustedWorkspaces': ['$(ai_sandbox_env_value "$d3" SANDBOX_PROJECT_DIR)']}"
 printf '{"permissions": {"allow": ["MARK:p"]}, "trustedWorkspaces": ["MARK:t"]}\n' > "$HOME/.gemini/antigravity-cli/settings.json"
 p4=$(mkp p4); d4=$(dir_of "$p4"); run "$p4" >/dev/null
-assert_eq "a file with only permissions and trustedWorkspaces arrives as {}" "$(tr -d ' \n' < "$d4/.gemini/antigravity-cli/settings.json")" '{}'
+assert_eq "a file with only permissions and trustedWorkspaces: only the project's own trust (U-e (a))" "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])))' "$d4/.gemini/antigravity-cli/settings.json")" "{'trustedWorkspaces': ['$(ai_sandbox_env_value "$d4" SANDBOX_PROJECT_DIR)']}"
 
 # --- a host with no tool state copies nothing, and the directories still exist
 fake_home >/dev/null; tmp="$FAKE_HOME_DIR"

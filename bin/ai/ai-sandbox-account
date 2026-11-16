@@ -115,6 +115,8 @@ reset)
         ai_sandbox_make_state_dir "$AI_SANDBOX_DIR" "$d" || echo "Not recreated: $AI_SANDBOX_DIR/$d (see above)." >&2
     done < <(ai_sandbox_state_dirs)
     ai_sandbox_seed_copy "$AI_SANDBOX_DIR" settings >/dev/null || true
+    ai_sandbox_seed_codex_default "$AI_SANDBOX_DIR" "$AI_SANDBOX_PROJECT" || true
+    ai_sandbox_seed_agy_trust "$AI_SANDBOX_DIR" "$AI_SANDBOX_PROJECT" || true
     echo '{}' > "$AI_SANDBOX_DIR/.claude.json"
     chmod 600 "$AI_SANDBOX_DIR/.claude.json"
     # Keep the marker: the point is that the host's logins do NOT come back.

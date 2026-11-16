@@ -28,6 +28,10 @@ else
 
     ai_sandbox_seed_copy "$SANDBOX_DIR" settings tools >/dev/null
     log "settings"
+    # Codex's permission mode and trust of this project, and agy's trust of it: written, not copied
+    ai_sandbox_seed_codex_default "$SANDBOX_DIR" "$PROJECT_ABS_DIR" || true
+    ai_sandbox_seed_agy_trust "$SANDBOX_DIR" "$PROJECT_ABS_DIR" || true
+    log "Codex default (approve for me, this project trusted) and agy's trust of this project"
     if [ "$LOGINS_SEED" = "yes" ]; then
         ai_sandbox_seed_copy "$SANDBOX_DIR" login tools | ai_sandbox_seed_log_logins "$SANDBOX_DIR"
         log "the host's logins (--host-logins)"
