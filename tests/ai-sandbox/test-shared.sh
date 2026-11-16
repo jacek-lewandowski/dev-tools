@@ -30,7 +30,7 @@ echo '{"mcpServers":{}}' > "$HOME/.gemini/config/mcp_config.json"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
 dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
 
-assert_eq "credentials still seeded" "$(cat "$dir/.claude/.credentials.json")" 'keep'
+assert_no_file "a login is not seeded without --host-logins" "$dir/.claude/.credentials.json"
 assert_no_file "workspaceStorage not copied" "$dir/antigravity-data/User/workspaceStorage"
 assert_no_file "claude-code not copied"      "$dir/claude-data/claude-code"
 assert_no_file "downloads not copied"        "$dir/.claude/downloads"
@@ -95,9 +95,10 @@ bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" 
 assert_eq "a re-run syncs the host's newer copy into shared" \
     "$(cat "$AI_SANDBOX_ROOT/shared/claude-desktop-versions/9.9.10/bin")" 'newer'
 # ~/.gemini/config holds mcp_config.json and plugins/, which the host's
-# Antigravity executes. It is seeded once per sandbox, never live-shared, so
-# a sandbox cannot register an MCP server or plugin on the host.
-assert_file "gemini config seeded into the sandbox" "$dir/.gemini/config/mcp_config.json"
+# Antigravity executes. It is never live-shared, so a sandbox cannot register an
+# MCP server or plugin on the host; the MCP configuration is a login row (U-a (b)),
+# copied only with --host-logins.
+assert_no_file "the MCP configuration is not seeded by default" "$dir/.gemini/config/mcp_config.json"
 case "$compose" in
     *"$HOME/.gemini/config:"*) TESTS_RUN=$((TESTS_RUN + 1)); _fail "host ~/.gemini/config is not mounted" "found a live mount of the host directory" ;;
     *) TESTS_RUN=$((TESTS_RUN + 1)); _pass "host ~/.gemini/config is not mounted" ;;

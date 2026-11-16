@@ -10,7 +10,7 @@ echo 'host-token'   > "$HOME/.claude/.credentials.json"
 echo '{"a":"host"}' > "$HOME/.claude.json"
 echo 'host-codex'   > "$HOME/.codex/auth.json"
 
-create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true; }
+create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --host-logins "$proj" >>"$tmp/out" 2>&1 || true; }
 create
 dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
 

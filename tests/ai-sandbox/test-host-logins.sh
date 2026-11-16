@@ -35,11 +35,10 @@ assert_contains "and says it again" "$(cat "$tmp/out")" 'I1 does not hold'
 assert_eq "once, in .env" "$(keyline "$db")" 1
 
 # --host-logins on a sandbox recorded 0: records 1, copies nothing, names refresh (D4)
-echo host-token-2 > "$HOME/.claude/.credentials.json"
 create "$a" --host-logins >/dev/null; cat "$tmp/out" > "$tmp/out.a"
 assert_eq "records 1 on a sandbox recorded 0" "$(mode "$da")" 1
 assert_contains "names refresh" "$(cat "$tmp/out.a")" 'ai-sandbox-account refresh'
-assert_eq "copies nothing itself" "$(cat "$da/.claude/.credentials.json")" host-token
+assert_no_file "copies nothing itself" "$da/.claude/.credentials.json"
 
 # an unrecorded sandbox (.seeded present, no key): stays unrecorded, unless the option is given (D22)
 c="$tmp/work/c"; mkdir -p "$c"; dc=$(dir_of "$c"); create "$c" >/dev/null

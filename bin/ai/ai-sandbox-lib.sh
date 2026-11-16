@@ -1594,7 +1594,9 @@ else:
 
 # Copies the rows of one class from $HOME into a sandbox directory, every write below it through
 # ai_sandbox_nofollow (a refusal is one stderr line and the copy goes on). Prints, one per line,
-# the sandbox path of each row written, so a caller can log the logins. scope: tools (all but the
+# the sandbox path of each row written, so a caller can log the logins; a directory row that
+# copy refused in part (it writes the other entries) is printed as '<path><TAB>partial', because
+# what it did write is a copied login all the same (the log must not understate). scope: tools (all but the
 # IDE's settings), idea (only those) or all. A json or xml file that does not parse is not
 # written: one stderr line naming it.
 ai_sandbox_seed_copy() {   # <sandbox dir> <settings|login> [tools|idea]
@@ -1625,7 +1627,7 @@ ai_sandbox_seed_copy() {   # <sandbox dir> <settings|login> [tools|idea]
                     done < <(find "$HOME/$h" -mindepth 1 -maxdepth 1 -type l -print0) ;;
                 *)
                     if [ -d "$HOME/$h" ]; then
-                        ai_sandbox_nofollow copy "$root" "$s" "$HOME/$h" --delete || continue
+                        ai_sandbox_nofollow copy "$root" "$s" "$HOME/$h" --delete || { printf '%s\tpartial\n' "$s"; continue; }
                     elif [ -f "$HOME/$h" ]; then
                         mode=$(stat -c %a "$HOME/$h" 2>/dev/null || echo 600)
                         ai_sandbox_nofollow write "$root" "$s" "$mode" < "$HOME/$h" || continue

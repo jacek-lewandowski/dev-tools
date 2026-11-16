@@ -2,21 +2,24 @@
 # Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
 # stage functions in order and they set the script's globals.
 
+# What the seed copies is one table in ai-sandbox-lib.sh (ai_sandbox_seed_table): the settings
+# rows always, the login rows only for a sandbox in the host mode (--host-logins). Each login
+# row copied is appended to host-logins.log, which only the host reads ('ai-sandbox-account
+# reset' lists it).
+seed_log_logins() {  # <rows printed by ai_sandbox_seed_copy>
+    local row now
+    now=$(date -Iseconds)
+    while IFS= read -r row; do
+        [ -n "$row" ] && printf '%s\t%s\n' "$now" "$row" >> "$SANDBOX_DIR/host-logins.log"
+    done
+}
+
 seed_tool_state() {
 # ---------------------------------------------------------------------------
 # Copy tool state into the sandbox
 # ---------------------------------------------------------------------------
 
 step "Copying tool state into the sandbox"
-
-# The exclude list lives in ai-sandbox-lib.sh so that 'ai-sandbox-account
-# refresh' copies exactly what the seed copies.
-seed_rsync() {  # <path under $HOME> <path under $SANDBOX_DIR> [rsync flags...]
-    local host_rel=$1 sb_rel=$2 ex
-    shift 2
-    mapfile -t ex < <(ai_sandbox_seed_excludes "$host_rel")
-    safe_rsync -a "$@" "${ex[@]}" "$HOME/$host_rel/" "$SANDBOX_DIR/$sb_rel/"
-}
 
 if [ -f "$SANDBOX_DIR/.seeded" ]; then
     log "already seeded on $(cat "$SANDBOX_DIR/.seeded")"
@@ -31,51 +34,13 @@ else
     log "seeding from the host, once. Later runs will not overwrite this, so a"
     log "login made inside the sandbox survives."
 
-    if [ -d "$HOME/.gemini" ]; then
-        seed_rsync .gemini .gemini --delete-excluded
-        log ".gemini"
-    fi
-    if [ -d "$HOME/.antigravity" ]; then
-        seed_rsync .antigravity .antigravity
-        log ".antigravity"
-    fi
-    if [ -d "$HOME/.antigravity-ide" ]; then
-        seed_rsync .antigravity-ide .antigravity-ide
-        log ".antigravity-ide"
-    elif [ -d "$HOME/.antigravity" ]; then
-        seed_rsync .antigravity .antigravity-ide
-        log ".antigravity-ide (from .antigravity)"
-    fi
-    if [ -d "$HOME/.config/Antigravity" ]; then
-        seed_rsync .config/Antigravity antigravity-data
-        log "Antigravity"
-    fi
-    if [ -d "$HOME/.config/Antigravity IDE" ]; then
-        seed_rsync '.config/Antigravity IDE' antigravity-ide-data
-        log "Antigravity IDE"
-    fi
-    if [ -d "$HOME/.config/Claude" ]; then
-        seed_rsync .config/Claude claude-data
-        log "Claude Desktop"
-    fi
-    if [ -d "$HOME/.claude" ]; then
-        # CLAUDE.md and this project's projects/ entry are bind-mounted live
-        # further down, not copied; other projects' history stays on the host.
-        seed_rsync .claude .claude
-        log ".claude"
-    fi
-
-    # ~/.claude.json is the Claude Code CLI's account/session state and lives
-    # beside ~/.claude rather than inside it.
-    if [ -f "$HOME/.claude.json" ]; then
-        cp -f "$HOME/.claude.json" "$SANDBOX_DIR/.claude.json"
+    ai_sandbox_seed_copy "$SANDBOX_DIR" settings tools >/dev/null
+    log "settings"
+    if [ "$LOGINS_SEED" = "yes" ]; then
+        ai_sandbox_seed_copy "$SANDBOX_DIR" login tools | seed_log_logins
+        log "the host's logins (--host-logins)"
     else
-        echo '{}' > "$SANDBOX_DIR/.claude.json"
-    fi
-
-    if [ -d "$HOME/.codex" ]; then
-        seed_rsync .codex .codex
-        log ".codex"
+        log "no logins: log in inside the sandbox"
     fi
 
     date -Iseconds > "$SANDBOX_DIR/.seeded"
@@ -116,14 +81,17 @@ if [ -d "$IDEA_HOST_DIR" ]; then
     step "IntelliJ IDEA"
     log "installation $IDEA_HOST_DIR (read-only)"
 
-    # Existence is the marker: seeded once, then this sandbox's own. Deliberately
-    # not in ai_sandbox_seed_paths -- 'ai-sandbox-account reset' rm -rf's those,
-    # and an IDE licence is not an AI account.
+    # Existence is the marker: seeded once, then this sandbox's own. The IDE's settings are
+    # settings rows of the seed table; its licence is a login row (copied only in the host mode).
     if [ ! -e "$SANDBOX_DIR/jetbrains-config" ]; then
         mkdir -p "$SANDBOX_DIR/jetbrains-config"
         if [ -d "$HOME/.config/JetBrains" ]; then
-            seed_rsync .config/JetBrains jetbrains-config
-            log "settings and licence seeded from the host, once"
+            ai_sandbox_seed_copy "$SANDBOX_DIR" settings idea >/dev/null
+            log "settings seeded from the host, once"
+            if [ "${LOGINS_MODE:-}" != "0" ]; then
+                ai_sandbox_seed_copy "$SANDBOX_DIR" login idea | seed_log_logins
+                log "licence seeded from the host (--host-logins)"
+            fi
         fi
     else
         log "settings are this sandbox's own; delete jetbrains-config to re-seed"
