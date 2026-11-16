@@ -76,5 +76,26 @@ assert_contains "the start goes on to compose up, which reports the real error" 
 msg=$(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
 assert_eq "a running sandbox is entered with its image gone" "$r" 0
 
+# A refused start leaves no display behind: start-display.sh (a marker here) runs only when the
+# start goes on, and still before compose up; a running container still gets its display.
+marker="$tmp/display-ran"
+# it also logs itself to the docker stub's log, so the order against compose up can be read there
+printf '#!/usr/bin/env bash\necho ran >> "%s"\necho start-display >> "%s"\n' "$marker" "$DOCKER_STUB_LOG" > "$dir/start-display.sh"; chmod +x "$dir/start-display.sh"
+rm -f "$marker"
+msg=$(cd "$proj" && DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
+assert_eq "refused start (missing image): exit 1" "$r" 1
+assert_eq "ai-sandbox: a refused start does not start the display" "$([ -e "$marker" ] && echo ran || echo none)" none
+rm -f "$marker"
+msg=$(cd "$proj" && DOCKER_STUB_PS="$name" DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox-restart" 2>&1) && r=0 || r=$?
+assert_eq "refused restart (missing image): exit 1" "$r" 1
+assert_eq "ai-sandbox-restart: a refused restart does not start the display" "$([ -e "$marker" ] && echo ran || echo none)" none
+msg=$(cd "$proj" && DOCKER_STUB_RUNNING=true bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
+assert_eq "ai-sandbox: a running container still gets its display" "$([ -e "$marker" ] && echo ran || echo none)" ran
+rm -f "$marker"
+: > "$DOCKER_STUB_LOG"
+(cd "$proj" && DOCKER_STUB_IMAGES="$image" DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true >"$tmp/start.out" 2>&1)
+assert_eq "ai-sandbox: a start that goes on starts the display" "$([ -e "$marker" ] && echo ran || echo none)" ran
+assert_eq "and compose up follows it" "$(grep -e '^start-display$' -e ' up -d$' "$DOCKER_STUB_LOG" | sed 's/.* up -d$/up/')" $'start-display\nup'
+
 rm -rf "$tmp"
 finish

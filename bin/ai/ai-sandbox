@@ -17,12 +17,12 @@ fi
 
 # No knowledge sync here: create-ai-sandbox.sh and an explicit
 # 'ai-knowledge sync' are the only places that run it.
-# Must precede 'compose up': Docker would otherwise create the display's mount
-# source itself, as root, and Xephyr could no longer bind its socket.
-if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
-    "$AI_SANDBOX_DIR/start-display.sh" || exit 1
-fi
-if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null)" != "true" ]; then
+# Every refusal of a start comes before the display, so a refused start leaves
+# no display process behind. A running container is entered without them.
+# The build-cache check refuses under the build-caches lock, so for a start
+# that takes it the display is started under the lock, right after that check.
+RUNNING=$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null || true)
+if [ "$RUNNING" != "true" ]; then
     # A sandbox whose compose file predates the host's knowledge configuration
     # would mount the rules read-write, so it is refused only here, where it
     # would come up; a running container is entered whatever its stamp.
@@ -30,6 +30,26 @@ if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/d
     ai_sandbox_memory_budget_gb >/dev/null || exit 1
     ai_sandbox_check_capacity "$AI_SANDBOX_NAME" "$(ai_sandbox_memory_gb "$AI_SANDBOX_DIR")" || exit 1
     ai_sandbox_require_image "$AI_SANDBOX_DIR" || exit 1
+fi
+DISPLAY_STARTED=0
+# Must precede 'compose up': Docker would otherwise create the display's mount
+# source itself, as root, and Xephyr could no longer bind its socket. The lock
+# descriptor is closed for it: its long-lived children would otherwise inherit
+# it and keep the flock held after this script is done.
+start_display() {
+    DISPLAY_STARTED=1
+    if [ -x "$AI_SANDBOX_DIR/start-display.sh" ]; then
+        if [ -n "${CACHES_LOCK_FD:-}" ]; then
+            "$AI_SANDBOX_DIR/start-display.sh" {CACHES_LOCK_FD}>&- || exit 1
+        else
+            "$AI_SANDBOX_DIR/start-display.sh" || exit 1
+        fi
+    fi
+}
+if [ "$RUNNING" = "true" ] || ! ai_sandbox_caches_enabled "$AI_SANDBOX_DIR"; then
+    start_display
+fi
+if [ "$RUNNING" != "true" ]; then
     if ai_sandbox_caches_enabled "$AI_SANDBOX_DIR"; then
         # D5/D2: hold the lock from before the check until 'up' has returned --
         # releasing it any earlier would let a concurrent start reset the
@@ -42,11 +62,14 @@ if [ "$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/d
         flock "$CACHES_LOCK_FD"
         if ! ai_sandbox_container_running "$AI_SANDBOX_NAME"; then
             ai_sandbox_caches_check "$AI_SANDBOX_DIR" "$AI_SANDBOX_NAME" || exit 1
+            start_display
             ai_sandbox_caches_reset "$AI_SANDBOX_DIR"
             echo "Starting $AI_SANDBOX_NAME..."
             ai_sandbox_compose up -d || exit 1
         fi
         exec {CACHES_LOCK_FD}>&-
+        # found running under the lock: entered, but it still gets its display
+        [ "$DISPLAY_STARTED" -eq 1 ] || start_display
     else
         echo "Starting $AI_SANDBOX_NAME..."
         ai_sandbox_compose up -d || exit 1

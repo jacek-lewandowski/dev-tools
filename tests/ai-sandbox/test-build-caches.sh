@@ -660,5 +660,59 @@ if [ "$(id -u)" != 0 ]; then
     rm -rf "$t20bdir" 2>/dev/null || true
 fi
 
+# =============================================================================
+# A start or restart refused for a build-cache volume with different options
+# leaves no display process behind (the cache check runs under the lock, so the
+# display is started after it, not before).
+# =============================================================================
+
+trproj="$tmp/work/refuse-display"; mkdir -p "$trproj"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$trproj" >"$tmp/tr.out" 2>&1 || cat "$tmp/tr.out"
+trdir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$trproj")-agent"; trname=$(basename "$trdir")
+trimages="ai-sandbox:base-u$(id -u) ai-sandbox:base-gui-u$(id -u) ai-sandbox:docker-u$(id -u) ai-sandbox:docker-gui-u$(id -u)"
+trbad="lowerdir=/somewhere/else,upperdir=$trdir/build-caches/gradle-caches/upper,workdir=$trdir/build-caches/gradle-caches/work"
+trvols="$trname-gradle-caches=$trbad"$'\n'"$trname-gradle-wrapper-dists=$(ai_sandbox_caches_opts "$trdir" gradle-wrapper-dists "$HOME/.gradle/wrapper/dists")"$'\n'"$trname-m2-repository=$(ai_sandbox_caches_opts "$trdir" m2-repository "$HOME/.m2/repository")"
+trmarker="$tmp/refuse-display-ran"
+printf '#!/usr/bin/env bash\necho ran >> "%s"\n' "$trmarker" > "$trdir/start-display.sh"; chmod +x "$trdir/start-display.sh"
+shown() { [ -e "$trmarker" ] && echo ran || echo none; }
+rm -f "$trmarker"; : > "$DOCKER_STUB_LOG"
+out=$(cd "$trproj" && DOCKER_STUB_IMAGES="$trimages" DOCKER_STUB_VOLUMES="$trvols" DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" true 2>&1); rc=$?
+assert_eq "ai-sandbox is refused for a differing cache volume" "$rc" 1
+assert_contains "with the cache message" "$out" "has different options"
+assert_eq "ai-sandbox: that refusal leaves no display behind" "$(shown)" none
+assert_eq "ai-sandbox: and no compose up" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+rm -f "$trmarker"; : > "$DOCKER_STUB_LOG"
+out=$(cd "$trproj" && DOCKER_STUB_IMAGES="$trimages" DOCKER_STUB_PS="$trname" DOCKER_STUB_VOLUMES="$trvols" DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox-restart" 2>&1); rc=$?
+assert_eq "ai-sandbox-restart is refused for a differing cache volume" "$rc" 1
+assert_contains "restart: with the cache message" "$out" "has different options"
+assert_eq "ai-sandbox-restart: that refusal leaves no display behind" "$(shown)" none
+assert_eq "restart: no compose down" "$(grep -c 'compose.*down' "$DOCKER_STUB_LOG")" 0
+# matching volumes: the display still starts, before compose up
+rm -f "$trmarker"; : > "$DOCKER_STUB_LOG"
+trgood="$trname-gradle-caches=$(ai_sandbox_caches_opts "$trdir" gradle-caches "$HOME/.gradle/caches")"$'\n'"${trvols#*$'\n'}"
+(cd "$trproj" && DOCKER_STUB_IMAGES="$trimages" DOCKER_STUB_VOLUMES="$trgood" DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" true >"$tmp/tr.out" 2>&1)
+assert_eq "ai-sandbox: matching volumes, the display starts" "$(shown)" ran
+assert_contains "and compose up follows" "$(stub_docker_log)" " up"
+
+# found running only by the recheck under the lock: entered with no 'up', and it still gets its display
+rm -f "$trmarker" "$DOCKER_STUB_LOG.inspect_count"; : > "$DOCKER_STUB_LOG"
+(cd "$trproj" && DOCKER_STUB_IMAGES="$trimages" DOCKER_STUB_VOLUMES="$trgood" DOCKER_STUB_RUNNING_FROM_CALL=2 bash "$REPO_ROOT/bin/ai/ai-sandbox" true >"$tmp/tr.out" 2>&1); rc=$?
+assert_eq "ai-sandbox: found running under the lock, entered" "$rc" 0
+assert_eq "ai-sandbox: found running under the lock, no compose up" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+assert_eq "ai-sandbox: found running under the lock, the display still starts" "$(shown)" ran
+rm -f "$DOCKER_STUB_LOG.inspect_count"
+
+# the display started under the lock does not hold it: a backgrounding display, lock free afterwards
+trpid="$tmp/refuse-display-sleep.pid"
+printf '#!/usr/bin/env bash\n(exec sleep 600) >/dev/null 2>&1 &\necho $! > "%s"\n' "$trpid" > "$trdir/start-display.sh"
+(cd "$trproj" && DOCKER_STUB_IMAGES="$trimages" DOCKER_STUB_VOLUMES="$trgood" DOCKER_STUB_RUNNING=false bash "$REPO_ROOT/bin/ai/ai-sandbox" true >"$tmp/tr.out" 2>&1)
+TESTS_RUN=$((TESTS_RUN+1))
+if flock -n "$trdir/build-caches/.lock" true 2>/dev/null; then
+    _pass "ai-sandbox: the build-caches lock is free after a start with a backgrounding display"
+else
+    _fail "ai-sandbox: the build-caches lock is free after a start with a backgrounding display" "a display child holds the lock"
+fi
+[ -s "$trpid" ] && kill "$(cat "$trpid")" 2>/dev/null || true
+
 rm -rf "$tmp"
 finish
