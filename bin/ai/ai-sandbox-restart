@@ -45,3 +45,4 @@ ai_sandbox_compose up -d
 if [ "$CACHES_ENABLED" -eq 1 ]; then
     exec {CACHES_LOCK_FD}>&-
 fi
+ai_sandbox_say_host_logins "$AI_SANDBOX_DIR"

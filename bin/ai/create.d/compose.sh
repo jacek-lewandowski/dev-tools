@@ -2,11 +2,9 @@
 # Sourced by create-ai-sandbox.sh, never run: definitions only; the entry calls the
 # stage functions in order and they set the script's globals.
 
-compose_env() {
-# ---------------------------------------------------------------------------
-# .env
-# ---------------------------------------------------------------------------
-
+# The .env a sandbox starts with; also made by the first seed, which records the logins mode
+# before it writes .seeded (see seed.sh).
+compose_env_skeleton() {
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" <<'ENVEOF'
 # Secrets for this sandbox. Uncomment and fill in as needed.
@@ -15,6 +13,14 @@ if [ ! -f "$ENV_FILE" ]; then
 ENVEOF
 fi
 chmod 600 "$ENV_FILE"
+}
+
+compose_env() {
+# ---------------------------------------------------------------------------
+# .env
+# ---------------------------------------------------------------------------
+
+compose_env_skeleton
 
 # The host's own identity, from its global git configuration: no repository is
 # discovered, so a project cannot choose which identity its sandbox commits as.
@@ -34,6 +40,7 @@ DISPLAY_MODE="$DISPLAY_MODE" \
 DISPLAY_NUM="$NESTED_DISPLAY_NUM" \
 CPUSET="$CPUSET" \
 MEM_GB="$MEMORY_GB" \
+LOGINS_MODE="$LOGINS_MODE" \
 KNOWLEDGE_STAMP="$AI_SANDBOX_KNOWLEDGE_STAMP" \
 python3 -I - "$ENV_FILE" <<'PYEOF'
 import os, sys
@@ -58,6 +65,9 @@ managed = {
     "SANDBOX_CPUSET": os.environ.get("CPUSET", ""),
     # The size the start scripts count against the host's memory budget.
     "SANDBOX_MEMORY_GB": os.environ.get("MEM_GB", ""),
+    # The logins mode (phase 7): 1 host logins copied, 0 made inside; empty (key not written)
+    # for a sandbox created before the key. Host only: .env is bound nowhere (I3d).
+    "SANDBOX_HOST_LOGINS": os.environ.get("LOGINS_MODE", ""),
     # The build-caches stamp (D7): unconditional, so every sandbox this script
     # (re)creates gets the overlay caches; a sandbox not yet recreated has no
     # stamp and every caches function is a no-op for it (I8).
@@ -235,13 +245,14 @@ COMPOSE_BRAIN
 fi
 
 cat <<COMPOSE_VOLS
-      # Live-shared Antigravity brain and conversations. ~/.gemini/config is
-      # deliberately NOT here: it holds mcp_config.json and plugins/, which the
-      # host's Antigravity executes, so it is seeded per sandbox instead.
-      - "${HOME}/.gemini/antigravity/brain:${CONTAINER_HOME}/.gemini/antigravity/brain"
-      - "${HOME}/.gemini/antigravity/conversations:${CONTAINER_HOME}/.gemini/antigravity/conversations"
-      - "${HOME}/.gemini/antigravity-ide/brain:${CONTAINER_HOME}/.gemini/antigravity-ide/brain"
-      - "${HOME}/.gemini/antigravity-ide/conversations:${CONTAINER_HOME}/.gemini/antigravity-ide/conversations"
+      # Antigravity's brain and conversations are this sandbox's own (I1: no sandbox reads another
+      # project's conversations). ~/.gemini/config is deliberately NOT bound either: it holds
+      # mcp_config.json and plugins/, which the host's Antigravity executes, so it is seeded per
+      # sandbox instead.
+      - "${SANDBOX_DIR}/antigravity-brain:${CONTAINER_HOME}/.gemini/antigravity/brain"
+      - "${SANDBOX_DIR}/antigravity-conversations:${CONTAINER_HOME}/.gemini/antigravity/conversations"
+      - "${SANDBOX_DIR}/antigravity-ide-brain:${CONTAINER_HOME}/.gemini/antigravity-ide/brain"
+      - "${SANDBOX_DIR}/antigravity-ide-conversations:${CONTAINER_HOME}/.gemini/antigravity-ide/conversations"
       # Live-shared Claude Code history and memory for THIS project only. The
       # whole of ~/.claude/projects would let a prompt-injected agent read other
       # projects' transcripts and plant memory the host loads automatically.

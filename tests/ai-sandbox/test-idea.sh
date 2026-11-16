@@ -36,6 +36,7 @@ echo '{"name":"IntelliJ IDEA","version":"2025.1"}' > "$idea/product-info.json"
 mkdir -p "$HOME/.config/JetBrains/IntelliJIdea2025.1/options" \
          "$HOME/.local/share/JetBrains/IntelliJIdea2025.1/some-plugin/lib"
 echo 'LICENCE' > "$HOME/.config/JetBrains/IntelliJIdea2025.1/idea.key"
+mkdir -p "$HOME/.config/JetBrains/IntelliJIdea2025.1/codestyles"; echo 'STYLE' > "$HOME/.config/JetBrains/IntelliJIdea2025.1/codestyles/mine.xml"
 echo 'jar'     > "$HOME/.local/share/JetBrains/IntelliJIdea2025.1/some-plugin/lib/p.jar"
 
 IDEA_HOST_DIR="$idea" bash "$CREATE" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || true
@@ -62,8 +63,13 @@ assert_contains "indexes are per sandbox"   "$compose" \
 assert_contains "the per-sandbox ~/.cache mount is still there" "$compose" \
     "\"$dir/cache:$HOME/.cache\""
 
-assert_eq "the licence is seeded from the host" \
-    "$(cat "$dir/jetbrains-config/IntelliJIdea2025.1/idea.key")" 'LICENCE'
+assert_no_file "the licence is not seeded without --host-logins (U-b (a))" "$dir/jetbrains-config/IntelliJIdea2025.1/idea.key"
+# ... and it is, with the host's content, in a sandbox created with the option (O2)
+proj2="$tmp/work/p2"; mkdir -p "$proj2"
+IDEA_HOST_DIR="$idea" bash "$CREATE" --display=none --no-start --host-logins "$proj2" >"$tmp/out3" 2>&1 || true
+dir2="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj2")-agent"
+assert_eq "the licence is seeded from the host with --host-logins" \
+    "$(cat "$dir2/jetbrains-config/IntelliJIdea2025.1/idea.key")" 'LICENCE'
 assert_eq "the plugin lands in the shared store" \
     "$(cat "$AI_SANDBOX_ROOT/shared/jetbrains-plugins/IntelliJIdea2025.1/some-plugin/lib/p.jar")" 'jar'
 assert_file "the index directory is created, not left to Docker" "$dir/jetbrains-cache"
@@ -81,16 +87,17 @@ assert_contains "launcher reads the path from the environment" \
     "$(cat "$wrapper")" 'IDEA_HOME="${SANDBOX_IDEA_HOME:-/opt/idea-IU}"'
 
 # --- a re-run must not clobber what the sandbox changed --------------------
+mkdir -p "$dir/jetbrains-config/IntelliJIdea2025.1"
 echo 'CHANGED-INSIDE' > "$dir/jetbrains-config/IntelliJIdea2025.1/idea.key"
 IDEA_HOST_DIR="$idea" bash "$CREATE" --display=none --no-start "$proj" >"$tmp/out2" 2>&1 || true
 assert_eq "sandbox-local settings survive a re-run" \
     "$(cat "$dir/jetbrains-config/IntelliJIdea2025.1/idea.key")" 'CHANGED-INSIDE'
 
-# --- and 'ai-sandbox-account reset' must not delete the IDE licence --------
-TESTS_RUN=$((TESTS_RUN + 1))
-if ai_sandbox_seed_paths | grep -q 'JetBrains'; then
-    _fail "IDE state is not treated as an AI credential" \
-        "jetbrains is in ai_sandbox_seed_paths, so 'ai-sandbox-account reset' would rm -rf it"
-else _pass "IDE state is not treated as an AI credential"; fi
+# --- 'ai-sandbox-account reset' removes the IDE licence and keeps the IDE settings (U-b (a))
+assert_file "before the reset: the licence is there" "$dir2/jetbrains-config/IntelliJIdea2025.1/idea.key"
+( cd "$proj2" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" reset --yes >"$tmp/reset.out" 2>&1 )
+assert_no_file "reset removes the IDE licence" "$dir2/jetbrains-config/IntelliJIdea2025.1/idea.key"
+assert_eq "reset keeps the IDE settings" "$(cat "$dir2/jetbrains-config/IntelliJIdea2025.1/codestyles/mine.xml")" 'STYLE'
+assert_contains "the reset listing names the licence" "$(cat "$tmp/reset.out")" 'jetbrains-config/IntelliJIdea2025.1/idea.key'
 
 finish

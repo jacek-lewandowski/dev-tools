@@ -56,6 +56,17 @@ Options:
                    Remembered until --no-audio.
   --no-audio       Drop a remembered --audio: the host's sound stays out of the
                    sandbox.
+  --host-logins    Copy the host's logins (Claude Code, Codex, Gemini CLI, agy, the
+                   desktop apps' sessions, the MCP configurations and the JetBrains
+                   licences) into the new sandbox as well as the settings. Off by
+                   default: a sandbox then holds only logins made inside it, which
+                   renew themselves there. Remembered. With it, I1 does not hold
+                   for those logins, and only 'ai-sandbox-account refresh' on the
+                   host renews them, so it is not for a sandbox worked from the
+                   phone. Given to an existing sandbox it records the mode and
+                   copies nothing: run 'ai-sandbox-account refresh'. There is no
+                   way back by option: 'ai-sandbox-account reset' removes the
+                   copied logins and records the inside mode.
   --memory=GB      RAM the sandbox may use, a whole number of GB. Default: 2 (one CPU core).
                    Remembered. The sandbox gets half as many CPU cores as GB,
                    rounded up (see Resources below).
@@ -78,14 +89,17 @@ your PATH; create-ai-sandbox.sh installs none of them):
   ai-sandbox-restart    recreate the container, picking up new devices
   ai-sandbox-attach     expose a hot-plugged device, e.g.
                         ai-sandbox-attach /dev/ttyUSB0
-  ai-sandbox-account    status | refresh | reset -- which AI account this
-                        project uses, and re-seeding it from the host
+  ai-sandbox-account    status | refresh | reset -- which logins this project's
+                        sandbox holds (made inside, or copied from the host);
+                        refresh re-copies the host's (host mode only), reset
+                        removes the copied ones and returns to logins made inside
   ai-sandbox-extensions refresh -- reinstall the shared IDE extensions
   ai-sandbox-gc         reclaim duplicated state and unused images; confirms
                         before removing anything
   ai-sandbox-migrate    bring ~/.ai-sandbox up to the current layout; runs
                         automatically before every start
-  ai-sandbox-rm         remove this project's sandbox and its credentials
+  ai-sandbox-rm         remove this project's sandbox, its logins and its own
+                        Antigravity brain and conversations
   ai-knowledge          init <url> [--integrator DIR] | sync | render | status |
                         proposals -- the shared knowledge repository (global
                         rules, roles, own skills), read-only in every sandbox,
@@ -96,10 +110,13 @@ Commands inside the sandbox:
   sandbox-desktop       start a window manager on the private display
 
 Layout under ~/.ai-sandbox:
-  <project>-<hash>-agent/   per project: credentials, tool state, compose file.
-                            Seeded from the host once, then never overwritten,
-                            so each project can hold a different Claude, Codex
-                            or Gemini account.
+  <project>-<hash>-agent/   per project: logins, tool state, compose file, and the
+                            Antigravity brain and conversations. The tools'
+                            settings are copied from the host once, cut to the
+                            keys that are safe to carry (logins only with
+                            --host-logins), then never overwritten, so each
+                            project holds its own Claude, Codex or Gemini
+                            account, made by logging in inside the sandbox.
   shared/                   IDE extensions, plugins, CLI builds and the agent
                             skills under ~/.agents, synced from the host and
                             read-only in every sandbox.
@@ -112,10 +129,16 @@ Layout under ~/.ai-sandbox:
                             below); emptied on every start, never shared.
 
 Mounted live from the host into every sandbox: ~/.gemini/GEMINI.md (the shared
-brain, also read as ~/.claude/CLAUDE.md), the Antigravity brain and
-conversations, and this project's own ~/.claude/projects/<key> entry only, so a
-sandbox cannot read or write another project's Claude Code history or memory.
-Edits there are real edits on the host.
+brain, also read as ~/.claude/CLAUDE.md) and this project's own
+~/.claude/projects/<key> entry only, so a sandbox cannot read or write another
+project's Claude Code history or memory. Edits there are real edits on the host.
+The Antigravity brain and conversations are the sandbox's own, not the host's.
+
+Codex starts in "Approve for me" with this project trusted: a new sandbox gets a
+~/.codex/config.toml with approval_policy, approvals_reviewer, sandbox_mode and the
+project's trust, and agy gets the project in its trustedWorkspaces. These are file
+defaults, not locks: change them inside the sandbox, and a re-creation keeps what you
+changed ('ai-sandbox-account reset' writes the defaults again).
 
 Shared knowledge (optional): after 'ai-knowledge init <private-git-url>
 --integrator <dev-tools dir>' the global rules and roles come from that
@@ -131,9 +154,9 @@ stamp is not the one knowledge needs, 2) is refused at start until it is
 re-created: run this script for its project again.
 
 IntelliJ IDEA: if /opt/idea-IU exists on the host it is mounted read-only and
-runnable inside the sandbox as 'idea'. Settings and the licence are copied from
-the host once, per project; plugins are shared between projects; indexes are per
-project. Being read-only, the IDE cannot update itself -- update it on the host.
+runnable inside the sandbox as 'idea'. Settings are copied from the host once, per
+project, the licence only with --host-logins (otherwise activate it inside);
+plugins are shared between projects; indexes are per project. Being read-only, the IDE cannot update itself -- update it on the host.
 For a different install path, set IDEA_HOST_DIR in the environment.
 
 SDKMAN: the host's ~/.sdkman is mounted read-only, so its toolchains are shared
@@ -175,6 +198,7 @@ for arg in "$@"; do
         --no-docker)   WITH_DOCKER="no";  WITH_DOCKER_EXPLICIT="yes" ;;
         --audio)       WITH_AUDIO="yes"; WITH_AUDIO_EXPLICIT="yes" ;;
         --no-audio)    WITH_AUDIO="no";  WITH_AUDIO_EXPLICIT="yes" ;;
+        --host-logins) HOST_LOGINS_EXPLICIT="yes" ;;
         --memory=*)   MEMORY_GB="${arg#*=}"; MEMORY_GB_EXPLICIT="yes" ;;
         --rebuild)    FORCE_REBUILD="yes" ;;
         --no-start)   NO_START="yes" ;;
@@ -269,6 +293,37 @@ if [ "$MEMORY_GB_EXPLICIT" = "no" ]; then
         [ "$STORED_MEMORY" != "$MEMORY_GB" ] || log "keeping $MEMORY_GB GB of memory (pass --memory=... to change it)"
         unset STORED_MEMORY
     fi
+fi
+}
+
+options_remembered_logins() {
+# ---------------------------------------------------------------------------
+# Logins mode: SANDBOX_HOST_LOGINS in .env is 1 (host logins were copied or are to
+# be), 0 (logins are made inside) or absent. Absent with .seeded present is a sandbox
+# created before the key: counted as host, reported at every start, and left
+# unrecorded unless --host-logins is given (I6: no run rewrites a sandbox on its own).
+# LOGINS_SEED says whether the first seed copies the login rows.
+# ---------------------------------------------------------------------------
+local stored="" seeded="no"
+[ -f "$ENV_FILE" ] && stored=$(ai_sandbox_env_value "$SANDBOX_DIR" SANDBOX_HOST_LOGINS)
+[ -f "$SANDBOX_DIR/.seeded" ] && seeded="yes"
+case "$stored" in 0|1) ;; *) stored="" ;; esac
+LOGINS_SEED="no"
+LOGINS_MODE="$stored"
+if [ "$HOST_LOGINS_EXPLICIT" = "yes" ]; then
+    LOGINS_MODE=1
+    if [ "$seeded" = "no" ]; then
+        LOGINS_SEED="yes"
+        warn "--host-logins: the host's logins are copied into this sandbox. I1 does not hold for them: only 'ai-sandbox-account refresh' on the host renews them, so this sandbox is not for work from the phone."
+    elif [ "$stored" = "1" ]; then
+        warn "This sandbox holds the host's logins (--host-logins). I1 does not hold for them: only 'ai-sandbox-account refresh' on the host renews them."
+    else
+        warn "--host-logins recorded for this sandbox; nothing is copied now. Run 'ai-sandbox-account refresh' on the host to copy the logins. I1 does not hold for them: only refresh renews them."
+    fi
+elif [ "$stored" = "1" ]; then
+    warn "This sandbox holds the host's logins (--host-logins). I1 does not hold for them: only 'ai-sandbox-account refresh' on the host renews them."
+elif [ -z "$stored" ] && [ "$seeded" = "no" ]; then
+    LOGINS_MODE=0
 fi
 }
 

@@ -2,15 +2,16 @@
 # ai-sandbox-account refresh and reset write nothing through a link a sandbox placed in its state (O10).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >>"$tmp/out" 2>&1 || true; }
+create() { bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start --host-logins "$proj" >>"$tmp/out" 2>&1 || true; }
 acct() { ( cd "$proj" && bash "$REPO_ROOT/bin/ai/ai-sandbox-account" "$@" 2>&1 ); }
 
 host() {
     fake_home >/dev/null; tmp=$FAKE_HOME_DIR
     . "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh"
     proj="$tmp/work/p"; mkdir -p "$proj"
-    mkdir -p "$HOME/.claude/sub" "$HOME/.codex"
-    echo host-token > "$HOME/.claude/.credentials.json"; echo host-file > "$HOME/.claude/sub/file"; echo '{"a":"host"}' > "$HOME/.claude.json"
+    mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.config/Claude/Local Storage"
+    echo host-token > "$HOME/.claude/.credentials.json"; echo host-file > "$HOME/.config/Claude/Local Storage/file"; echo '{"a":"host"}' > "$HOME/.claude.json"
+    echo '{"theme":"host"}' > "$HOME/.claude/settings.json"
     echo host-codex > "$HOME/.codex/auth.json"
     create; dir="$AI_SANDBOX_ROOT/$(ai_sandbox_project_id "$proj")-agent"
     trap_dir="$tmp/trap"; mkdir -p "$trap_dir/dir"; printf 'trap\n' > "$trap_dir/file"; printf 'trap\n' > "$trap_dir/dir/inner"
@@ -27,19 +28,59 @@ case_of() {
     assert_eq "O10 $label: $cmd exits 0" "$rc" 0
     assert_eq "O10 $label: $cmd leaves the trap unchanged" "$(snap "$trap_dir")" "$t0"
 }
-case_of "a directory the host's copy holds (.claude/sub)" refresh .claude/sub dir
-case_of "a file the host's copy holds (.claude/.credentials.json)" refresh .claude/.credentials.json file
+case_of "a login directory row (claude-data/Local Storage)" refresh "claude-data/Local Storage" dir
+case_of "a login file row (.claude/.credentials.json)" refresh .claude/.credentials.json file
 case_of "the projects mount (.claude/projects)" refresh .claude/projects dir
-case_of "a directory the host's copy holds (.claude/sub)" reset .claude/sub dir
+case_of "a login directory row (claude-data/Local Storage)" reset "claude-data/Local Storage" dir
+case_of "a login file row (.claude/.credentials.json)" reset .claude/.credentials.json file
+case_of "a settings row (.claude/settings.json)" reset .claude/settings.json file
 case_of "the projects mount (.claude/projects)" reset .claude/projects dir
-assert_eq "O10 reset: .claude/projects is a real directory again" "$([ -d "$dir/.claude/projects" ] && [ ! -L "$dir/.claude/projects" ] && echo yes)" yes
+case_of "the Codex default (.codex/config.toml)" reset .codex/config.toml file
+case_of "agy's settings (.gemini/antigravity-cli/settings.json)" reset .gemini/antigravity-cli/settings.json file
+case_of "agy's directory (.gemini/antigravity-cli)" reset .gemini/antigravity-cli dir
+case_of "the brain's parent (.gemini/antigravity)" reset .gemini/antigravity dir
+# a link at the mount's parent is refused, named on standard error, and left (the sandbox's own business)
+host; rm -rf "${dir:?}/.claude/projects"; ln -s "$trap_dir/dir" "$dir/.claude/projects"
+assert_contains "O10 reset names the refusal at .claude/projects" "$(acct reset --yes)" 'refused'
 
-# Without links the result is what test-account.sh expects: the host's files arrive, the mounts stay
+# Without links the result is what test-account.sh expects: the host's logins arrive, the mounts stay
 host
-mkdir -p "$dir/.claude/projects/mine"; echo mine > "$dir/.claude/projects/mine/keep"; echo stale > "$dir/.claude/stale"
+mkdir -p "$dir/.claude/projects/mine"; echo mine > "$dir/.claude/projects/mine/keep"
+echo changed > "$HOME/.claude/.credentials.json"; echo changed-file > "$HOME/.config/Claude/Local Storage/file"
 acct refresh --yes >/dev/null
-assert_eq "refresh pulls the host token" "$(cat "$dir/.claude/.credentials.json")" host-token
-assert_eq "refresh pulls a subdirectory's file" "$(cat "$dir/.claude/sub/file")" host-file
+assert_eq "refresh pulls the host token" "$(cat "$dir/.claude/.credentials.json")" changed
+assert_eq "refresh pulls a login directory's file" "$(cat "$dir/claude-data/Local Storage/file")" changed-file
 assert_file "refresh keeps the projects mount" "$dir/.claude/projects/mine/keep"
-assert_no_file "refresh removes a stale file" "$dir/.claude/stale"
+# I-1: a name a sandbox chose reaches the host's stderr without control characters, whichever
+# command prints it (nofollow's refusal for reset, the backup's skip line for refresh)
+for cmd in reset refresh; do
+    host
+    evil=$'P\e]0;PWNED\a'
+    mkdir -p "$trap_dir/jb"; : > "$trap_dir/jb/x.key"
+    mkdir -p "$dir/jetbrains-config"; ln -s "$trap_dir/jb" "$dir/jetbrains-config/$evil"
+    out=$(acct "$cmd" --yes)
+    assert_contains "I-1 $cmd still reports the planted name" "$out" 'PWNED'
+    case $out in *$'\e'*|*$'\a'*) bad=1 ;; *) bad=0 ;; esac
+    assert_eq "I-1 $cmd prints no ESC or BEL from a sandbox name" "$bad" 0
+done
+
+# I-2: a FIFO the sandbox placed where reset reads agy's settings does not hang it; it counts as
+# "not JSON" and the file is written anew. A FIFO inside a login directory is skipped by refresh.
+host
+mkdir -p "$dir/.gemini/antigravity-cli"; rm -f "$dir/.gemini/antigravity-cli/settings.json"; mkfifo "$dir/.gemini/antigravity-cli/settings.json"
+(cd "$proj" && timeout 30 bash "$REPO_ROOT/bin/ai/ai-sandbox-account" reset --yes >"$tmp/i2.out" 2>&1); rc=$?; out=$(cat "$tmp/i2.out")
+assert_eq "I-2 reset with a FIFO at agy's settings exits 0 (not 124)" "$rc" 0
+assert_contains "I-2 reset replaces the FIFO with the trust file" "$([ -f "$dir/.gemini/antigravity-cli/settings.json" ] && cat "$dir/.gemini/antigravity-cli/settings.json")" 'trustedWorkspaces'
+host
+mkfifo "$dir/claude-data/Local Storage/pipe"
+(cd "$proj" && timeout 30 bash "$REPO_ROOT/bin/ai/ai-sandbox-account" refresh --yes >"$tmp/i2.out" 2>&1); rc=$?; out=$(cat "$tmp/i2.out")
+assert_eq "I-2 refresh with a FIFO in a login directory exits 0 (not 124)" "$rc" 0
+assert_contains "I-2 refresh names the FIFO as not backed up" "$out" 'not a plain file'
+# the backup helper alone, on a FIFO at a file row
+mkdir -p "$tmp/bk-src/.claude" "$tmp/bk-dst"; mkfifo "$tmp/bk-src/.claude/.credentials.json"
+timeout 20 bash -c '. "$1"; ai_sandbox_seed_backup "$2" "$3" .claude/.credentials.json' _ "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh" "$tmp/bk-src" "$tmp/bk-dst" >/dev/null 2>&1
+assert_eq "I-2 the backup helper on a FIFO row exits 0 (not 124)" "$?" 0
+
+# R2-1 (grep over the files, so it holds in a git archive export): the display rule has one definition (the bidi marks' literal appears once in bin/)
+assert_eq "R2-1 one definition of the display rule in bin/" "$(cd "$REPO_ROOT" && grep -rcF -e '\u200e\u200f\u061c' bin | awk -F: '{n+=$NF} END{print n+0}')" 1
 finish

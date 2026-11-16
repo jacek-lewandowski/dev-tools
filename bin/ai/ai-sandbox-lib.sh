@@ -246,6 +246,18 @@ ai_sandbox_say_recreate() {   # <sandbox dir>
         echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
 }
+# A sandbox created before the logins mode was recorded (.seeded present, no
+# SANDBOX_HOST_LOGINS key) may hold the host's logins: said at every start, never
+# rewritten here (I6). A recorded 0 or 1 is silent; create says it itself for 1.
+ai_sandbox_say_host_logins() {   # <sandbox dir>
+    [ -f "$1/.seeded" ] || return 0
+    [ -z "$(ai_sandbox_env_value "$1" SANDBOX_HOST_LOGINS)" ] || return 0
+    {
+        echo "Sandbox $(basename "$1") predates the logins mode: its logins may be copies of the host's, and I1 does not hold for them."
+        echo "Only 'ai-sandbox-account refresh' on the host renews them. To replace them with logins made inside the sandbox, run on the host:"
+        echo "    ai-sandbox-account reset"
+    } >&2
+}
 # Resolve the sandbox for the current directory. Sets AI_SANDBOX_DIR,
 # AI_SANDBOX_NAME and AI_SANDBOX_PROJECT, or returns 1 with a message.
 ai_sandbox_require_ctx() {
@@ -416,14 +428,23 @@ ai_sandbox_host_git() {   # <repository|-> <git args...>
 # status line: standard input to standard output, every code point of category Cc except
 # newline and tab, the bidi marks (U+200E, U+200F, U+061C), embeddings, overrides and
 # isolates (U+202A to U+202E, U+2066 to U+2069), and every byte that is not UTF-8, dropped.
-ai_sandbox_display_clean() {
-    python3 -I -c '
-import sys, unicodedata
-text = sys.stdin.buffer.read().decode("utf-8", "ignore")
-keep = "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
+# The rule's Python source, defined once: display_clean(text) returns the text without those code
+# points. Loaded into every python3 -I program that prints a name read from a sandbox
+# (ai_sandbox_display_clean, ai_sandbox_nofollow's refusals, ai_sandbox_seed_backup's skips).
+ai_sandbox_display_rule_py() {
+    cat <<'PY'
+import unicodedata
+def display_clean(text):
+    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
         and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
         and not "\u2066" <= c <= "\u2069"))
-sys.stdout.buffer.write(keep.encode("utf-8"))' \
+PY
+}
+
+ai_sandbox_display_clean() {
+    python3 -I -c "$(ai_sandbox_display_rule_py)
+import sys
+sys.stdout.buffer.write(display_clean(sys.stdin.buffer.read().decode('utf-8', 'ignore')).encode('utf-8'))" \
         || LC_ALL=C tr -cd '\11\12\40-\176'   # no usable python3: only printable ASCII, never the raw text
 }
 
@@ -534,7 +555,7 @@ else:
 def refuse(where, why):
     global RC
     RC = 1
-    sys.stderr.write("%s: refused %s %s: %s\n" % (PROG, root, where, why))
+    sys.stderr.write(display_clean("%s: refused %s %s: %s\n" % (PROG, root, where, why)))
 
 
 def why(e):
@@ -824,7 +845,8 @@ except BrokenPipeError:
 sys.exit(RC)
 PY
 )
-    python3 -I -c "$prog" "$@"
+    python3 -I -c "$(ai_sandbox_display_rule_py)
+$prog" "$@"
 }
 
 # C-INSTALL: a host entry point calls this first, with its own path. 0 when the directory
@@ -1069,68 +1091,30 @@ ai_sandbox_check_capacity() {   # <name> <gb>: 0, or 1 + the over-budget refusal
     return 1
 }
 
-# rsync '--exclude=' arguments for copying the host's <path under $HOME> into
-# a sandbox, one per line. Used by the one-time seed in create-ai-sandbox.sh
-# and by 'ai-sandbox-account refresh', so a refresh can never drag in what the
-# seed deliberately left out: caches, the bulk that now lives in shared/, host
-# state a single-project sandbox has no use for, and the paths that are
-# bind-mounted live instead of copied (the shared brain and conversations,
-# ~/.claude/CLAUDE.md and this project's ~/.claude/projects entry).
-ai_sandbox_seed_excludes() {
-    cat <<'EX'
---exclude=*Cache*
---exclude=*cache*
---exclude=BrowserMetrics*
---exclude=Crashpad
---exclude=logs
---exclude=tmp
---exclude=extensions
---exclude=downloads
---exclude=claude-code
---exclude=CachedExtensionVSIXs
---exclude=CachedData
---exclude=WebStorage
---exclude=workspaceStorage
---exclude=Safe Browsing
---exclude=optimization_guide_model_store
---exclude=WasmTtsEngine
---exclude=OnDeviceHeadSuggestModel
---exclude=CertificateRevocation
-EX
-    case $1 in
-        .gemini) cat <<'EX'
---exclude=brain
---exclude=conversations
---exclude=browser_recordings
---exclude=html_artifacts
---exclude=history
---exclude=History*
---exclude=IndexedDB
---exclude=Service Worker
---exclude=GEMINI.md
-EX
-        ;;
-        .claude) printf '%s\n' --exclude=CLAUDE.md --exclude=projects ;;
-    esac
-}
-
 # Every directory under a sandbox directory that the compose file binds into
 # the container, plus the parents of nested mount targets. All of them must
 # exist before 'compose up': Docker creates a missing bind source -- or a
 # missing parent for a nested target -- as root, and the container user can
 # then neither write to it nor, later, remove it. create-ai-sandbox.sh makes
 # them before generating the compose file; 'ai-sandbox-account reset' remakes
-# them after wiping the credential directories.
+# them after removing the login rows.
 #
 # .claude/projects is the parent of the ~/.claude/projects/<key> mount. Without
 # it Docker creates projects/ and projects/<key> root-owned inside .claude, and
-# 'rm -rf .claude' fails on <key> ever after.
+# 'rm -rf .claude' fails on <key> ever after. Likewise .gemini/antigravity and .gemini/antigravity-ide
+# are the parents of the four brain and conversations mounts, whose sources are the sandbox's own.
 # cache/ and npm/ are per sandbox on purpose: both hold code the sandbox writes
 # at run time (wheels, npm tarballs), so sharing them would let one sandbox
 # feed code to another.
 ai_sandbox_state_dirs() {
     cat <<'DIRS'
 .gemini
+.gemini/antigravity
+.gemini/antigravity-ide
+antigravity-brain
+antigravity-conversations
+antigravity-ide-brain
+antigravity-ide-conversations
 .antigravity
 .antigravity-ide
 .claude
@@ -1299,20 +1283,488 @@ ai_sandbox_caches_reset() {   # <sandbox dir>
     return 0
 }
 
-# '<path under $HOME on the host>|<path under the sandbox directory>'.
-# Everything here is identity-bearing -- OAuth tokens, account records, the
-# Electron profiles that hold a logged-in session -- so it is seeded from the
-# host exactly once and never overwritten afterwards. That is what lets one
-# project hold a different Claude, Codex or Gemini account from another.
-ai_sandbox_seed_paths() {
+# ai_sandbox_seed_table (the phase 7 plan's contract, as reviewed)
+#   The seed's allow list.
+#   One row per line, nothing else printed:
+#     <class>|<path under $HOME on the host>|<path under the sandbox directory>|<how>
+#   class  settings  copied by the first seed of every sandbox and by 'ai-sandbox-account reset'
+#          login     copied in addition only for a sandbox in the host mode: by its first seed
+#                    and by 'ai-sandbox-account refresh'; removed by 'ai-sandbox-account reset'
+#   paths  relative; no empty, '.' or '..' component; a component may hold '*', matched as a
+#          shell glob against the names at that level on the host, the same names used in the
+#          sandbox directory. A row whose host path is absent copies nothing. Nothing that no
+#          row names is copied.
+#   how    whole  the file, or the directory with everything below it, links as links
+#          links  only the symbolic links directly in the directory, as links; nothing else in it
+#          json   a JSON file (comments and trailing commas accepted) written with the root's type
+#                 and only the key paths ai_sandbox_seed_keys lists for the row; {} or [] when
+#                 none is present
+#          xml    an XML file written with its root element and only those children whose name
+#                 attribute ai_sandbox_seed_keys lists for the row
+#          A json or xml file that does not parse is not written: one stderr line naming the
+#          row, and the copy goes on.
+#   .claude.json is the login row 'login|.claude.json|.claude.json|json'. Without that row the
+#   sandbox's .claude.json is {}.
+# reads-outside: the layouts of the host's tool stores, as the user's tools write them: Claude Code
+# (~/.claude, ~/.claude.json), Codex (~/.codex), Gemini CLI and Antigravity CLI (~/.gemini),
+# Claude Desktop (~/.config/Claude), Antigravity and Antigravity IDE (~/.config/Antigravity,
+# ~/.config/Antigravity IDE) and JetBrains (~/.config/JetBrains/<product>); a tool that renames a
+# file here silently stops it arriving, so change a row only with a look at that tool's layout.
+ai_sandbox_seed_table() {
     cat <<'SEED'
-.gemini|.gemini
-.antigravity|.antigravity
-.antigravity-ide|.antigravity-ide
-.claude|.claude
-.codex|.codex
-.config/Antigravity|antigravity-data
-.config/Antigravity IDE|antigravity-ide-data
-.config/Claude|claude-data
+settings|.claude/settings.json|.claude/settings.json|json
+settings|.gemini/settings.json|.gemini/settings.json|json
+settings|.gemini/antigravity-cli/settings.json|.gemini/antigravity-cli/settings.json|json
+settings|.claude/skills|.claude/skills|links
+settings|.codex/skills|.codex/skills|links
+settings|.gemini/skills|.gemini/skills|links
+settings|.codex/AGENTS.md|.codex/AGENTS.md|whole
+settings|.gemini/config/AGENTS.md|.gemini/config/AGENTS.md|whole
+settings|.config/Antigravity/User/settings.json|antigravity-data/User/settings.json|json
+settings|.config/Antigravity/User/keybindings.json|antigravity-data/User/keybindings.json|json
+settings|.config/Antigravity IDE/User/settings.json|antigravity-ide-data/User/settings.json|json
+settings|.config/Antigravity IDE/User/keybindings.json|antigravity-ide-data/User/keybindings.json|json
+settings|.config/JetBrains/*/codestyles|jetbrains-config/*/codestyles|whole
+settings|.config/JetBrains/*/colors|jetbrains-config/*/colors|whole
+settings|.config/JetBrains/*/keymaps|jetbrains-config/*/keymaps|whole
+settings|.config/JetBrains/*/disabled_plugins.txt|jetbrains-config/*/disabled_plugins.txt|whole
+settings|.config/JetBrains/*/options/editor.xml|jetbrains-config/*/options/editor.xml|xml
+settings|.config/JetBrains/*/options/editor-font.xml|jetbrains-config/*/options/editor-font.xml|xml
+settings|.config/JetBrains/*/options/console-font.xml|jetbrains-config/*/options/console-font.xml|xml
+settings|.config/JetBrains/*/options/terminal-font.xml|jetbrains-config/*/options/terminal-font.xml|xml
+settings|.config/JetBrains/*/options/laf.xml|jetbrains-config/*/options/laf.xml|xml
+settings|.config/JetBrains/*/options/ui.lnf.xml|jetbrains-config/*/options/ui.lnf.xml|xml
+settings|.config/JetBrains/*/options/colors.scheme.xml|jetbrains-config/*/options/colors.scheme.xml|xml
+settings|.config/JetBrains/*/options/keymapFlags.xml|jetbrains-config/*/options/keymapFlags.xml|xml
+login|.claude/.credentials.json|.claude/.credentials.json|whole
+login|.claude.json|.claude.json|json
+login|.codex/auth.json|.codex/auth.json|whole
+login|.gemini/oauth_creds.json|.gemini/oauth_creds.json|whole
+login|.gemini/google_accounts.json|.gemini/google_accounts.json|whole
+login|.gemini/antigravity-cli/antigravity-oauth-token|.gemini/antigravity-cli/antigravity-oauth-token|whole
+login|.config/Claude/Cookies|claude-data/Cookies|whole
+login|.config/Claude/Local Storage|claude-data/Local Storage|whole
+login|.config/Claude/IndexedDB|claude-data/IndexedDB|whole
+login|.config/Claude/Session Storage|claude-data/Session Storage|whole
+login|.config/Claude/Local State|claude-data/Local State|whole
+login|.config/Claude/Trust Tokens|claude-data/Trust Tokens|whole
+login|.config/Claude/config.json|claude-data/config.json|whole
+login|.config/Antigravity/Cookies|antigravity-data/Cookies|whole
+login|.config/Antigravity/Local Storage|antigravity-data/Local Storage|whole
+login|.config/Antigravity/Session Storage|antigravity-data/Session Storage|whole
+login|.config/Antigravity/Trust Tokens|antigravity-data/Trust Tokens|whole
+login|.config/Antigravity/User/globalStorage/state.vscdb|antigravity-data/User/globalStorage/state.vscdb|whole
+login|.config/Antigravity IDE/Cookies|antigravity-ide-data/Cookies|whole
+login|.config/Antigravity IDE/Local Storage|antigravity-ide-data/Local Storage|whole
+login|.config/Antigravity IDE/Session Storage|antigravity-ide-data/Session Storage|whole
+login|.config/Antigravity IDE/Trust Tokens|antigravity-ide-data/Trust Tokens|whole
+login|.config/Antigravity IDE/User/globalStorage/state.vscdb|antigravity-ide-data/User/globalStorage/state.vscdb|whole
+login|.gemini/config/mcp_config.json|.gemini/config/mcp_config.json|whole
+login|.gemini/antigravity/mcp_config.json|.gemini/antigravity/mcp_config.json|whole
+login|.gemini/antigravity-ide/mcp_config.json|.gemini/antigravity-ide/mcp_config.json|whole
+login|.config/Claude/claude_desktop_config.json|claude-data/claude_desktop_config.json|whole
+login|.config/JetBrains/*/*.key|jetbrains-config/*/*.key|whole
+login|.config/JetBrains/*/*.license|jetbrains-config/*/*.license|whole
 SEED
+}
+
+# ai_sandbox_seed_keys <host path of a json or xml row, as the table writes it>
+#   (the phase 7 plan's contract, as reviewed)
+#   The row's key allow-list, one entry per line, nothing else printed. A key no entry reaches
+#   is dropped.
+#   json  a key path: components separated by '/'; a component is a key name, a shell glob over
+#         key names ('editor.*' matches the top-level key 'editor.fontSize'), or '[]' for every
+#         element of an array. The value at the path is kept whole.
+#   xml   the name attribute of a child of the root element (a JetBrains 'component').
+# An entry is added only with the user's word.
+# reads-outside: the key names of the tools' settings files (Claude Code settings.json, Gemini CLI
+# settings.json, agy settings.json, the editors' settings.json and keybindings.json, the JetBrains
+# options/*.xml components): a tool that renames a key stops it arriving.
+ai_sandbox_seed_keys() {   # <host path of a json or xml row, as the table writes it>
+    case $1 in
+        .claude/settings.json) cat <<'K'
+model
+modelSettings
+language
+theme
+editorMode
+autoCompactEnabled
+idleCompaction
+autoContinueAtUsageLimit
+agentPushNotifEnabled
+inputNeededNotifEnabled
+remoteControlAtStartup
+voice
+voiceEnabled
+K
+        ;;
+        .gemini/settings.json) cat <<'K'
+general/enablePromptCompletion
+general/previewFeatures
+security/auth/selectedType
+K
+        ;;
+        .gemini/antigravity-cli/settings.json) echo colorScheme ;;
+        '.config/Antigravity/User/settings.json'|'.config/Antigravity IDE/User/settings.json') cat <<'K'
+editor.*
+diffEditor.*
+workbench.colorTheme
+workbench.iconTheme
+files.autoSave
+terminal.integrated.fontSize
+debug.console.fontSize
+scm.inputFontSize
+git.autofetch
+git.confirmSync
+json.schemaDownload.enable
+redhat.telemetry.enabled
+extensions.ignoreRecommendations
+markdown-preview-enhanced.previewTheme
+python.languageServer
+playwright.reuseBrowser
+playwright.showTrace
+claudeCode.preferredLocation
+K
+        ;;
+        '.config/Antigravity/User/keybindings.json'|'.config/Antigravity IDE/User/keybindings.json') printf '%s\n' '[]/key' '[]/command' '[]/when' ;;
+        .config/JetBrains/\*/options/editor.xml) printf '%s\n' EditorSettings CodeInsightSettings ;;
+        .config/JetBrains/\*/options/editor-font.xml) echo DefaultFont ;;
+        .config/JetBrains/\*/options/console-font.xml) echo ConsoleFont ;;
+        .config/JetBrains/\*/options/terminal-font.xml) echo TerminalFontOptions ;;
+        .config/JetBrains/\*/options/laf.xml) echo LafManager ;;
+        .config/JetBrains/\*/options/ui.lnf.xml) echo UISettings ;;
+        .config/JetBrains/\*/options/colors.scheme.xml) echo EditorColorsManagerImpl ;;
+        .config/JetBrains/\*/options/keymapFlags.xml) echo KeymapFlagsStorage ;;
+        .claude.json) printf '%s\n' oauthAccount userID hasCompletedOnboarding ;;
+    esac
+}
+
+# Expands the globs of a table row under <base>: NUL-separated pairs <primary path> <secondary
+# path>, one pair per match that exists, the k-th '*' component of the secondary path taking the
+# name the k-th one of the primary matched. Run on the host side with the host path first, on the
+# sandbox side with the sandbox path first.
+ai_sandbox_seed_expand() {   # <base dir> <primary path> <secondary path>
+    python3 -I -c '
+import fnmatch, os, sys
+base, prim, sec = sys.argv[1:4]
+pc, sc = prim.split("/"), sec.split("/")
+wild = lambda c: any(ch in c for ch in "*?[")
+nsec = [i for i, c in enumerate(sc) if wild(c)]
+res = [("", [])]
+for c in pc:
+    nxt = []
+    for path, caps in res:
+        here = os.path.join(base, path) if path else base
+        if wild(c):
+            try:
+                names = sorted(os.listdir(here))
+            except OSError:
+                continue
+            for n in names:
+                if (n.startswith(".") and not c.startswith(".")) or not fnmatch.fnmatchcase(n, c):
+                    continue
+                nxt.append((path + "/" + n if path else n, caps + [n]))
+        else:
+            nxt.append((path + "/" + c if path else c, caps))
+    res = nxt
+for path, caps in res:
+    if not os.path.lexists(os.path.join(base, path)):
+        continue
+    out = list(sc)
+    for i, k in zip(nsec, range(len(caps))):
+        out[i] = caps[k]
+    sys.stdout.write(path + "\0" + "/".join(out) + "\0")
+' "$@"
+}
+
+# The existing sandbox-side paths of the rows of a class (NUL-separated), for the callers that back
+# up or remove them; a glob is expanded against the sandbox directory, as it is there.
+ai_sandbox_seed_sandbox_paths() {   # <sandbox dir> <class> [tools|idea]
+    local c host sb how h s
+    while IFS='|' read -r c host sb how; do
+        [ "$c" = "$2" ] || continue
+        ai_sandbox_seed_in_scope "$sb" "${3:-all}" || continue
+        while IFS= read -r -d '' s && IFS= read -r -d '' h; do
+            printf '%s\0' "$s"
+        done < <(ai_sandbox_seed_expand "$1" "$sb" "$host")
+    done < <(ai_sandbox_seed_table)
+}
+
+# 0 when a sandbox path belongs to the scope: tools (everything but the IDE's settings), idea
+# (only jetbrains-config) or all.
+ai_sandbox_seed_in_scope() {   # <sandbox path> <scope>
+    case $2 in
+        idea) case $1 in jetbrains-config/*) return 0 ;; *) return 1 ;; esac ;;
+        tools) case $1 in jetbrains-config/*) return 1 ;; *) return 0 ;; esac ;;
+        *) return 0 ;;
+    esac
+}
+
+# A json or xml file cut to its allowed keys, on standard output; 1 when it does not parse.
+# JSON may hold comments and trailing commas (the editors' files do).
+ai_sandbox_seed_filter() {   # <json|xml> <file> <key>...
+    python3 -I -c '
+import fnmatch, json, re, sys
+kind, path, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+MISSING = object()
+try:
+    if kind == "xml":
+        import xml.etree.ElementTree as ET
+        root = ET.parse(path).getroot()
+        for ch in list(root):
+            if ch.get("name") not in keys:
+                root.remove(ch)
+        out = ET.tostring(root, encoding="unicode") + "\n"
+        doc = None
+    else:
+        S = r"(\"(?:\\.|[^\"\\])*\")"
+        t = re.sub(S + r"|//[^\n]*|/\*.*?\*/", lambda m: m.group(1) or "", open(path, encoding="utf-8-sig").read(), flags=re.S)
+        doc = json.loads(re.sub(S + r"|,(\s*[}\]])", lambda m: m.group(1) or m.group(2), t))
+        if not isinstance(doc, (dict, list)):
+            raise ValueError("root")
+except Exception:
+    sys.exit(1)
+
+def keep(v, paths):
+    if any(not p for p in paths):
+        return v
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            sub = [p[1:] for p in paths if p[0] != "[]" and fnmatch.fnmatchcase(k, p[0])]
+            if sub:
+                r = keep(x, sub)
+                if r is not MISSING:
+                    out[k] = r
+        return out if out else MISSING
+    if isinstance(v, list):
+        sub = [p[1:] for p in paths if p[0] == "[]"]
+        out = []
+        if sub:
+            for x in v:
+                r = keep(x, sub)
+                if r is not MISSING:
+                    out.append(r)
+        return out if out else MISSING
+    return MISSING
+
+if doc is None:
+    sys.stdout.write(out)
+else:
+    r = keep(doc, [tuple(k.split("/")) for k in keys])
+    if r is MISSING:
+        r = {} if isinstance(doc, dict) else []
+    sys.stdout.write(json.dumps(r, indent=2, ensure_ascii=False) + "\n")
+' "$@"
+}
+
+# Copies the rows of one class from $HOME into a sandbox directory, every write below it through
+# ai_sandbox_nofollow (a refusal is one stderr line and the copy goes on). Prints, one per line,
+# the sandbox path of each row written, so a caller can log the logins; a directory row that
+# copy refused in part (it writes the other entries) is printed as '<path><TAB>partial', because
+# what it did write is a copied login all the same (the log must not understate). scope: tools (all but the
+# IDE's settings), idea (only those) or all. A json or xml file that does not parse is not
+# written: one stderr line naming it.
+ai_sandbox_seed_copy() {   # <sandbox dir> <settings|login> [tools|idea]
+    local root c host sb how h s mode parent name target out
+    local -a keys
+    root=$(readlink -f "$1") || return 1
+    while IFS='|' read -r c host sb how; do
+        [ "$c" = "$2" ] || continue
+        ai_sandbox_seed_in_scope "$sb" "${3:-all}" || continue
+        mapfile -t keys < <(ai_sandbox_seed_keys "$host")
+        while IFS= read -r -d '' h && IFS= read -r -d '' s; do
+            parent=${s%/*}
+            if [ "$parent" != "$s" ]; then ai_sandbox_nofollow mkdir "$root" "$parent" || continue; fi
+            case $how in
+                json|xml)
+                    if ! out=$(ai_sandbox_seed_filter "$how" "$HOME/$h" "${keys[@]}"); then
+                        echo "ai-sandbox: $h is not copied: it does not parse as $how" >&2
+                        continue
+                    fi
+                    mode=$(stat -c %a "$HOME/$h" 2>/dev/null || echo 600)
+                    printf '%s\n' "$out" | ai_sandbox_nofollow write "$root" "$s" "$mode" || continue ;;
+                links)
+                    [ -d "$HOME/$h" ] || continue
+                    ai_sandbox_nofollow mkdir "$root" "$s" || continue
+                    while IFS= read -r -d '' target; do
+                        name=${target##*/}
+                        ai_sandbox_nofollow link "$root" "$s/$name" "$(readlink "$target")" || true
+                    done < <(find "$HOME/$h" -mindepth 1 -maxdepth 1 -type l -print0) ;;
+                *)
+                    if [ -d "$HOME/$h" ]; then
+                        ai_sandbox_nofollow copy "$root" "$s" "$HOME/$h" --delete || { printf '%s\tpartial\n' "$s"; continue; }
+                    elif [ -f "$HOME/$h" ]; then
+                        mode=$(stat -c %a "$HOME/$h" 2>/dev/null || echo 600)
+                        ai_sandbox_nofollow write "$root" "$s" "$mode" < "$HOME/$h" || continue
+                    else
+                        continue
+                    fi ;;
+            esac
+            printf '%s\n' "$s"
+        done < <(ai_sandbox_seed_expand "$HOME" "$host" "$sb")
+    done < <(ai_sandbox_seed_table)
+    return 0
+}
+
+# One line per login row copied, as ai_sandbox_seed_copy prints them, on standard input:
+# appended to <sandbox dir>/host-logins.log as '<date>TAB<row>[TAB partial]'. Only the host
+# reads the log ('ai-sandbox-account reset' lists it; its format is not a contract).
+ai_sandbox_seed_log_logins() {   # <sandbox dir>
+    local row now
+    now=$(date -Iseconds)
+    while IFS= read -r row; do
+        [ -n "$row" ] && printf '%s\t%s\n' "$now" "$row" >> "$1/host-logins.log"
+    done
+    return 0
+}
+
+# Sets <key> in <sandbox dir>/.env: the whole file is rebuilt beside it and renamed over it, so a
+# failure leaves .env as it was.
+ai_sandbox_env_set() {   # <sandbox dir> <key> <value>
+    local tmp="$1/.env.tmp.$$"
+    { { grep -v "^$2=" "$1/.env" 2>/dev/null || true; printf '%s=%s\n' "$2" "$3"; } > "$tmp" \
+        && { chmod --reference="$1/.env" "$tmp" 2>/dev/null || true; } \
+        && mv -f "$tmp" "$1/.env"; } || { rm -f "$tmp"; return 1; }
+}
+
+# Copies the files and directories at the given sandbox paths into a host directory, entering
+# every component below the sandbox directory without following a link (ai_sandbox_nofollow has
+# no read operation); a link, or anything on the way that is one, is skipped with a stderr line.
+ai_sandbox_seed_backup() {   # <sandbox dir> <backup dir> <sandbox path>...
+    local prog
+    prog=$(cat <<'PY'
+import os, shutil, stat, sys
+root, dest, paths = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3:]
+FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+def skip(p, why):
+    sys.stderr.write(display_clean("ai-sandbox: not backed up: %s (%s)\n" % (p, why)))
+def copy_tree(fd, rel):
+    os.makedirs(os.path.join(dest, rel), exist_ok=True)
+    for name in sorted(os.listdir(fd)):
+        sub = rel + "/" + name
+        try:
+            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(st.st_mode):
+                nfd = os.open(name, FL | os.O_DIRECTORY, dir_fd=fd)
+                try: copy_tree(nfd, sub)
+                finally: os.close(nfd)
+            elif stat.S_ISREG(st.st_mode):
+                copy_file(fd, name, sub)
+            else:
+                skip(sub, "not a plain file")
+        except OSError as e:
+            skip(sub, e.strerror or str(e))
+def copy_file(fd, name, rel):
+    sfd = os.open(name, FL | os.O_NONBLOCK, dir_fd=fd)   # a FIFO swapped in after the stat must not block
+    try:
+        if not stat.S_ISREG(os.fstat(sfd).st_mode):
+            raise OSError(0, "not a plain file")
+        out = os.path.join(dest, rel)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with os.fdopen(os.dup(sfd), "rb") as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        os.chmod(out, 0o600)
+    finally:
+        os.close(sfd)
+for p in paths:
+    parts = p.split("/")
+    fd = os.open(root, FL | os.O_DIRECTORY)
+    try:
+        for c in parts[:-1]:
+            nfd = os.open(c, FL | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+        st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(st.st_mode):
+            nfd = os.open(parts[-1], FL | os.O_DIRECTORY, dir_fd=fd)
+            try: copy_tree(nfd, p)
+            finally: os.close(nfd)
+        elif stat.S_ISREG(st.st_mode):
+            copy_file(fd, parts[-1], p)
+        else:
+            skip(p, "not a plain file")
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        skip(p, e.strerror or str(e))
+    finally:
+        os.close(fd)
+PY
+)
+    python3 -I -c "$(ai_sandbox_display_rule_py)
+$prog" "$@"
+}
+
+# The Codex default (phase 7, T09; keys settled from Codex's configuration reference): on standard
+# output, the file a sandbox's .codex/config.toml starts as -- Codex's "Approve for me" and trust
+# of this one project. Written by create's first seed and by 'ai-sandbox-account reset', never
+# copied from the host, never read back (I3d). The project path is a TOML basic string
+# (backslash, quote and control characters escaped; other characters, non-BMP ones included, raw).
+# reads-outside: Codex's config.toml layout and key names (approval_policy, approvals_reviewer,
+# sandbox_mode, [projects."<path>"] trust_level), as the Codex CLI in the image reads them; the
+# image installs Codex unpinned, so a renamed key silently stops the default.
+ai_sandbox_codex_default() {   # <the project's absolute path, as bound in the container>
+    local quoted
+    quoted=$(python3 -I -c '
+import sys
+out = []
+for c in sys.argv[1]:
+    if c in "\\\"":
+        out.append("\\" + c)
+    elif ord(c) < 0x20 or ord(c) == 0x7F:
+        out.append("\\u%04X" % ord(c))
+    else:
+        out.append(c)
+sys.stdout.buffer.write(("\"" + "".join(out) + "\"\n").encode("utf-8"))' "$1") || return 1
+    cat <<TOML
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+
+[projects.$quoted]
+trust_level = "trusted"
+TOML
+}
+
+# Writes the Codex default below the sandbox directory without following a link; replaces a file
+# there (reset's "anew"). One stderr line and exit 1 on a refusal.
+ai_sandbox_seed_codex_default() {   # <sandbox dir> <project path>
+    local root
+    root=$(readlink -f "$1") || return 1
+    ai_sandbox_nofollow mkdir "$root" .codex || return 1
+    ai_sandbox_codex_default "$2" | ai_sandbox_nofollow write "$root" .codex/config.toml 600
+}
+
+# agy's trust of the project (user decision U-e (a)): <sandbox dir>/.gemini/antigravity-cli/settings.json
+# gains "trustedWorkspaces": [<project path>], after the settings row's copy, which never carries the
+# key; the file is created when the host had none. The existing file is read without following a
+# link (a file that is not JSON starts again from {}).
+# reads-outside: agy's settings.json key trustedWorkspaces (a list of absolute path strings).
+ai_sandbox_seed_agy_trust() {   # <sandbox dir> <project path>
+    local root out
+    root=$(readlink -f "$1") || return 1
+    out=$(python3 -I -c '
+import json, os, stat, sys
+root, project = sys.argv[1:3]
+FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+doc = {}
+fd = os.open(root, FL | os.O_DIRECTORY)
+try:
+    for c in (".gemini", "antigravity-cli"):
+        nfd = os.open(c, FL | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+    # O_NONBLOCK: a FIFO placed there must not block the open; only a regular file is read
+    ffd = os.open("settings.json", FL | os.O_NONBLOCK, dir_fd=fd)
+    with os.fdopen(ffd, "rb") as f:
+        if stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            data = json.loads(f.read().decode("utf-8"))
+            if isinstance(data, dict):
+                doc = data
+except (OSError, ValueError):
+    pass
+finally:
+    os.close(fd)
+doc["trustedWorkspaces"] = [project]
+print(json.dumps(doc, indent=2))
+' "$root" "$2") || return 1
+    ai_sandbox_nofollow mkdir "$root" .gemini/antigravity-cli || return 1
+    printf '%s\n' "$out" | ai_sandbox_nofollow write "$root" .gemini/antigravity-cli/settings.json 600
 }

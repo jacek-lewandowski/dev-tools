@@ -78,6 +78,8 @@ else
     ai_sandbox_say_recreate "$AI_SANDBOX_DIR"
 fi
 
+ai_sandbox_say_host_logins "$AI_SANDBOX_DIR"
+
 if [ "$#" -eq 0 ]; then
     ai_sandbox_compose exec "$AI_SANDBOX_NAME" bash
 elif [ "$#" -eq 1 ]; then
