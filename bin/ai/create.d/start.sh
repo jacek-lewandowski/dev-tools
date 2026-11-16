@@ -10,6 +10,7 @@ start_gate() {
 if [ "$NO_START" = "yes" ]; then
     step "Done (--no-start)"
     log "Configuration written. Start it with: ai-sandbox"
+    ai_sandbox_say_host_logins "$SANDBOX_DIR"
     exit 0
 fi
 
@@ -72,6 +73,7 @@ cat <<SUMMARY
   CPU limit:          $CPUSET_WANT core(s) for $MEMORY_GB GB: host cores $CPUSET (nproc inside agrees)
   Timezone:           $TZ_SUMMARY
 SUMMARY
+ai_sandbox_say_host_logins "$SANDBOX_DIR"
 
 case "$DISPLAY_MODE" in
   xpra)

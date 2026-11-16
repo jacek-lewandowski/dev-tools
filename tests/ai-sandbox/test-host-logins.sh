@@ -50,6 +50,38 @@ create "$c" --host-logins >/dev/null
 assert_eq "--host-logins records 1 on an unrecorded sandbox" "$(mode "$dc")" 1
 assert_contains "and names refresh" "$(cat "$tmp/out")" 'ai-sandbox-account refresh'
 
+# T04 (O4): a sandbox without a recorded mode is reported at every start; a recorded one is not
+# by ai-sandbox or ai-sandbox-restart (create says it itself for 1, above).
+d="$tmp/work/d"; mkdir -p "$d"; dd_=$(dir_of "$d"); create "$d" >/dev/null
+ename=$(basename "$dd_"); eimage=$(sed -n 's/^    image: "\(.*\)"$/\1/p' "$dd_/docker-compose.yml")
+start() {   # <project> <ai-sandbox|ai-sandbox-restart> <running true|false>; stderr+stdout in $tmp/start.out, prints the exit code
+    (cd "$1" && DOCKER_STUB_IMAGES="$eimage" DOCKER_STUB_PS="$ename" DOCKER_STUB_RUNNING="$3" \
+        bash "$AI_SANDBOX_ROOT/bin/$2" true >"$tmp/start.out" 2>&1; echo $?)
+}
+sed -i '/^SANDBOX_HOST_LOGINS=/d' "$dd_/.env"
+for cmd in ai-sandbox ai-sandbox-restart; do
+    for running in true false; do
+        assert_eq "$cmd (running=$running) exits as before on an unrecorded sandbox" "$(start "$d" "$cmd" "$running")" 0
+        assert_contains "$cmd (running=$running) says that I1 does not hold" "$(cat "$tmp/start.out")" 'I1 does not hold'
+        assert_contains "$cmd (running=$running) names reset" "$(cat "$tmp/start.out")" 'ai-sandbox-account reset'
+    done
+done
+assert_eq "the sandbox is still unrecorded" "$(mode "$dd_")" ""
+create "$d" >/dev/null
+assert_contains "create --no-start says it for an unrecorded sandbox" "$(cat "$tmp/out")" 'ai-sandbox-account reset'
+assert_contains "and that I1 does not hold" "$(cat "$tmp/out")" 'I1 does not hold'
+sed -i '/^SANDBOX_HOST_LOGINS=/d' "$dd_/.env"
+bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none "$d" >"$tmp/out" 2>&1; r=$?
+assert_eq "a full create of an unrecorded sandbox exits 0" "$r" 0
+assert_contains "and says it after the summary" "$(sed -n '/^== Ready/,$p' "$tmp/out")" 'ai-sandbox-account reset'
+for m in 0 1; do
+    sed -i '/^SANDBOX_HOST_LOGINS=/d' "$dd_/.env"; echo "SANDBOX_HOST_LOGINS=$m" >> "$dd_/.env"
+    for cmd in ai-sandbox ai-sandbox-restart; do
+        start "$d" "$cmd" true >/dev/null
+        assert_eq "$cmd prints no legacy line for a sandbox recorded $m" "$(grep -c 'I1' "$tmp/start.out")" 0
+    done
+done
+
 # the option's help text, and no --no-host-logins (D3)
 assert_contains "--help describes the option" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)" '--host-logins'
 assert_contains "--help names the way back" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --help 2>&1)" 'ai-sandbox-account reset'

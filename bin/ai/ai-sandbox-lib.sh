@@ -246,6 +246,18 @@ ai_sandbox_say_recreate() {   # <sandbox dir>
         echo "    $(ai_sandbox_recreate_command "$1")"
     } >&2
 }
+# A sandbox created before the logins mode was recorded (.seeded present, no
+# SANDBOX_HOST_LOGINS key) may hold the host's logins: said at every start, never
+# rewritten here (I6). A recorded 0 or 1 is silent; create says it itself for 1.
+ai_sandbox_say_host_logins() {   # <sandbox dir>
+    [ -f "$1/.seeded" ] || return 0
+    [ -z "$(ai_sandbox_env_value "$1" SANDBOX_HOST_LOGINS)" ] || return 0
+    {
+        echo "Sandbox $(basename "$1") predates the logins mode: its logins may be copies of the host's, and I1 does not hold for them."
+        echo "Only 'ai-sandbox-account refresh' on the host renews them. To replace them with logins made inside the sandbox, run on the host:"
+        echo "    ai-sandbox-account reset"
+    } >&2
+}
 # Resolve the sandbox for the current directory. Sets AI_SANDBOX_DIR,
 # AI_SANDBOX_NAME and AI_SANDBOX_PROJECT, or returns 1 with a message.
 ai_sandbox_require_ctx() {
