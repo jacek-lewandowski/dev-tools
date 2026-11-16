@@ -694,6 +694,14 @@ trgood="$trname-gradle-caches=$(ai_sandbox_caches_opts "$trdir" gradle-caches "$
 assert_eq "ai-sandbox: matching volumes, the display starts" "$(shown)" ran
 assert_contains "and compose up follows" "$(stub_docker_log)" " up"
 
+# found running only by the recheck under the lock: entered with no 'up', and it still gets its display
+rm -f "$trmarker" "$DOCKER_STUB_LOG.inspect_count"; : > "$DOCKER_STUB_LOG"
+(cd "$trproj" && DOCKER_STUB_IMAGES="$trimages" DOCKER_STUB_VOLUMES="$trgood" DOCKER_STUB_RUNNING_FROM_CALL=2 bash "$REPO_ROOT/bin/ai/ai-sandbox" true >"$tmp/tr.out" 2>&1); rc=$?
+assert_eq "ai-sandbox: found running under the lock, entered" "$rc" 0
+assert_eq "ai-sandbox: found running under the lock, no compose up" "$(grep -c ' up' "$DOCKER_STUB_LOG")" 0
+assert_eq "ai-sandbox: found running under the lock, the display still starts" "$(shown)" ran
+rm -f "$DOCKER_STUB_LOG.inspect_count"
+
 # the display started under the lock does not hold it: a backgrounding display, lock free afterwards
 trpid="$tmp/refuse-display-sleep.pid"
 printf '#!/usr/bin/env bash\n(exec sleep 600) >/dev/null 2>&1 &\necho $! > "%s"\n' "$trpid" > "$trdir/start-display.sh"
