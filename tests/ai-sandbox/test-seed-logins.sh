@@ -227,4 +227,9 @@ assert_file "the state directories are still made" "$d5/.claude"
 assert_eq "and .claude.json is {}" "$(tr -d ' \n' < "$d5/.claude.json")" '{}'
 
 rm -rf "$tmp"
+# L-1: the project path is a TOML basic string: a character outside the BMP stays as it is (a JSON
+# surrogate-pair escape is invalid TOML), DEL and the control characters are \uXXXX escapes
+want_toml=$'[projects."/p/\U0001F600\\u007F\\"\\\\\\u001B"]'
+got_toml=$(ai_sandbox_codex_default $'/p/\U0001F600\x7f"\\\x1b' | grep '^\[projects')
+assert_eq "L-1 the Codex default quotes a path with a non-BMP character, DEL, a quote, a backslash and ESC" "$got_toml" "$want_toml"
 finish

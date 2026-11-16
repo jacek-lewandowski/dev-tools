@@ -1696,13 +1696,23 @@ for p in paths:
 # output, the file a sandbox's .codex/config.toml starts as -- Codex's "Approve for me" and trust
 # of this one project. Written by create's first seed and by 'ai-sandbox-account reset', never
 # copied from the host, never read back (I3d). The project path is a TOML basic string
-# (JSON string escapes are valid there).
+# (backslash, quote and control characters escaped; other characters, non-BMP ones included, raw).
 # reads-outside: Codex's config.toml layout and key names (approval_policy, approvals_reviewer,
 # sandbox_mode, [projects."<path>"] trust_level), as the Codex CLI in the image reads them; the
 # image installs Codex unpinned, so a renamed key silently stops the default.
 ai_sandbox_codex_default() {   # <the project's absolute path, as bound in the container>
     local quoted
-    quoted=$(python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1") || return 1
+    quoted=$(python3 -I -c '
+import sys
+out = []
+for c in sys.argv[1]:
+    if c in "\\\"":
+        out.append("\\" + c)
+    elif ord(c) < 0x20 or ord(c) == 0x7F:
+        out.append("\\u%04X" % ord(c))
+    else:
+        out.append(c)
+sys.stdout.buffer.write(("\"" + "".join(out) + "\"\n").encode("utf-8"))' "$1") || return 1
     cat <<TOML
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
