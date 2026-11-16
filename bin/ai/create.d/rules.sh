@@ -199,6 +199,10 @@ Environment notes:
   host's Gradle and Maven caches (overlaid: read-only underneath, with writes
   kept in this sandbox until its next start). The rest of the host filesystem
   is not mounted.
+- Only the project directory and the other mounted host directories survive the container being re-created
+  (create-ai-sandbox.sh makes compose replace it when its configuration or image changed;
+  ai-sandbox-restart always does). A stop and start keeps files written elsewhere in the container, and
+  until then they fill the host's disk. Write large output only under the project or a mounted directory.
 - Only explicitly passed-through serial ports are visible under /dev. No other
   host USB device is reachable: /dev/bus/usb is not mounted.
 - The subagent prompt-cache TTL is already one hour here, set by the
