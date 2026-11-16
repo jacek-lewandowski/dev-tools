@@ -19,8 +19,8 @@ fi
 # 'ai-knowledge sync' are the only places that run it.
 # Every refusal of a start comes before the display, so a refused start leaves
 # no display process behind. A running container is entered without them.
-# Two refusals need the build-caches lock, so for a start that takes it the
-# display is started under the lock, right after the cache check.
+# The build-cache check refuses under the build-caches lock, so for a start
+# that takes it the display is started under the lock, right after that check.
 RUNNING=$(docker container inspect -f '{{.State.Running}}' "$AI_SANDBOX_NAME" 2>/dev/null || true)
 if [ "$RUNNING" != "true" ]; then
     # A sandbox whose compose file predates the host's knowledge configuration
