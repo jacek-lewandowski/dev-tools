@@ -38,6 +38,7 @@ case_of "the projects mount (.claude/projects)" reset .claude/projects dir
 case_of "the Codex default (.codex/config.toml)" reset .codex/config.toml file
 case_of "agy's settings (.gemini/antigravity-cli/settings.json)" reset .gemini/antigravity-cli/settings.json file
 case_of "agy's directory (.gemini/antigravity-cli)" reset .gemini/antigravity-cli dir
+case_of "the brain's parent (.gemini/antigravity)" reset .gemini/antigravity dir
 # a link at the mount's parent is refused, named on standard error, and left (the sandbox's own business)
 host; rm -rf "${dir:?}/.claude/projects"; ln -s "$trap_dir/dir" "$dir/.claude/projects"
 assert_contains "O10 reset names the refusal at .claude/projects" "$(acct reset --yes)" 'refused'

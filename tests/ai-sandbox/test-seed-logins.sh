@@ -58,7 +58,14 @@ for f in .claude/history.jsonl .claude/projects/other/x.jsonl .claude/file-histo
          .gemini/antigravity-browser-profile/Default/Cookies .gemini/antigravity-cli/history.jsonl \
          .gemini/antigravity/knowledge/k .gemini/antigravity/brain/b .gemini/antigravity/conversations/c \
          .gemini/antigravity-ide/knowledge/k $CD/git-worktrees.json $AG/User/History/h $AG/Backups/b \
-         $JB/options/recentProjects.xml $JB/options/trusted-paths.xml; do mk "$f"; done
+         $JB/options/recentProjects.xml $JB/options/trusted-paths.xml \
+         .codex/memories_1.sqlite .codex/logs_2.sqlite .codex/goals_1.sqlite .codex/queue_1.sqlite \
+         ".gemini/antigravity-browser-profile/Default/Login Data" ".gemini/antigravity-browser-profile/Local State" \
+         .gemini/antigravity/annotations/a .gemini/antigravity/code_tracker/c .gemini/antigravity/implicit/i \
+         .gemini/antigravity-ide/annotations/a .gemini/antigravity-ide/code_tracker/c .gemini/antigravity-ide/implicit/i \
+         $CD/claude-code-sessions/s $CD/local-agent-mode-sessions/s $AG/User/workspaceStorage/w \
+         "$AGI/User/History/h" "$AGI/User/workspaceStorage/w" "$AGI/Backups/b" \
+         $JB/options/gitlab.xml $JB/options/remote-servers.xml $JB/options/proxy.settings.xml; do mk "$f"; done
 # dropped settings rows, and a name no row holds in each directory the base's seed copied
 for f in .claude/agents/a.md .codex/agents/a.toml .gemini/agents/a.md .antigravity/argv.json .antigravity-ide/argv.json \
          $AG/User/snippets/s.json "$AGI/User/snippets/s.json" $JB/templates/t.xml $JB/idea64.vmoptions \

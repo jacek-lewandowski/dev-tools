@@ -49,6 +49,7 @@ assert_eq "no key written" "$(mode "$dc")" ""
 create "$c" --host-logins >/dev/null
 assert_eq "--host-logins records 1 on an unrecorded sandbox" "$(mode "$dc")" 1
 assert_contains "and names refresh" "$(cat "$tmp/out")" 'ai-sandbox-account refresh'
+assert_no_file "and copies nothing itself" "$dc/.claude/.credentials.json"
 
 # T04 (O4): a sandbox without a recorded mode is reported at every start; a recorded one is not
 # by ai-sandbox or ai-sandbox-restart (create says it itself for 1, above).

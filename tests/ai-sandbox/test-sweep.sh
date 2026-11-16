@@ -105,6 +105,8 @@ assert_ne "run 1 recorded paths: mount targets (CLAUDE.md)" "$(cat_n '/@SB/\.cla
 assert_ne "run 1 recorded paths: skill links" "$(cat_n '/@SB/\.(claude|codex|gemini)/skills/')" 0
 assert_ne "run 1 recorded paths: the SDKMAN farm" "$(cat_n '/@SB/sdkman/')" 0
 assert_ne "run 1 recorded paths: account state" "$(cat_n '/@SB/\.claude/\.credentials\.json$')" 0
+assert_ne "run 1 recorded paths: the Codex default" "$(cat_n '/@SB/\.codex/config\.toml$')" 0
+assert_ne "run 1 recorded paths: agy's trust" "$(cat_n '/@SB/\.gemini/antigravity-cli/settings\.json$')" 0
 assert_ne "run 1 recorded paths: moved legacy files" "$(cat_n '\.superseded$')" 0
 assert_eq "run 1 recorded no status file (the host's reports are under the read-only status/)" "$(cat_n '/status(/|$)')" 0
 echo "# sweep: $paths_total paths recorded by run 1" >&2
