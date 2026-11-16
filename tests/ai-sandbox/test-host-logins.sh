@@ -116,8 +116,13 @@ block=$(cat "$HOME/.gemini/GEMINI.md" 2>/dev/null)
 assert_contains "the generated environment block lists the project entry" "$block" "this project's Claude Code history and memory"
 assert_eq "and no longer lists the Antigravity brain among the host paths" "$(printf '%s\n' "$block" | grep -c 'Antigravity brain and conversations')" 0
 # the coupling register has the Codex default's row, and the markers it names exist
-assert_contains "PROJECT_MAP.md's coupling register names the Codex default" "$(cat "$REPO_ROOT/PROJECT_MAP.md")" 'ai_sandbox_codex_default'
-assert_eq "the two reads-outside markers of the default exist" "$(git -C "$REPO_ROOT" grep -n -A12 'reads-outside:' -- bin/ai/ai-sandbox-lib.sh | grep -c -e 'ai_sandbox_codex_default()' -e 'ai_sandbox_seed_agy_trust()')" 2
+# PROJECT_MAP.md is outside the suite's roots: not in a git archive export of bin/ai, tools and tests
+if [ -f "$REPO_ROOT/PROJECT_MAP.md" ]; then
+    assert_contains "PROJECT_MAP.md's coupling register names the Codex default" "$(cat "$REPO_ROOT/PROJECT_MAP.md")" 'ai_sandbox_codex_default'
+else
+    echo "skip - PROJECT_MAP.md's coupling register names the Codex default (no PROJECT_MAP.md: an export of the suite's roots)"
+fi
+assert_eq "the two reads-outside markers of the default exist" "$(grep -n -A12 'reads-outside:' "$REPO_ROOT/bin/ai/ai-sandbox-lib.sh" | grep -c -e 'ai_sandbox_codex_default()' -e 'ai_sandbox_seed_agy_trust()')" 2
 assert_eq "--no-host-logins does not exist: exit 2" "$(bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --no-host-logins "$a" >/dev/null 2>&1; echo $?)" 2
 
 rm -rf "$tmp"
