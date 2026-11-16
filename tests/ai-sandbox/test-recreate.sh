@@ -16,11 +16,8 @@ helper="$AI_SANDBOX_ROOT/bin"
 bash "$REPO_ROOT/bin/ai/create-ai-sandbox.sh" --display=none --no-start "$proj" >"$tmp/out" 2>&1 || cat "$tmp/out"
 block=$(tr '\n' ' ' < "$HOME/.gemini/GEMINI.md" | tr -s ' ')
 [ -f "$AI_KNOWLEDGE_ROOT/sandbox-environment.md" ] && block=$(tr '\n' ' ' < "$AI_KNOWLEDGE_ROOT/sandbox-environment.md" | tr -s ' ')
-assert_contains "block: only mounted directories survive a re-creation" "$block" \
-    "Only the project directory and the other mounted host directories survive the container being re-created"
-assert_contains "block: a stop and start keeps the container's own files" "$block" \
-    "A stop and start keeps files written elsewhere in the container"
-assert_contains "block: they fill the host's disk meanwhile" "$block" "until then they fill the host's disk"
+want="- Only the project directory and the sandbox's own mounted state directories (~/.claude, ~/.cache, ~/.npm, ~/.codex, ~/.gemini, ~/.config/*, ~/knowledge) keep what you write. Files written anywhere else in the container can vanish at any start or re-creation: ai-sandbox-restart always replaces the container, and ai-sandbox or create-ai-sandbox.sh do when its image or configuration changed (another project's create can rebuild the shared image); until then they fill the host's disk. Write large or lasting output only under the project or those directories. The Gradle and Maven build caches are the exception: writes to them are discarded at every start."
+assert_contains "block: the full re-creation bullet" "$block" "$want"
 
 # --- a re-create of the existing sandbox ends in 'compose up -d' ------------
 # Compose itself decides whether 'up' replaces the container (changed configuration or
@@ -32,6 +29,16 @@ assert_contains "re-create: compose up -d" "$log" " up -d"
 case "$log" in
     *--force-recreate*|*" down"*) TESTS_RUN=$((TESTS_RUN+1)); _fail "re-create: no forced recreate and no down" "$log" ;;
     *) TESTS_RUN=$((TESTS_RUN+1)); _pass "re-create: no forced recreate and no down" ;;
+esac
+
+# --- a plain start of the stopped sandbox also issues 'compose up -d' -------
+: > "$DOCKER_STUB_LOG"
+(cd "$proj" && bash "$helper/ai-sandbox" true >/dev/null 2>&1)
+log=$(stub_docker_log)
+assert_contains "ai-sandbox start: compose up -d, like create" "$log" " up -d"
+case "$log" in
+    *--force-recreate*|*" down"*) TESTS_RUN=$((TESTS_RUN+1)); _fail "ai-sandbox start: no forced recreate and no down" "$log" ;;
+    *) TESTS_RUN=$((TESTS_RUN+1)); _pass "ai-sandbox start: no forced recreate and no down" ;;
 esac
 
 # --- the helpers: stop keeps the container, restart and rm remove it --------
