@@ -79,7 +79,8 @@ assert_eq "a running sandbox is entered with its image gone" "$r" 0
 # A refused start leaves no display behind: start-display.sh (a marker here) runs only when the
 # start goes on, and still before compose up; a running container still gets its display.
 marker="$tmp/display-ran"
-printf '#!/usr/bin/env bash\necho ran >> "%s"\n' "$marker" > "$dir/start-display.sh"; chmod +x "$dir/start-display.sh"
+# it also logs itself to the docker stub's log, so the order against compose up can be read there
+printf '#!/usr/bin/env bash\necho ran >> "%s"\necho start-display >> "%s"\n' "$marker" "$DOCKER_STUB_LOG" > "$dir/start-display.sh"; chmod +x "$dir/start-display.sh"
 rm -f "$marker"
 msg=$(cd "$proj" && DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true 2>&1) && r=0 || r=$?
 assert_eq "refused start (missing image): exit 1" "$r" 1
@@ -94,7 +95,7 @@ rm -f "$marker"
 : > "$DOCKER_STUB_LOG"
 (cd "$proj" && DOCKER_STUB_IMAGES="$image" DOCKER_STUB_RUNNING=false bash "$AI_SANDBOX_ROOT/bin/ai-sandbox" true >"$tmp/start.out" 2>&1)
 assert_eq "ai-sandbox: a start that goes on starts the display" "$([ -e "$marker" ] && echo ran || echo none)" ran
-assert_contains "and compose up follows" "$(stub_docker_log)" " up"
+assert_eq "and compose up follows it" "$(grep -e '^start-display$' -e ' up -d$' "$DOCKER_STUB_LOG" | sed 's/.* up -d$/up/')" $'start-display\nup'
 
 rm -rf "$tmp"
 finish
