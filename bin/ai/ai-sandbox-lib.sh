@@ -1317,14 +1317,28 @@ ai_sandbox_seed_paths() {
 SEED
 }
 
-# The seed's allow list (phase 7): what a new sandbox may receive from the host, and nothing
-# else. One row per line: <class>|<path under $HOME>|<path under the sandbox directory>|<how>.
-# class settings: copied by the first seed of every sandbox and by 'ai-sandbox-account reset';
-#       login: copied in addition only for a sandbox in the host mode, by its first seed and by
-#       'ai-sandbox-account refresh', removed by 'reset'. how: whole (the file, or the directory
-#       with everything below it, links as links), links (only the symbolic links directly in the
-#       directory), json or xml (the file cut to the keys ai_sandbox_seed_keys lists for the row).
-# A component may hold '*'. A row whose host path is absent copies nothing.
+# ai_sandbox_seed_table (the phase 7 plan's contract, as reviewed)
+#   The seed's allow list (replaces ai_sandbox_seed_paths and ai_sandbox_seed_excludes).
+#   One row per line, nothing else printed:
+#     <class>|<path under $HOME on the host>|<path under the sandbox directory>|<how>
+#   class  settings  copied by the first seed of every sandbox and by 'ai-sandbox-account reset'
+#          login     copied in addition only for a sandbox in the host mode: by its first seed
+#                    and by 'ai-sandbox-account refresh'; removed by 'ai-sandbox-account reset'
+#   paths  relative; no empty, '.' or '..' component; a component may hold '*', matched as a
+#          shell glob against the names at that level on the host, the same names used in the
+#          sandbox directory. A row whose host path is absent copies nothing. Nothing that no
+#          row names is copied.
+#   how    whole  the file, or the directory with everything below it, links as links
+#          links  only the symbolic links directly in the directory, as links; nothing else in it
+#          json   a JSON file (comments and trailing commas accepted) written with the root's type
+#                 and only the key paths ai_sandbox_seed_keys lists for the row; {} or [] when
+#                 none is present
+#          xml    an XML file written with its root element and only those children whose name
+#                 attribute ai_sandbox_seed_keys lists for the row
+#          A json or xml file that does not parse is not written: one stderr line naming the
+#          row, and the copy goes on.
+#   .claude.json is the login row 'login|.claude.json|.claude.json|json'. Without that row the
+#   sandbox's .claude.json is {}.
 # reads-outside: the layouts of the host's tool stores, as the user's tools write them: Claude Code
 # (~/.claude, ~/.claude.json), Codex (~/.codex), Gemini CLI and Antigravity CLI (~/.gemini),
 # Claude Desktop (~/.config/Claude), Antigravity and Antigravity IDE (~/.config/Antigravity,
@@ -1388,15 +1402,19 @@ login|.config/JetBrains/*/*.license|jetbrains-config/*/*.license|whole
 SEED
 }
 
-# The key allow-list of a json or xml row of ai_sandbox_seed_table, one entry per line, given the
-# row's host path as the table writes it. json: a key path of components separated by '/', a
-# component being a key name, a shell glob over key names or '[]' (every element of an array); the
-# value at the path is kept whole. xml: the name attribute of a child of the root element. A key
-# no entry reaches is dropped; an entry is added only with the user's word.
+# ai_sandbox_seed_keys <host path of a json or xml row, as the table writes it>
+#   (the phase 7 plan's contract, as reviewed)
+#   The row's key allow-list, one entry per line, nothing else printed. A key no entry reaches
+#   is dropped.
+#   json  a key path: components separated by '/'; a component is a key name, a shell glob over
+#         key names ('editor.*' matches the top-level key 'editor.fontSize'), or '[]' for every
+#         element of an array. The value at the path is kept whole.
+#   xml   the name attribute of a child of the root element (a JetBrains 'component').
+# An entry is added only with the user's word.
 # reads-outside: the key names of the tools' settings files (Claude Code settings.json, Gemini CLI
 # settings.json, agy settings.json, the editors' settings.json and keybindings.json, the JetBrains
 # options/*.xml components): a tool that renames a key stops it arriving.
-ai_sandbox_seed_keys() {   # <host path of a json or xml row>
+ai_sandbox_seed_keys() {   # <host path of a json or xml row, as the table writes it>
     case $1 in
         .claude/settings.json) cat <<'K'
 model

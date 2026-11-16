@@ -179,10 +179,17 @@ assert_eq "no history, project list, browser or brain" \
     "$(find "$sb" -type f \( -name 'history*' -o -name projects.json -o -name 'git-worktrees.json' -o -name 'b.md' -o -name recentProjects.xml -o -name h -o -name '*.vmoptions' -o -name noname.txt -o -name config.toml \) | head -3)" ""
 ai_sandbox_seed_copy "$sb" login >/dev/null 2>&1
 printf '{"oauthAccount": {"e": 1}, "userID": "u", "hasCompletedOnboarding": true, "projects": {"/x": 1}, "githubRepoPaths": {}}\n' > "$HOME/.claude.json"
+chmod 600 "$HOME/.claude.json"
 sb2="$tmp/sb2"; mkdir -p "$sb2"
 ai_sandbox_seed_copy "$sb2" login >/dev/null 2>&1
 assert_eq ".claude.json is cut to the three keys" "$(jq_ "$sb2/.claude.json")" '{"hasCompletedOnboarding": true, "oauthAccount": {"e": 1}, "userID": "u"}'
-assert_eq ".claude.json is mode-preserving and private enough" "$([ -f "$sb2/.claude.json" ] && echo file)" file
+assert_eq ".claude.json keeps the host's mode 600" "$(stat -c %a "$sb2/.claude.json")" 600
+
+# --- a json root keeps its type when no allowed key is present ({} or [])
+printf '{"permissions": {"allow": ["p"]}, "trustedWorkspaces": ["/x"]}\n' > "$tmp/none.json"
+assert_eq "json: an object with no allowed key is written as {}" "$(ai_sandbox_seed_filter json "$tmp/none.json" colorScheme)" '{}'
+printf '[{"args": 1}, {"args": 2}]\n' > "$tmp/none-list.json"
+assert_eq "json: an array with no allowed element is written as []" "$(ai_sandbox_seed_filter json "$tmp/none-list.json" '[]/key' '[]/command')" '[]'
 
 # --- scopes
 sb3="$tmp/sb3"; mkdir -p "$sb3"
