@@ -472,7 +472,7 @@ sys.stdout.buffer.write("".join(out).encode("utf-8", "surrogateescape"))' || cat
 ai_sandbox_nofollow() {   # <op> <root> <path> [<arg>...]
     local prog
     prog=$(cat <<'PY'
-import fnmatch, os, re, stat, sys
+import fnmatch, os, re, stat, sys, unicodedata
 
 PROG = "ai_sandbox_nofollow"
 DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -543,10 +543,17 @@ else:
         usage("an --exclude holds no slash and is not empty")
 
 
+def clean(text):
+    # the display rule of ai_sandbox_display_clean, for a name the sandbox chose
+    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
+        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
+        and not "\u2066" <= c <= "\u2069"))
+
+
 def refuse(where, why):
     global RC
     RC = 1
-    sys.stderr.write("%s: refused %s %s: %s\n" % (PROG, root, where, why))
+    sys.stderr.write(clean("%s: refused %s %s: %s\n" % (PROG, root, where, why)))
 
 
 def why(e):
@@ -1623,11 +1630,16 @@ ai_sandbox_env_set() {   # <sandbox dir> <key> <value>
 # no read operation); a link, or anything on the way that is one, is skipped with a stderr line.
 ai_sandbox_seed_backup() {   # <sandbox dir> <backup dir> <sandbox path>...
     python3 -I -c '
-import os, shutil, stat, sys
+import os, shutil, stat, sys, unicodedata
 root, dest, paths = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3:]
 FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+def clean(text):
+    # the display rule of ai_sandbox_display_clean, for a name the sandbox chose
+    return "".join(c for c in text if c in "\n\t" or (unicodedata.category(c) != "Cc"
+        and c not in "\u200e\u200f\u061c" and not "\u202a" <= c <= "\u202e"
+        and not "\u2066" <= c <= "\u2069"))
 def skip(p, why):
-    sys.stderr.write("ai-sandbox: not backed up: %s (%s)\n" % (p, why))
+    sys.stderr.write(clean("ai-sandbox: not backed up: %s (%s)\n" % (p, why)))
 def copy_tree(fd, rel):
     os.makedirs(os.path.join(dest, rel), exist_ok=True)
     for name in sorted(os.listdir(fd)):

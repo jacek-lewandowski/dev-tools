@@ -51,4 +51,17 @@ acct refresh --yes >/dev/null
 assert_eq "refresh pulls the host token" "$(cat "$dir/.claude/.credentials.json")" changed
 assert_eq "refresh pulls a login directory's file" "$(cat "$dir/claude-data/Local Storage/file")" changed-file
 assert_file "refresh keeps the projects mount" "$dir/.claude/projects/mine/keep"
+# I-1: a name a sandbox chose reaches the host's stderr without control characters, whichever
+# command prints it (nofollow's refusal for reset, the backup's skip line for refresh)
+for cmd in reset refresh; do
+    host
+    evil=$'P\e]0;PWNED\a'
+    mkdir -p "$trap_dir/jb"; : > "$trap_dir/jb/x.key"
+    mkdir -p "$dir/jetbrains-config"; ln -s "$trap_dir/jb" "$dir/jetbrains-config/$evil"
+    out=$(acct "$cmd" --yes)
+    assert_contains "I-1 $cmd still reports the planted name" "$out" 'PWNED'
+    case $out in *$'\e'*|*$'\a'*) bad=1 ;; *) bad=0 ;; esac
+    assert_eq "I-1 $cmd prints no ESC or BEL from a sandbox name" "$bad" 0
+done
+
 finish
