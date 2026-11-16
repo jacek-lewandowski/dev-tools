@@ -43,6 +43,8 @@ else
     # leave a sandbox that reads as an unrecorded legacy one (.seeded present, no key).
     compose_env_skeleton
     ai_sandbox_env_set "$SANDBOX_DIR" SANDBOX_HOST_LOGINS "$LOGINS_MODE"
+    # The size too: a .env without it reads as a sandbox from before the key (6 GB), not a new one.
+    ai_sandbox_env_set "$SANDBOX_DIR" SANDBOX_MEMORY_GB "$MEMORY_GB"
     date -Iseconds > "$SANDBOX_DIR/.seeded"
 fi
 

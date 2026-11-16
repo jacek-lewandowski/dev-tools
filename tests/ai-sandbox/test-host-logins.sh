@@ -35,6 +35,13 @@ for want in 0 1; do
     assert_eq "L-2 the mode $want is recorded although the create stopped" "$(mode "$de")" "$want"
 done
 rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
+# R2-L1: the rerun of that interrupted first create (no --memory) is still a new sandbox: 2 GB
+f="$tmp/work/f"; mkdir -p "$f"; df=$(dir_of "$f")
+rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"; mkdir -p "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
+create "$f" >/dev/null
+rm -rf "$AI_SANDBOX_ROOT/image/build/entrypoint.sh"
+assert_eq "R2-L1 the rerun of an interrupted first create succeeds" "$(create "$f")" 0
+assert_eq "R2-L1 the rerun keeps the new sandbox's 2 GB" "$(ai_sandbox_env_value "$df" SANDBOX_MEMORY_GB)" 2
 
 b="$tmp/work/b"; mkdir -p "$b"; db=$(dir_of "$b")
 assert_eq "create --host-logins exits 0" "$(create "$b" --host-logins)" 0
